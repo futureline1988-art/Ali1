@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Any, ClassVar, Iterable, Mapping
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, MetaData, Uuid
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -125,6 +126,40 @@ def _pluralize(word: str) -> str:
     if len(word) > 1 and word.endswith("y") and word[-2] not in "aeiou":
         return f"{word[:-1]}ies"
     return f"{word}s"
+
+
+def enum_column_type(enum_cls: type[Enum], *, length: int = 32) -> SAEnum:
+    """Build a portable, value-based SQLAlchemy ``Enum`` type.
+
+    Every enum-backed column in this project should use this factory
+    instead of passing a Python ``Enum`` class to ``mapped_column``
+    directly, for two reasons:
+
+    * ``values_callable`` is set so the column stores each member's
+      ``.value`` (e.g. ``"hr"``) rather than its ``.name`` (``"HR"``),
+      matching how the enum is used everywhere else (JSON, comparisons).
+    * ``native_enum=False`` makes SQLAlchemy emit a plain ``VARCHAR`` with
+      a ``CHECK`` constraint on every backend instead of a native
+      PostgreSQL ``ENUM`` type, so adding a new member later is a normal
+      data migration instead of an ``ALTER TYPE`` schema change.
+
+    Args:
+        enum_cls: The enum class (typically a :class:`~models.enums.BilingualEnum`
+            subclass) backing the column.
+        length: Maximum stored string length; must comfortably fit the
+            longest member value.
+
+    Returns:
+        A configured :class:`sqlalchemy.Enum` instance ready to pass to
+        ``mapped_column``.
+    """
+    return SAEnum(
+        enum_cls,
+        name=f"{_camel_to_snake(enum_cls.__name__)}_enum",
+        values_callable=lambda cls: [member.value for member in cls],
+        native_enum=False,
+        length=length,
+    )
 
 
 class TableNameMixin:
