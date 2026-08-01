@@ -47,3 +47,22 @@ class LicenseStatusCode(str, Enum):
     EXPIRED = "expired"
     MACHINE_MISMATCH = "machine_mismatch"
     INVALID = "invalid"
+
+    @property
+    def label_ar(self) -> str:
+        """Short Arabic status label, for a compact "License Status" field.
+
+        Distinct from :attr:`~licensing.license_service.LicenseStatus.message_ar`,
+        which is a full descriptive sentence including the plan and
+        remaining days - this is just the status word itself.
+        """
+        return _STATUS_LABELS_AR[self]
+
+
+_STATUS_LABELS_AR: dict[LicenseStatusCode, str] = {
+    LicenseStatusCode.NOT_ACTIVATED: "غير مفعّل",
+    LicenseStatusCode.VALID: "صالح",
+    LicenseStatusCode.EXPIRED: "منتهي الصلاحية",
+    LicenseStatusCode.MACHINE_MISMATCH: "مرتبط بجهاز آخر",
+    LicenseStatusCode.INVALID: "غير صالح",
+}

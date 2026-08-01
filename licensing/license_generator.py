@@ -17,7 +17,7 @@ Usage::
     # Issue a one-year key for a customer, locked to their machine ID:
     python -m licensing.license_generator issue \\
         --private-key licensing/vendor/private_key.pem \\
-        --customer "Acme Co" \\
+        --customer "Jane Doe" --company "Acme Co" \\
         --type yearly \\
         --machine-id A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4
 
@@ -111,6 +111,7 @@ def issue_license_key(
     machine_id: str | None = None,
     issued_at: date | None = None,
     days: int | None = None,
+    company_name: str | None = None,
 ) -> str:
     """Build and sign a license key.
 
@@ -124,6 +125,9 @@ def issue_license_key(
         issued_at: Override the issue date; defaults to today.
         days: Override the validity period in days; ignored for
             :attr:`~licensing.enums.LicenseType.LIFETIME`.
+        company_name: The organization this license is issued to, for
+            display in the License Information screen; omit if there
+            is no distinct organization beyond ``customer_name``.
 
     Returns:
         The signed license key string, ready to hand to the customer.
@@ -136,6 +140,7 @@ def issue_license_key(
     payload = LicensePayload(
         license_id=str(uuid.uuid4()),
         customer_name=customer_name,
+        company_name=company_name,
         license_type=license_type,
         machine_id=machine_id,
         issued_at=resolved_issued_at,
@@ -161,6 +166,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     issue_parser = subparsers.add_parser("issue", help="Issue a signed license key.")
     issue_parser.add_argument("--private-key", type=Path, required=True)
     issue_parser.add_argument("--customer", required=True, dest="customer_name")
+    issue_parser.add_argument("--company", default=None, dest="company_name")
     issue_parser.add_argument(
         "--type", required=True, dest="license_type", choices=[t.value for t in LicenseType]
     )
@@ -193,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     key = issue_license_key(
         private_key_path=args.private_key,
         customer_name=args.customer_name,
+        company_name=args.company_name,
         license_type=LicenseType(args.license_type),
         machine_id=args.machine_id,
         issued_at=args.issued_at,

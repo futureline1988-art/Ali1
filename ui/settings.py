@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from controllers.settings_controller import SettingsController
+from ui.license_info_window import LicenseInfoWindow
 from ui.widgets import ConfirmDialog, make_primary_button, make_secondary_label, make_status_label
 
 
@@ -372,10 +373,12 @@ class SettingsPage(QTabWidget):
         self.company_info_tab = CompanyInfoTab(controller=controller, parent=self)
         self.preferences_tab = PreferencesTab(controller=controller, parent=self)
         self.backup_tab = BackupTab(controller=controller, parent=self)
+        self.license_tab = LicenseInfoWindow(parent=self)
 
         self.addTab(self.company_info_tab, "معلومات الشركة")
         self.addTab(self.preferences_tab, "التفضيلات")
         self.addTab(self.backup_tab, "النسخ الاحتياطي")
+        self.addTab(self.license_tab, "الترخيص")
 
     def _on_operation_failed(self, message: str) -> None:
         """Surface a controller failure on whichever tab is currently visible."""

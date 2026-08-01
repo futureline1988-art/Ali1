@@ -200,6 +200,20 @@ The application is protected by a machine-locked license, fully independent of t
 - **التخزين المحلي**: الترخيص المُفعَّل يُخزَّن مشفّرًا (Fernet) بمفتاح مشتق من معرّف الجهاز نفسه، في `data/license.dat` — نسخ هذا الملف إلى جهاز آخر ينتج ملفًا لا يمكن فك تشفيره هناك.
 - **النسخة التجريبية**: 14 يومًا، تُفعَّل ذاتيًا من داخل التطبيق دون الحاجة لمفتاح من المورّد، ومرة واحدة فقط لكل جهاز.
 
+### إدارة الترخيص من داخل التطبيق / In-App License Management
+
+بعد تسجيل الدخول، من **الإعدادات → الترخيص** (تبويب جديد ضمن شاشة الإعدادات الحالية، دون أي تعديل على بقية تبويباتها): عرض تفصيلي لحالة الترخيص (اسم الشركة، اسم العميل، النوع، الحالة، تاريخ التفعيل، تاريخ الانتهاء، معرّف الجهاز، معرّف الترخيص) مع خمسة أزرار إدارة:
+
+- **تفعيل ترخيص**: لصق مفتاح جديد يحل محل الحالي.
+- **تجديد الترخيص**: مخصص للاشتراكات الشهرية والسنوية فقط (بما فيها المنتهية) — يرفض مفاتيح التجديد من نوع تجريبي أو دائم، ويُظهر تاريخ الانتهاء الجديد فورًا.
+- **تصدير طلب الترخيص**: يحفظ ملف JSON يحتوي معرّف الترخيص، اسم الشركة والعميل، معرّف الجهاز، وتفاصيل التفعيل — مع تضمين مفتاح الترخيص الموقّع الأصلي كاملاً، وهو ما يجعل الملف قابلاً للتحقق بشكل مستقل من قِبل المورّد (أو أي طرف يملك المفتاح العام) دون الحاجة لأي مفتاح توقيع إضافي داخل التطبيق.
+- **إلغاء تفعيل الترخيص**: يمسح الترخيص من هذا الجهاز فورًا، مع خيار حفظ ملف طلب النقل في نفس الخطوة. يرسل العميل هذا الملف إلى المورّد، الذي يصدر بعدها مفتاحًا جديدًا لجهاز مختلف.
+- **نسخ معرّف الجهاز**.
+
+**ملاحظة مهمة حول نقل التراخيص**: بما أن النظام يعمل بالكامل دون اتصال بالإنترنت، فإن منع تفعيل نفس الترخيص على جهازين في آن واحد هو إجراء تنظيمي (المورّد يراجع ملف طلب النقل قبل إصدار مفتاح جديد) وليس ضمانًا تشفيريًا فوريًا — تحقيق ذلك بشكل آلي يتطلب خادم ترخيص مركزي، وهو بالضبط ما تم تجهيز البنية له مسبقًا (انظر أدناه) دون الحاجة لأي تعديل على واجهات الترخيص الحالية.
+
+Post-login, from **Settings → License** (a new tab on the existing Settings screen — no other tab was touched): a full status view plus five actions — **Activate**, **Renew** (Monthly/Yearly only, including already-expired ones; rejects Trial/Lifetime renewal keys and shows the new expiry immediately), **Export License Request** (a JSON file embedding the original signed key itself as independently-verifiable proof — no extra signing key needed in the app), **Deactivate** (clears this machine immediately, optionally exporting a transfer request in the same step for the vendor to review before issuing a replacement key elsewhere), and **Copy Machine ID**. Preventing simultaneous activation on two machines is, honestly, a procedural control here (vendor reviews the transfer request) rather than a real-time cryptographic guarantee — that needs the online-backend extension point described below, with zero changes required to these screens when it's added.
+
 ### إصدار مفاتيح الترخيص (للمورّد فقط) / Issuing License Keys (Vendor-Only)
 
 أداة سطر أوامر منفصلة تمامًا عن التطبيق، لا تُستدعى منه أبدًا:
@@ -211,10 +225,10 @@ python -m licensing.license_generator generate-keypair \
     --public-key-out /tmp/public_key.pem
 # ثم انسخ محتوى المفتاح العام إلى licensing/keys.py -> PUBLIC_KEY_PEM
 
-# إصدار مفتاح سنوي مرتبط بجهاز عميل محدد
+# إصدار مفتاح سنوي مرتبط بجهاز عميل محدد (--company اختياري)
 python -m licensing.license_generator issue \
     --private-key /secure/location/private_key.pem \
-    --customer "اسم العميل" \
+    --customer "اسم العميل" --company "اسم الشركة" \
     --type yearly \
     --machine-id <Machine-ID-الذي-أرسله-العميل>
 

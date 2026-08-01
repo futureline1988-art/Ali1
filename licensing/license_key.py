@@ -54,6 +54,14 @@ class LicensePayload:
             (not a secret; useful for support/revocation record-keeping).
         customer_name: Who the license was issued to, for display and
             audit purposes.
+        company_name: The organization the license was issued to;
+            distinct from :attr:`customer_name` (typically the primary
+            contact at that organization) for display in the License
+            Information screen. Optional and defaults to ``None`` so
+            keys issued before this field existed keep verifying
+            unchanged - the signature covers whatever bytes were
+            actually signed at issuance time, and decoding a payload
+            that never had this key present simply leaves it unset.
         license_type: Which plan this key grants.
         machine_id: If set, this key only verifies successfully on the
             machine with this exact
@@ -76,6 +84,7 @@ class LicensePayload:
     issued_at: date
     expires_at: date | None
     features: tuple[str, ...] = ()
+    company_name: str | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         """Serialize to a JSON-safe dict (dates as ISO strings, enum as its value)."""
@@ -105,6 +114,7 @@ class LicensePayload:
                     date.fromisoformat(data["expires_at"]) if data.get("expires_at") else None
                 ),
                 features=tuple(data.get("features") or ()),
+                company_name=data.get("company_name"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise MalformedLicenseKeyError(f"Malformed license payload: {exc}") from exc

@@ -1,10 +1,11 @@
 """High-level license API: the one module the rest of the application talks to.
 
-Everything above this module (``ui/license_window.py``, ``main.py``)
-only ever calls :class:`LicenseService` — it never touches
-:mod:`licensing.license_key`, :mod:`licensing.license_store`, or
-:mod:`licensing.machine_id` directly, so those can evolve freely as
-long as this class's public methods keep their contract.
+Everything above this module (``ui/license_window.py``,
+``ui/license_info_window.py``, ``main.py``) only ever calls
+:class:`LicenseService` — it never touches :mod:`licensing.license_key`,
+:mod:`licensing.license_store`, or :mod:`licensing.machine_id` directly,
+so those can evolve freely as long as this class's public methods keep
+their contract.
 
 Adding an online license server later
 --------------------------------------
@@ -17,13 +18,30 @@ second class satisfying the same ``verify(license_key) -> LicensePayload``
 contract (raising :class:`~licensing.license_key.LicenseKeyError` on
 any rejection, exactly like the local one) and pass it to
 ``LicenseService(backend=...)``. Nothing in :class:`LicenseService`,
-the local store, or the activation window needs to change.
+the local store, or either license window needs to change.
+
+On "preventing" simultaneous activation on two machines
+----------------------------------------------------------
+:meth:`LicenseService.deactivate` and :meth:`export_transfer_request`
+support a *procedural* single-active-machine policy: deactivating
+clears this machine's local record immediately, and can produce a
+transfer-request file embedding the original vendor-signed key as
+verifiable proof of a legitimate prior activation, for the vendor to
+review before issuing a replacement key for a different machine. This
+is not - and no purely offline mechanism can be - a cryptographic
+guarantee that the same key isn't *also* active elsewhere; a real-time
+guarantee needs a server tracking active activations, which is exactly
+what the :class:`LicenseBackend` extension point above exists to add
+later without reshaping this module.
 """
 
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Protocol
 
 from licensing.enums import LicenseStatusCode, LicenseType
@@ -37,10 +55,11 @@ from licensing.license_store import LicenseStore, StoredLicenseRecord, utc_now
 from licensing.machine_id import get_machine_id
 
 _DEFAULT_TRIAL_DAYS = 14
+_RENEWABLE_TYPES = (LicenseType.MONTHLY, LicenseType.YEARLY)
 
 
 class LicenseServiceError(Exception):
-    """Base class for license activation failures the UI should display."""
+    """Base class for license operation failures the UI should display."""
 
 
 class InvalidLicenseKeyError(LicenseServiceError):
@@ -53,6 +72,22 @@ class LicenseMachineMismatchError(LicenseServiceError):
 
 class TrialAlreadyUsedError(LicenseServiceError):
     """A trial has already been started on this machine."""
+
+
+class NoRenewableLicenseError(LicenseServiceError):
+    """There is no currently active Monthly/Yearly license to renew."""
+
+
+class InvalidRenewalTypeError(LicenseServiceError):
+    """The renewal key is not itself a Monthly or Yearly license."""
+
+
+class NoActiveLicenseError(LicenseServiceError):
+    """There is no currently active license to act on."""
+
+
+class TrialNotTransferableError(LicenseServiceError):
+    """A self-issued trial has no vendor-issued key to build a transfer request from."""
 
 
 class LicenseBackend(Protocol):
@@ -109,8 +144,89 @@ class LicenseStatus:
         return self.code is LicenseStatusCode.VALID
 
 
+@dataclass(frozen=True)
+class LicenseDetails:
+    """Everything the License Information screen needs to display.
+
+    Attributes:
+        status: The current license status (type, expiry, message).
+        license_id: The vendor-assigned grant identifier; ``None`` for
+            a trial or when no license is stored.
+        company_name: The organization the license was issued to;
+            ``None`` if unset on the key (older keys - see
+            :attr:`~licensing.license_key.LicensePayload.company_name`)
+            or if no vendor-issued license is stored.
+        customer_name: The named contact the license was issued to;
+            ``None`` for a trial or when no license is stored.
+        activated_at: When the current record was activated on this
+            machine; ``None`` if nothing is stored.
+        machine_id: This machine's fingerprint (always available).
+    """
+
+    status: LicenseStatus
+    license_id: str | None
+    company_name: str | None
+    customer_name: str | None
+    activated_at: datetime | None
+    machine_id: str
+
+
+@dataclass(frozen=True)
+class TransferRequest:
+    """A record of "this license was deactivated here, for transfer elsewhere".
+
+    Its :attr:`original_signed_key` is what makes it independently
+    verifiable: it is the exact Ed25519-signed key the vendor issued,
+    so the vendor (or anyone holding the public key) can re-verify it
+    without trusting the rest of this file's contents - only its
+    presence together with a matching :attr:`license_id` is what
+    "signs" this request, since the application itself holds no
+    private key to sign new documents with.
+
+    Attributes:
+        request_id: A unique identifier for this specific request.
+        license_id: The license grant this request concerns.
+        company_name: The organization on the original license, if set.
+        customer_name: The named contact on the original license.
+        license_type: The plan being transferred.
+        machine_id: The machine this request was generated on (i.e.
+            being deactivated *from*).
+        activated_at: When the license was activated on this machine.
+        expires_at: The license's expiry, if any.
+        requested_at: When this transfer request was generated.
+        original_signed_key: The original vendor-signed license key
+            string, embedded verbatim.
+    """
+
+    request_id: str
+    license_id: str
+    company_name: str | None
+    customer_name: str
+    license_type: LicenseType
+    machine_id: str
+    activated_at: datetime
+    expires_at: date | None
+    requested_at: datetime
+    original_signed_key: str
+
+    def to_json_dict(self) -> dict[str, object]:
+        """Serialize to a JSON-safe dict, for :meth:`LicenseService.export_transfer_request`."""
+        return {
+            "request_id": self.request_id,
+            "license_id": self.license_id,
+            "company_name": self.company_name,
+            "customer_name": self.customer_name,
+            "license_type": self.license_type.value,
+            "machine_id": self.machine_id,
+            "activated_at": self.activated_at.isoformat(),
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "requested_at": self.requested_at.isoformat(),
+            "original_signed_key": self.original_signed_key,
+        }
+
+
 class LicenseService:
-    """Activates, checks, and reports on this machine's application license."""
+    """Activates, renews, transfers, and reports on this machine's application license."""
 
     def __init__(
         self,
@@ -133,7 +249,7 @@ class LicenseService:
 
     @property
     def machine_id(self) -> str:
-        """This machine's fingerprint, for display in the activation window."""
+        """This machine's fingerprint, for display in the license windows."""
         return get_machine_id()
 
     def get_status(self) -> LicenseStatus:
@@ -147,8 +263,7 @@ class LicenseService:
         Returns:
             The current :class:`LicenseStatus`.
         """
-        envelope = self._store.load()
-        record = envelope.current
+        record = self._store.load().current
         if record is None:
             return LicenseStatus(
                 code=LicenseStatusCode.NOT_ACTIVATED,
@@ -183,6 +298,44 @@ class LicenseService:
 
         return self._status_from_expiry(record.license_type, record.expires_at)
 
+    def get_details(self) -> LicenseDetails:
+        """Gather everything the License Information screen needs in one call.
+
+        Returns:
+            The current :class:`LicenseDetails`. Every optional field
+            is ``None`` when there is no stored license, the stored
+            license is a trial (self-issued, no vendor payload to read
+            ``license_id``/``company_name``/``customer_name`` from), or
+            the stored key no longer verifies (mirrors
+            :meth:`get_status`'s ``INVALID`` handling instead of
+            raising).
+        """
+        status = self.get_status()
+        record = self._store.load().current
+
+        license_id: str | None = None
+        company_name: str | None = None
+        customer_name: str | None = None
+
+        if record is not None and record.license_type is not LicenseType.TRIAL and record.raw_key:
+            try:
+                payload = self._backend.verify(record.raw_key)
+            except LicenseKeyError:
+                pass
+            else:
+                license_id = payload.license_id
+                company_name = payload.company_name
+                customer_name = payload.customer_name
+
+        return LicenseDetails(
+            status=status,
+            license_id=license_id,
+            company_name=company_name,
+            customer_name=customer_name,
+            activated_at=record.activated_at if record is not None else None,
+            machine_id=get_machine_id(),
+        )
+
     def _status_from_expiry(
         self, license_type: LicenseType, expires_at: date | None
     ) -> LicenseStatus:
@@ -213,8 +366,47 @@ class LicenseService:
             message_ar=f"مفعّل - {license_type.label_ar} - متبقٍ {days_remaining} يومًا.",
         )
 
+    def _verify_and_check_machine(self, license_key: str) -> LicensePayload:
+        """Verify a key's signature and, if it is machine-locked, that it matches this one.
+
+        Shared by :meth:`activate` and :meth:`renew` so both apply
+        identical checks before touching the store.
+
+        Raises:
+            InvalidLicenseKeyError: The key is malformed or its
+                signature does not verify.
+            LicenseMachineMismatchError: The key is locked to a
+                different machine.
+        """
+        try:
+            payload = self._backend.verify(license_key)
+        except LicenseKeyError as exc:
+            raise InvalidLicenseKeyError(str(exc)) from exc
+
+        if payload.machine_id is not None and payload.machine_id != get_machine_id():
+            raise LicenseMachineMismatchError(
+                "This license key is locked to a different machine."
+            )
+        return payload
+
+    def _store_activated(self, payload: LicensePayload, raw_key: str) -> LicenseStatus:
+        """Persist a verified payload as the current license and return the fresh status."""
+        record = StoredLicenseRecord(
+            license_type=payload.license_type,
+            raw_key=raw_key.strip(),
+            machine_id=get_machine_id(),
+            activated_at=utc_now(),
+            expires_at=payload.expires_at,
+        )
+        self._store.set_current(record)
+        return self.get_status()
+
     def activate(self, license_key: str) -> LicenseStatus:
         """Verify and activate a vendor-issued license key on this machine.
+
+        Replaces whatever license (if any) was previously active,
+        without touching the database, company settings, or any other
+        application state.
 
         Args:
             license_key: The key string the customer received from the
@@ -230,26 +422,50 @@ class LicenseService:
             LicenseMachineMismatchError: The key is locked to a
                 different machine.
         """
-        try:
-            payload = self._backend.verify(license_key)
-        except LicenseKeyError as exc:
-            raise InvalidLicenseKeyError(str(exc)) from exc
+        payload = self._verify_and_check_machine(license_key)
+        return self._store_activated(payload, license_key)
 
-        current_machine_id = get_machine_id()
-        if payload.machine_id is not None and payload.machine_id != current_machine_id:
-            raise LicenseMachineMismatchError(
-                "This license key is locked to a different machine."
+    def renew(self, new_license_key: str) -> LicenseStatus:
+        """Renew the current Monthly/Yearly license with a newly issued key.
+
+        Unlike :meth:`activate`, this requires there to already be a
+        Monthly or Yearly license on record (active *or* expired -
+        renewing an already-expired subscription is the primary use
+        case) and requires the new key to itself be Monthly or Yearly;
+        switching plan types, or activating from nothing, goes through
+        :meth:`activate` instead.
+
+        Args:
+            new_license_key: The freshly issued key string.
+
+        Returns:
+            The resulting :class:`LicenseStatus`, with the updated
+            expiration date immediately reflected.
+
+        Raises:
+            NoRenewableLicenseError: There is no current Monthly/Yearly
+                license to renew.
+            InvalidRenewalTypeError: The new key is not itself Monthly
+                or Yearly.
+            InvalidLicenseKeyError: The new key is malformed or its
+                signature does not verify.
+            LicenseMachineMismatchError: The new key is locked to a
+                different machine.
+        """
+        current = self._store.load().current
+        if current is None or current.license_type not in _RENEWABLE_TYPES:
+            raise NoRenewableLicenseError(
+                "Only a current Monthly or Yearly license can be renewed; "
+                "use activate() to set up a new license."
             )
 
-        record = StoredLicenseRecord(
-            license_type=payload.license_type,
-            raw_key=license_key.strip(),
-            machine_id=current_machine_id,
-            activated_at=utc_now(),
-            expires_at=payload.expires_at,
-        )
-        self._store.set_current(record)
-        return self.get_status()
+        payload = self._verify_and_check_machine(new_license_key)
+        if payload.license_type not in _RENEWABLE_TYPES:
+            raise InvalidRenewalTypeError(
+                "The renewal key must itself be a Monthly or Yearly license."
+            )
+
+        return self._store_activated(payload, new_license_key)
 
     def is_trial_available(self) -> bool:
         """Whether :meth:`start_trial` can still be called on this machine.
@@ -289,6 +505,95 @@ class LicenseService:
         self._store.set_current(record)
         return self.get_status()
 
-    def deactivate(self) -> None:
-        """Clear the currently active license (trial eligibility is unaffected)."""
+    def build_transfer_request(self) -> TransferRequest:
+        """Build (without exporting) a transfer request from the current license.
+
+        Returns:
+            The :class:`TransferRequest`, ready for
+            :meth:`export_transfer_request` or direct inspection.
+
+        Raises:
+            NoActiveLicenseError: There is no active license to build a
+                request from.
+            TrialNotTransferableError: The active license is a
+                self-issued trial, which has no vendor-issued key to
+                embed as proof.
+            InvalidLicenseKeyError: The stored key no longer verifies
+                (corrupted or otherwise invalid).
+        """
+        current = self._store.load().current
+        if current is None:
+            raise NoActiveLicenseError("There is no active license to export a transfer request for.")
+        if current.license_type is LicenseType.TRIAL or not current.raw_key:
+            raise TrialNotTransferableError("Trial licenses cannot be transferred to another machine.")
+
+        try:
+            payload = self._backend.verify(current.raw_key)
+        except LicenseKeyError as exc:
+            raise InvalidLicenseKeyError(
+                f"The stored license key is no longer valid, cannot build a transfer request: {exc}"
+            ) from exc
+
+        return TransferRequest(
+            request_id=str(uuid.uuid4()),
+            license_id=payload.license_id,
+            company_name=payload.company_name,
+            customer_name=payload.customer_name,
+            license_type=current.license_type,
+            machine_id=current.machine_id,
+            activated_at=current.activated_at,
+            expires_at=current.expires_at,
+            requested_at=utc_now(),
+            original_signed_key=current.raw_key,
+        )
+
+    def export_transfer_request(self, output_path: Path) -> TransferRequest:
+        """Write a transfer request for the current license to ``output_path``.
+
+        Does not deactivate the license - send the resulting file to
+        the vendor, who can then revoke the old activation on their
+        side and issue a replacement key for a different machine (see
+        this module's docstring for what "revoke" can and cannot mean
+        without a license server).
+
+        Args:
+            output_path: Where to write the request, as JSON.
+
+        Returns:
+            The :class:`TransferRequest` that was written.
+
+        Raises:
+            NoActiveLicenseError: There is no active license to export.
+            TrialNotTransferableError: The active license is a trial.
+            InvalidLicenseKeyError: The stored key no longer verifies.
+        """
+        request = self.build_transfer_request()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(request.to_json_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return request
+
+    def deactivate(self, *, export_transfer_request_to: Path | None = None) -> TransferRequest | None:
+        """Clear the currently active license on this machine.
+
+        Trial eligibility is unaffected - deactivating a trial does not
+        grant a new one.
+
+        Args:
+            export_transfer_request_to: If given, a transfer request is
+                built and written to this path *before* the local
+                record is cleared (since building it needs the record
+                that is about to be removed). Raises the same errors as
+                :meth:`export_transfer_request` if given for a trial or
+                when nothing is active; omit it to just deactivate.
+
+        Returns:
+            The :class:`TransferRequest` that was written, or ``None``
+            if ``export_transfer_request_to`` was not given.
+        """
+        request: TransferRequest | None = None
+        if export_transfer_request_to is not None:
+            request = self.export_transfer_request(export_transfer_request_to)
         self._store.clear_current()
+        return request
