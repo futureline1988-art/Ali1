@@ -1,0 +1,53 @@
+# ==============================================================================
+# Attendance Management System - Python Dependencies
+# ==============================================================================
+# Install with: pip install -r requirements.txt
+# Target interpreter: Python 3.13
+# ==============================================================================
+
+# ---- GUI Framework ----------------------------------------------------------
+PySide6==6.7.2                 # Qt6 bindings: windows, widgets, charts, threads
+
+# ---- Database / ORM ----------------------------------------------------------
+SQLAlchemy==2.0.32              # ORM layer; supports SQLite/PostgreSQL/MySQL
+alembic==1.13.2                 # Database schema migrations
+psycopg2-binary==2.9.9           # PostgreSQL driver (optional upgrade path)
+PyMySQL==1.1.1                  # MySQL driver (optional upgrade path)
+
+# ---- Security ------------------------------------------------------------
+bcrypt==4.2.0                    # Password hashing
+cryptography==43.0.0              # Encryption for sensitive settings/backups
+
+# ---- Reporting: Excel / PDF / CSV --------------------------------------------
+openpyxl==3.1.5                  # Excel (.xlsx) generation
+reportlab==4.2.2                 # PDF generation
+pandas==2.2.2                    # Tabular data handling for reports/CSV
+
+# ---- QR Code / Barcode ---------------------------------------------------
+qrcode==7.4.2                    # QR code generation for employee badges
+python-barcode==0.15.1            # Barcode generation for employee badges
+Pillow==10.4.0                    # Image processing (avatars, QR/barcode render)
+
+# ---- Charts (Dashboard) ---------------------------------------------------
+matplotlib==3.9.2                 # Statistical charts embedded in the dashboard
+
+# ---- Biometric Device Communication ------------------------------------------
+pyzk==0.9                        # ZKTeco TCP/IP & UDP protocol client
+
+# ---- HTTP / API-ready ------------------------------------------------------
+requests==2.32.3                  # HTTP client (Hikvision ISAPI, external sync)
+fastapi==0.112.0                  # Optional REST API layer (future exposure)
+uvicorn==0.30.6                   # ASGI server for the FastAPI layer
+
+# ---- Configuration / Environment --------------------------------------------
+python-dotenv==1.0.1               # Load environment variables from .env
+
+# ---- Logging ---------------------------------------------------------------
+loguru==0.7.2                     # Structured, rotating application logging
+
+# ---- Scheduling (auto backup / auto sync) ------------------------------------
+APScheduler==3.10.4                # Background job scheduling (threaded)
+
+# ---- Testing (development) ---------------------------------------------------
+pytest==8.3.2
+pytest-qt==4.4.0
