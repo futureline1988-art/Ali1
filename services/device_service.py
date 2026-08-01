@@ -16,6 +16,8 @@ not created as an orphaned punch.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from devices.device_interface import RawDeviceUser
@@ -24,12 +26,21 @@ from models.attendance import AttendancePunch
 from models.audit_log import AuditLog
 from models.device import Device
 from models.employee import Employee
-from models.enums import AttendanceSource, AuditAction
+from models.enums import AttendanceSource, AuditAction, DeviceProtocol
 from repositories.attendance_repository import AttendancePunchRepository
 from repositories.audit_log_repository import AuditLogRepository
 from repositories.device_repository import DeviceRepository
 from repositories.employee_repository import EmployeeRepository
 from utils.logger import logger
+from utils.validators import is_valid_host, is_valid_port, is_within_length
+
+_UPDATABLE_FIELDS = frozenset(
+    {"name", "host", "port", "branch_id", "communication_key", "is_active", "timeout_seconds", "notes"}
+)
+
+
+class DeviceValidationError(Exception):
+    """Raised when device input fails validation or a uniqueness check."""
 
 
 class DeviceService:
@@ -231,6 +242,142 @@ class DeviceService:
                     f"Enrolled employee {employee.employee_number!r} on device "
                     f"{device.name!r}."
                 ),
+            )
+        )
+
+    def create_device(
+        self,
+        *,
+        name: str,
+        protocol: DeviceProtocol,
+        host: str,
+        port: int,
+        branch_id: int | None = None,
+        communication_key: str | None = None,
+        timeout_seconds: int | None = None,
+        notes: str | None = None,
+    ) -> Device:
+        """Register a new device.
+
+        Args:
+            name: Friendly device name; unique within this company.
+            protocol: Which :class:`~models.enums.DeviceProtocol` the
+                device speaks.
+            host: IP address or hostname.
+            port: Connection port.
+            branch_id: The branch this device is installed at, if any.
+            communication_key: Device-level shared secret, if any (see
+                :attr:`~models.device.Device.communication_key`).
+            timeout_seconds: Per-device connection timeout override.
+            notes: Free-form notes.
+
+        Returns:
+            The newly created, persisted device.
+
+        Raises:
+            DeviceValidationError: If ``name`` fails length validation,
+                ``host``/``port`` fail format validation, or the
+                ``name``/``(host, port)`` combination is already in use
+                in this company.
+        """
+        if not is_within_length(name, minimum=2, maximum=150):
+            raise DeviceValidationError("Device name must be 2-150 characters.")
+        if not is_valid_host(host):
+            raise DeviceValidationError(f"Invalid device host: {host!r}.")
+        if not is_valid_port(port):
+            raise DeviceValidationError(f"Invalid device port: {port!r}.")
+        if self.device_repo.get_by_name(name) is not None:
+            raise DeviceValidationError(f"Device name {name!r} is already in use.")
+
+        device = Device(
+            company_id=self.company_id,
+            branch_id=branch_id,
+            name=name,
+            protocol=protocol,
+            host=host,
+            port=port,
+            communication_key=communication_key,
+            timeout_seconds=timeout_seconds,
+            notes=notes,
+            created_by_id=self.actor_user_id,
+        )
+        self.device_repo.add(device)
+
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.CREATE,
+                entity_type="Device",
+                entity_id=device.id,
+                description=f"Registered device {name!r} ({protocol.value}) at {host}:{port}.",
+            )
+        )
+        return device
+
+    def update_device(self, device: Device, **fields: Any) -> Device:
+        """Update an existing device's editable fields.
+
+        Args:
+            device: The device to update (must belong to this
+                service's company).
+            **fields: Any subset of ``name``/``host``/``port``/
+                ``branch_id``/``communication_key``/``is_active``/
+                ``timeout_seconds``/``notes``.
+
+        Returns:
+            The updated device.
+
+        Raises:
+            DeviceValidationError: If a provided field fails
+                validation, or a provided ``name`` collides with a
+                different device in this company.
+        """
+        if device.company_id != self.company_id:
+            raise DeviceValidationError("This device does not belong to the current company.")
+        if "name" in fields:
+            if not is_within_length(str(fields["name"]), minimum=2, maximum=150):
+                raise DeviceValidationError("Device name must be 2-150 characters.")
+            existing = self.device_repo.get_by_name(str(fields["name"]))
+            if existing is not None and existing.id != device.id:
+                raise DeviceValidationError(f"Device name {fields['name']!r} is already in use.")
+        if "host" in fields and not is_valid_host(str(fields["host"])):
+            raise DeviceValidationError(f"Invalid device host: {fields['host']!r}.")
+        if "port" in fields and not is_valid_port(int(fields["port"])):
+            raise DeviceValidationError(f"Invalid device port: {fields['port']!r}.")
+
+        device.update_from_dict(fields, allowed_fields=_UPDATABLE_FIELDS)
+        device.updated_by_id = self.actor_user_id
+        self.session.flush()
+
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.UPDATE,
+                entity_type="Device",
+                entity_id=device.id,
+                description=f"Updated device {device.name!r}.",
+                changes={key: str(value) for key, value in fields.items()},
+            )
+        )
+        return device
+
+    def delete_device(self, device: Device) -> None:
+        """Soft-delete a device.
+
+        Args:
+            device: The device to remove from active views.
+        """
+        self.device_repo.delete(device)
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.DELETE,
+                entity_type="Device",
+                entity_id=device.id,
+                description=f"Deleted device {device.name!r}.",
             )
         )
 
