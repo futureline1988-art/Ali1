@@ -59,6 +59,7 @@ class DeviceController(BaseController):
         port: int,
         branch_id: int | None = None,
         communication_key: str | None = None,
+        timeout_seconds: int | None = None,
         notes: str | None = None,
     ) -> dict[str, Any] | None:
         """Register a new device.
@@ -80,6 +81,7 @@ class DeviceController(BaseController):
                 port=port,
                 branch_id=branch_id,
                 communication_key=communication_key,
+                timeout_seconds=timeout_seconds,
                 notes=notes,
             )
             return _device_to_dict(device)

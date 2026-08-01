@@ -264,7 +264,11 @@ class AttendancePage(QWidget):
             self._show_error("الرجاء اختيار الموظف.")
             return
 
-        punch_type: PunchType = self.punch_type_combo.currentData()
+        # Qt's QVariant round-trip degrades a BilingualEnum member (a
+        # str subclass) back into a plain str, so it must be
+        # reconstructed into a real PunchType here rather than trusting
+        # currentData()'s type.
+        punch_type = PunchType(self.punch_type_combo.currentData())
         punch_time: datetime | None = None
         if not self.use_now_checkbox.isChecked():
             qdt = self.punch_datetime_edit.dateTime()
