@@ -149,3 +149,35 @@ class AttendancePunchRepository(CompanyScopedRepository[AttendancePunch]):
             .order_by(AttendancePunch.punch_time)
         )
         return list(self.session.execute(statement).scalars().all())
+
+    def list_for_device_between(
+        self, device_id: int, start: datetime, end: datetime
+    ) -> list[AttendancePunch]:
+        """List one device's raw punches within a time range.
+
+        Used by the device sync flow to pre-check which
+        ``(employee_id, punch_time)`` pairs already exist before
+        inserting a freshly-downloaded batch, avoiding duplicate rows
+        on a re-sync without relying on catching the database's
+        uniqueness constraint mid-transaction.
+
+        Args:
+            device_id: The device's id.
+            start: Range start (inclusive), UTC.
+            end: Range end (inclusive), UTC.
+
+        Returns:
+            Matching punches, ordered chronologically.
+        """
+        statement = (
+            select(AttendancePunch)
+            .where(
+                AttendancePunch.company_id == self.company_id,
+                AttendancePunch.device_id == device_id,
+                AttendancePunch.punch_time >= start,
+                AttendancePunch.punch_time <= end,
+                AttendancePunch.is_deleted.is_(False),
+            )
+            .order_by(AttendancePunch.punch_time)
+        )
+        return list(self.session.execute(statement).scalars().all())

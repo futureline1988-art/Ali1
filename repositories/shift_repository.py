@@ -7,6 +7,8 @@ Grouped in one file, mirroring how the two models are grouped in
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -105,3 +107,39 @@ class EmployeeShiftAssignmentRepository(CompanyScopedRepository[EmployeeShiftAss
             .order_by(EmployeeShiftAssignment.effective_from.desc())
         )
         return list(self.session.execute(statement).scalars().all())
+
+    def get_effective_for_date(
+        self, employee_id: int, work_date: date
+    ) -> EmployeeShiftAssignment | None:
+        """Fetch whichever assignment was in effect for an employee on a given day.
+
+        Used by attendance calculation to find the correct shift for a
+        *past* date, which may differ from the employee's current
+        assignment if they have since moved to a different shift.
+
+        Args:
+            employee_id: The employee's id.
+            work_date: The calendar day to resolve.
+
+        Returns:
+            The assignment covering ``work_date``
+            (``effective_from <= work_date`` and either
+            ``effective_to`` unset or ``>= work_date``), or ``None`` if
+            no assignment covers that day. If overlapping assignments
+            exist (a data-entry mistake the service layer should
+            prevent), the most recently started one wins.
+        """
+        statement = (
+            select(EmployeeShiftAssignment)
+            .where(
+                EmployeeShiftAssignment.company_id == self.company_id,
+                EmployeeShiftAssignment.employee_id == employee_id,
+                EmployeeShiftAssignment.effective_from <= work_date,
+                (EmployeeShiftAssignment.effective_to.is_(None))
+                | (EmployeeShiftAssignment.effective_to >= work_date),
+                EmployeeShiftAssignment.is_deleted.is_(False),
+            )
+            .order_by(EmployeeShiftAssignment.effective_from.desc())
+            .limit(1)
+        )
+        return self.session.execute(statement).scalar_one_or_none()
