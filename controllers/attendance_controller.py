@@ -136,3 +136,26 @@ class AttendanceController(BaseController):
             return [_record_to_dict(record) for record in records]
 
         return self._run(do_list) or []
+
+    def list_for_company_between(
+        self, start_date: date, end_date: date
+    ) -> list[dict[str, Any]]:
+        """List every employee's attendance records within a date range.
+
+        Args:
+            start_date: First day (inclusive).
+            end_date: Last day (inclusive).
+
+        Returns:
+            Matching records' data as dicts, across the whole company;
+            an empty list on failure.
+        """
+
+        def do_list(session: Session) -> list[dict[str, Any]]:
+            from repositories.attendance_repository import AttendanceRecordRepository
+
+            repo = AttendanceRecordRepository(session, company_id=self.company_id)
+            records = repo.list_for_company_between(start_date, end_date)
+            return [_record_to_dict(record) for record in records]
+
+        return self._run(do_list) or []
