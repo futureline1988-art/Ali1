@@ -290,32 +290,52 @@ class Sidebar(QWidget):
         super().__init__(parent)
         self.setObjectName("Sidebar")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 20, 12, 20)
-        layout.setSpacing(4)
+        self._nav_layout = QVBoxLayout(self)
+        self._nav_layout.setContentsMargins(12, 20, 12, 20)
+        self._nav_layout.setSpacing(4)
 
         if title:
             title_label = QLabel(title, self)
             title_label.setProperty("heading", "true")
             title_label.setWordWrap(True)
-            layout.addWidget(title_label)
-            layout.addSpacing(12)
+            self._nav_layout.addWidget(title_label)
+            self._nav_layout.addSpacing(12)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, SidebarNavButton] = {}
+        self._button_count = 0
+
+        self._nav_layout.addItem(
+            QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        )
+        self._first_button_index = self._nav_layout.count() - 1
 
         for route, label in items:
-            button = SidebarNavButton(route, label, parent=self)
-            self._group.addButton(button)
-            self._buttons[route] = button
-            button.clicked.connect(lambda _checked, r=route: self.navigate_requested.emit(r))
-            layout.addWidget(button)
-
-        layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
+            self.add_item(route, label)
 
         if items:
             self._buttons[items[0][0]].setChecked(True)
+
+    def add_item(self, route: str, label: str) -> None:
+        """Append a new navigation entry.
+
+        Args:
+            route: The new entry's unique route key.
+            label: The new entry's display label.
+
+        Raises:
+            ValueError: If ``route`` is already present.
+        """
+        if route in self._buttons:
+            raise ValueError(f"Route {route!r} is already in this sidebar.")
+
+        button = SidebarNavButton(route, label, parent=self)
+        self._group.addButton(button)
+        self._buttons[route] = button
+        button.clicked.connect(lambda _checked, r=route: self.navigate_requested.emit(r))
+        self._nav_layout.insertWidget(self._first_button_index + self._button_count, button)
+        self._button_count += 1
 
     def set_active_route(self, route: str) -> None:
         """Mark ``route``'s button as the checked/active entry.
