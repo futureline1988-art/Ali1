@@ -65,7 +65,9 @@ class AuthController(BaseController):
             )
             user = service.login(username, password)
             self.actor_user_id = user.id
-            return user.to_dict(exclude={"password_hash"})
+            data = user.to_dict(exclude={"password_hash"})
+            data["role_name"] = user.role_name
+            return data
 
         result = self._run(do_login)
         if result is not None:
