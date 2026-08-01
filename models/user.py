@@ -1,40 +1,57 @@
 """System user ORM model: authentication, authorization and session state.
 
 A :class:`User` is an account that can log into this software (system
-administrator, manager, HR officer, supervisor, or regular operator). It
-is distinct from :class:`~models.employee.Employee`, which represents a
-person whose attendance is tracked — the two may, but need not,
-correspond to the same real individual.
+administrator, manager, HR officer, supervisor, or regular operator),
+scoped to exactly one :class:`~models.company.Company`. It is distinct
+from :class:`~models.employee.Employee`, which represents a person whose
+attendance is tracked — the two may, but need not, correspond to the
+same real individual.
 
 Password hashing and verification are intentionally *not* implemented on
 this model: those responsibilities belong to ``utils/security.py`` and
 ``services/auth_service.py``, keeping this class a pure persistence
 entity plus a small amount of state-derived domain logic (lockout
-status, role labels) that has no business living in a service.
+status) that has no business living in a service.
+
+Authorization is delegated to :class:`~models.role.Role`: a user has
+exactly one role, and that role — a row scoped to the same company as
+the user — carries the actual set of granted
+:class:`~models.permission.Permission` entries. There is no fixed enum
+of privilege levels on this model; ``models.enums.UserRole`` still
+exists as the set of *well-known role codes* a company's roles are
+seeded with (see :attr:`~models.role.Role.code`), but which permissions
+a "hr"-coded role actually grants is per-company data, not code.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Boolean, CheckConstraint, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from models.base import BaseModel, UTCDateTime, enum_column_type
-from models.enums import UserRole
+from models.base import BaseModel, CompanyScopedMixin, UTCDateTime
 
 
-class User(BaseModel):
+class User(CompanyScopedMixin, BaseModel):
     """A login account for an operator of the attendance system.
 
     Attributes:
-        username: Unique login handle.
+        company_id: The owning company (see
+            :class:`~models.base.CompanyScopedMixin`).
+        username: Login handle; unique within the owning company (two
+            different companies may each have their own ``"admin"``).
         full_name: Display name; stores Arabic or English text as-is.
-        email: Optional unique contact/recovery address.
+        email: Optional contact/recovery address; unique within the
+            owning company when provided.
         phone: Optional contact phone number.
         password_hash: A bcrypt hash produced by ``utils.security``;
             never a plaintext password.
-        role: The :class:`~models.enums.UserRole` granted to this account.
+        role_id: The :class:`~models.role.Role` granted to this account.
+            Always a role belonging to the same company as the user — the
+            service layer, not the database, is responsible for
+            rejecting a cross-company role assignment.
+        role: The related :class:`~models.role.Role`.
         is_active: Whether the account may currently log in at all. This
             is independent of :attr:`~models.base.SoftDeleteMixin.is_deleted`
             — a deactivated account is disabled but still a "real" record,
@@ -53,24 +70,29 @@ class User(BaseModel):
     """
 
     __table_args__ = (
+        UniqueConstraint("company_id", "username", name="uq_users_company_id_username"),
+        UniqueConstraint("company_id", "email", name="uq_users_company_id_email"),
         CheckConstraint(
             "preferred_language IN ('ar', 'en')",
             name="ck_users_preferred_language",
         ),
     )
 
-    username: Mapped[str] = mapped_column(
-        String(64), unique=True, index=True, nullable=False
-    )
+    username: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    email: Mapped[str | None] = mapped_column(
-        String(255), unique=True, index=True, nullable=True
-    )
+    email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    role: Mapped[UserRole] = mapped_column(
-        enum_column_type(UserRole), nullable=False, default=UserRole.USER
+    role_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("roles.id"), nullable=False, index=True
+    )
+    # foreign_keys is required here: AuditMixin gives 'roles' its own
+    # created_by_id/updated_by_id columns pointing back at 'users', so
+    # SQLAlchemy would otherwise find three FK paths between the two
+    # tables and refuse to guess which one this relationship means.
+    role: Mapped["Role"] = relationship(  # noqa: F821
+        "Role", foreign_keys="User.role_id"
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -110,14 +132,21 @@ class User(BaseModel):
         return self.is_active and not self.is_deleted and not self.is_locked
 
     @property
-    def role_label_ar(self) -> str:
-        """Arabic display label for :attr:`role`."""
-        return self.role.label_ar
+    def role_name(self) -> str:
+        """Display name of this user's :class:`~models.role.Role`."""
+        return self.role.name
 
-    @property
-    def role_label_en(self) -> str:
-        """English display label for :attr:`role`."""
-        return self.role.label_en
+    def has_permission(self, code: str) -> bool:
+        """Whether this user's role grants the permission identified by ``code``.
+
+        Args:
+            code: A :attr:`~models.permission.Permission.code` value.
+
+        Returns:
+            ``True`` if this user's role has a matching granted
+            permission.
+        """
+        return self.role.has_permission(code)
 
     def register_successful_login(self) -> None:
         """Reset lockout/failure state and stamp the login time.
@@ -150,5 +179,5 @@ class User(BaseModel):
         """Return a concise, debugger-friendly representation."""
         return (
             f"<User id={self.id!r} username={self.username!r} "
-            f"role={self.role.value!r}>"
+            f"company_id={self.company_id!r} role_id={self.role_id!r}>"
         )

@@ -10,20 +10,30 @@ import between the two model modules.
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from models.base import BaseModel
+from models.base import BaseModel, CompanyScopedMixin
 
 
-class Department(BaseModel):
+class Department(CompanyScopedMixin, BaseModel):
     """An organizational department, optionally nested under a parent.
 
     Attributes:
+        company_id: The owning company (see
+            :class:`~models.base.CompanyScopedMixin`).
         name: Department name (Arabic or English text, stored as-is);
-            unique across the company.
-        code: Optional short unique code (e.g. ``"IT"``, ``"HR"``) used in
-            employee numbering schemes and compact report columns.
+            unique within the owning company.
+        code: Optional short code (e.g. ``"IT"``, ``"HR"``) used in
+            employee numbering schemes and compact report columns;
+            unique within the owning company when provided.
         description: Optional free-form description.
         is_active: Whether the department is currently in use. Distinct
             from :attr:`~models.base.SoftDeleteMixin.is_deleted` — an
@@ -33,7 +43,8 @@ class Department(BaseModel):
             forming a department hierarchy (e.g. "IT" under "Operations").
             When the parent is deleted, children are detached
             (``parent_department_id`` set to ``NULL``), never
-            cascade-deleted.
+            cascade-deleted. The service layer, not the database, is
+            responsible for rejecting a parent from a different company.
         parent: The parent :class:`Department`, if any.
         children: Sub-departments whose :attr:`parent_department_id`
             points at this department.
@@ -44,12 +55,12 @@ class Department(BaseModel):
             "parent_department_id IS NULL OR parent_department_id != id",
             name="ck_departments_no_self_parent",
         ),
+        UniqueConstraint("company_id", "name", name="uq_departments_company_id_name"),
+        UniqueConstraint("company_id", "code", name="uq_departments_company_id_code"),
     )
 
-    name: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
-    code: Mapped[str | None] = mapped_column(
-        String(20), unique=True, index=True, nullable=True
-    )
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(20), index=True, nullable=True)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

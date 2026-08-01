@@ -16,31 +16,48 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Integer, Numeric, String
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from models.base import BaseModel, enum_column_type
+from models.base import BaseModel, CompanyScopedMixin, enum_column_type
 from models.enums import EmploymentStatus
 
 
-class Employee(BaseModel):
+class Employee(CompanyScopedMixin, BaseModel):
     """A person whose attendance and HR data is tracked by the system.
 
     Attributes:
-        employee_number: Unique business identifier printed on badges and
-            used as the QR/barcode payload; assigned by HR, not the
-            database (so numbering schemes like ``"EMP-0042"`` are
-            possible).
+        company_id: The owning company (see
+            :class:`~models.base.CompanyScopedMixin`).
+        branch_id: The branch this employee physically works at, if the
+            company tracks that. The service layer is responsible for
+            rejecting a branch from a different company.
+        employee_number: Business identifier printed on badges and used
+            as the QR/barcode payload; assigned by HR, not the database
+            (so numbering schemes like ``"EMP-0042"`` are possible).
+            Unique within the owning company.
         full_name: Employee's full name (Arabic or English text).
         national_id: Optional national identification number; unique
-            when provided.
+            within the owning company when provided. Not enforced
+            globally — different tenant companies are isolated from each
+            other and must never collide on, or leak information about,
+            each other's data.
         department_id: The employee's department, if assigned.
         position: Free-form job title (e.g. ``"محاسب"``, ``"Accountant"``).
         salary: Base salary; ``NULL`` if not yet set. Stored as
             ``Numeric(12, 2)`` for exact decimal arithmetic — payroll
             figures must never be represented as binary floats.
         phone: Contact phone number.
-        email: Contact email address; unique when provided.
+        email: Contact email address; unique within the owning company
+            when provided.
         notes: Free-form HR notes.
         employment_status: Current :class:`~models.enums.EmploymentStatus`.
         hire_date: Date the employee joined; used by leave-accrual and
@@ -56,15 +73,25 @@ class Employee(BaseModel):
         CheckConstraint(
             "salary IS NULL OR salary >= 0", name="ck_employees_salary_non_negative"
         ),
+        UniqueConstraint(
+            "company_id", "employee_number", name="uq_employees_company_id_employee_number"
+        ),
+        UniqueConstraint(
+            "company_id", "national_id", name="uq_employees_company_id_national_id"
+        ),
+        UniqueConstraint("company_id", "email", name="uq_employees_company_id_email"),
     )
 
-    employee_number: Mapped[str] = mapped_column(
-        String(30), unique=True, index=True, nullable=False
+    branch_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("branches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
+
+    employee_number: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    national_id: Mapped[str | None] = mapped_column(
-        String(50), unique=True, index=True, nullable=True
-    )
+    national_id: Mapped[str | None] = mapped_column(String(50), index=True, nullable=True)
 
     department_id: Mapped[int | None] = mapped_column(
         Integer,
@@ -76,9 +103,7 @@ class Employee(BaseModel):
     salary: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
 
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    email: Mapped[str | None] = mapped_column(
-        String(255), unique=True, index=True, nullable=True
-    )
+    email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     employment_status: Mapped[EmploymentStatus] = mapped_column(
