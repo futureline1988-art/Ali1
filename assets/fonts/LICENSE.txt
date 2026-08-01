@@ -1,0 +1,15 @@
+DejaVuSans.ttf and DejaVuSans-Bold.ttf are part of the DejaVu Fonts
+project (https://dejavu-fonts.github.io/), derived from Bitstream Vera,
+and are distributed under the permissive Bitstream Vera License, which
+allows free use, modification and redistribution (including in
+commercial products) provided the copyright notice is retained.
+
+Copyright (c) 2003 Bitstream, Inc. All Rights Reserved.
+Bitstream Vera is a trademark of Bitstream, Inc.
+DejaVu changes are in the public domain.
+
+These fonts are bundled with this application so that generated PDF
+reports render Arabic script correctly on any machine, regardless of
+which fonts are installed on the end user's system.
+
+Full license text: https://dejavu-fonts.github.io/License.html

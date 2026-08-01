@@ -22,6 +22,13 @@ cryptography==43.0.0              # Encryption for sensitive settings/backups
 openpyxl==3.1.5                  # Excel (.xlsx) generation
 reportlab==4.2.2                 # PDF generation
 pandas==2.2.2                    # Tabular data handling for reports/CSV
+arabic-reshaper==3.0.1             # Shapes Arabic letters into their contextual
+                                   # (initial/medial/final/isolated) presentation
+                                   # forms -- required because reportlab has no
+                                   # built-in Arabic text shaping engine.
+python-bidi==0.6.11                # Unicode Bidirectional Algorithm: reorders
+                                   # shaped Arabic into visual order for
+                                   # reportlab's left-to-right-only canvas.
 
 # ---- QR Code / Barcode ---------------------------------------------------
 qrcode==7.4.2                    # QR code generation for employee badges
