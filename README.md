@@ -16,6 +16,7 @@ Built for organizations that need to manage attendance across an unlimited numbe
 - [التثبيت والتشغيل / Installation & Running](#التثبيت-والتشغيل--installation--running)
 - [متغيرات البيئة / Environment Variables](#متغيرات-البيئة--environment-variables)
 - [أول تشغيل / First Run](#أول-تشغيل--first-run)
+- [نظام الترخيص / Licensing System](#نظام-الترخيص--licensing-system)
 - [النسخ الاحتياطي / Backup & Restore](#النسخ-الاحتياطي--backup--restore)
 - [الأجهزة البيومترية المدعومة / Supported Devices](#الأجهزة-البيومترية-المدعومة--supported-devices)
 - [الاختبار / Testing](#الاختبار--testing)
@@ -185,6 +186,50 @@ with get_database().session_scope() as session:
 ```
 
 بعدها يمكن تسجيل الدخول من التطبيق باسم المستخدم وكلمة المرور أعلاه، واختيار الشركة من قائمة تسجيل الدخول.
+
+## نظام الترخيص / Licensing System
+
+النظام محمي بترخيص مرتبط بالجهاز (Machine-Locked License)، مستقل تمامًا عن قاعدة البيانات وعن نظام تراخيص الشركات ضمن التطبيق (`models/license.py`، وهو خاص بحدود اشتراك كل شركة داخل النظام، لا بحماية التطبيق نفسه). يُتحقق من الترخيص عند كل إقلاع للتطبيق، قبل شاشة تسجيل الدخول.
+
+The application is protected by a machine-locked license, fully independent of the database and of the in-app, per-company `models/license.py` (which governs each tenant's subscription limits, not the application's own protection). It is verified on every startup, before the login screen.
+
+### كيف يعمل / How it works
+
+- **معرّف الجهاز (Machine ID)**: بصمة SHA-256 مشتقة من اسم الجهاز والنظام والعنوان الفعلي للشبكة، تُعرض في شاشة التفعيل لإرسالها إلى المورّد.
+- **مفتاح الترخيص**: نص موقّع رقميًا بخوارزمية Ed25519 (`AMS1.<payload>.<signature>`)، يحدد نوع الترخيص (تجريبي/شهري/سنوي/دائم)، تاريخ الانتهاء، وربطًا اختياريًا بجهاز محدد. يتحقق التطبيق من التوقيع باستخدام مفتاح عام مضمّن في الكود فقط — لا يحتاج اتصالًا بالإنترنت إطلاقًا.
+- **التخزين المحلي**: الترخيص المُفعَّل يُخزَّن مشفّرًا (Fernet) بمفتاح مشتق من معرّف الجهاز نفسه، في `data/license.dat` — نسخ هذا الملف إلى جهاز آخر ينتج ملفًا لا يمكن فك تشفيره هناك.
+- **النسخة التجريبية**: 14 يومًا، تُفعَّل ذاتيًا من داخل التطبيق دون الحاجة لمفتاح من المورّد، ومرة واحدة فقط لكل جهاز.
+
+### إصدار مفاتيح الترخيص (للمورّد فقط) / Issuing License Keys (Vendor-Only)
+
+أداة سطر أوامر منفصلة تمامًا عن التطبيق، لا تُستدعى منه أبدًا:
+
+```bash
+# مرة واحدة فقط: توليد زوج مفاتيح التوقيع (احتفظ بالمفتاح الخاص بمكان آمن خارج المستودع)
+python -m licensing.license_generator generate-keypair \
+    --private-key-out /secure/location/private_key.pem \
+    --public-key-out /tmp/public_key.pem
+# ثم انسخ محتوى المفتاح العام إلى licensing/keys.py -> PUBLIC_KEY_PEM
+
+# إصدار مفتاح سنوي مرتبط بجهاز عميل محدد
+python -m licensing.license_generator issue \
+    --private-key /secure/location/private_key.pem \
+    --customer "اسم العميل" \
+    --type yearly \
+    --machine-id <Machine-ID-الذي-أرسله-العميل>
+
+# إصدار مفتاح دائم غير مرتبط بجهاز (يُفعَّل على أول جهاز يستخدمه)
+python -m licensing.license_generator issue \
+    --private-key /secure/location/private_key.pem \
+    --customer "اسم العميل" \
+    --type lifetime
+```
+
+**تحذير أمني**: `licensing/vendor/private_key.pem` هو المفتاح الخاص الذي يسمح بإصدار تراخيص صالحة لهذا التطبيق. لا يجوز مطلقًا تضمينه في التطبيق المُوزَّع أو رفعه إلى نظام التحكم بالإصدارات (مستثنى فعليًا عبر `.gitignore`). فقدانه يعني عدم القدرة على إصدار تراخيص جديدة لنفس المفتاح العام المضمّن حاليًا؛ تسريبه يعني إمكانية تزوير تراخيص من قبل أي طرف يحصل عليه.
+
+### التوسع لخادم ترخيص عبر الإنترنت لاحقًا / Extending to an Online License Server
+
+طبقة التحقق مبنية خلف واجهة `LicenseBackend` بسيطة (`verify(key) -> LicensePayload`) في `licensing/license_service.py`. التنفيذ الحالي (`LocalLicenseBackend`) يعمل بالكامل دون اتصال بالإنترنت. لإضافة تحقق عبر خادم لاحقًا (مثل التأكد من عدم إلغاء الاشتراك)، يكفي إنشاء صنف جديد يحقق نفس الواجهة وتمريره إلى `LicenseService(backend=...)` — دون أي تعديل على واجهة التفعيل أو التخزين المحلي أو بقية التطبيق.
 
 ## النسخ الاحتياطي / Backup & Restore
 

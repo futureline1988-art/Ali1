@@ -6,6 +6,11 @@ logs/*.log
 # Local environment overrides (DB credentials, secret key, etc.)
 .env
 
+# License-signing private key — must never ship with the application or be
+# committed to version control (see licensing/keys.py's docstring). Keep the
+# only copy somewhere secure, outside this repository.
+licensing/vendor/
+
 # PyInstaller build output
 build/
 dist/

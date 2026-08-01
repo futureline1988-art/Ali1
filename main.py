@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from config import get_config
 from database.database import DatabaseConnectionError, get_database, session_scope
+from licensing.license_service import LicenseService
 from models.permission import Permission
 from repositories.permission_repository import PermissionRepository
 from ui.attendance import AttendancePage
@@ -24,6 +25,7 @@ from ui.dashboard_page import DashboardPage
 from ui.departments import DepartmentsPage
 from ui.devices import DevicesPage
 from ui.employees import EmployeesPage
+from ui.license_window import LicenseActivationWindow
 from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
 from ui.reports import ReportsPage
@@ -204,31 +206,64 @@ def main() -> int:
     app.setApplicationVersion(config.app_version)
     app.setOrganizationName(config.organization_name)
 
-    database = get_database()
-    try:
-        database.initialize()
-    except DatabaseConnectionError as exc:
-        logger.critical("Failed to initialize the database: {error}", error=str(exc))
-        QMessageBox.critical(None, "خطأ في قاعدة البيانات", f"تعذر الاتصال بقاعدة البيانات:\n{exc}")
-        return 1
-
-    _seed_default_permissions()
-
     get_locale_manager().bind_application(app)
     get_theme_manager().bind_application(app)
 
-    splash = build_splash_screen(app_name=config.app_name_ar)
-    splash.show()
-    app.processEvents()
+    # Shared with the nested closures below so a database failure (which can
+    # now be discovered either before app.exec() starts, if already
+    # licensed, or from inside a Qt slot after it starts, once activation
+    # succeeds) has one place to record the real exit code, and so
+    # ApplicationController has a reference that outlives _launch_app()'s
+    # own local scope for the rest of the process's lifetime.
+    run_state: dict[str, object] = {}
 
-    controller = ApplicationController()
-    QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
+    def _launch_app() -> None:
+        """Run the rest of startup: database, permissions, splash, main app.
+
+        Gated behind a valid license (see below) - never called until
+        :class:`~licensing.license_service.LicenseService` confirms one.
+        """
+        database = get_database()
+        try:
+            database.initialize()
+        except DatabaseConnectionError as exc:
+            logger.critical("Failed to initialize the database: {error}", error=str(exc))
+            QMessageBox.critical(
+                None, "خطأ في قاعدة البيانات", f"تعذر الاتصال بقاعدة البيانات:\n{exc}"
+            )
+            run_state["exit_code"] = 1
+            app.quit()
+            return
+
+        _seed_default_permissions()
+
+        splash = build_splash_screen(app_name=config.app_name_ar)
+        splash.show()
+        app.processEvents()
+
+        run_state["controller"] = ApplicationController()
+        QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
+
+    license_service = LicenseService()
+    if license_service.get_status().is_valid:
+        QTimer.singleShot(0, _launch_app)
+    else:
+        license_window = LicenseActivationWindow(license_service=license_service)
+
+        def _on_license_activated() -> None:
+            license_window.close()
+            _launch_app()
+
+        license_window.activated.connect(_on_license_activated)
+        license_window.show()
+        run_state["license_window"] = license_window
 
     exit_code = app.exec()
 
-    database.dispose()
-    logger.info("{app_name} exited with code {code}", app_name=config.app_name, code=exit_code)
-    return exit_code
+    get_database().dispose()
+    final_code = run_state.get("exit_code", exit_code)
+    logger.info("{app_name} exited with code {code}", app_name=config.app_name, code=final_code)
+    return final_code
 
 
 if __name__ == "__main__":
