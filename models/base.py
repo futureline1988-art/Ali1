@@ -14,6 +14,9 @@ This module is the single foundation every domain model (``User``,
   :class:`VersionMixin`) that concrete models get for free by inheriting
   :class:`BaseModel`, so no model file has to redeclare bookkeeping
   columns or serialization logic.
+* :class:`CompanyScopedMixin` — an opt-in mixin (not part of
+  :class:`BaseModel`) adding the ``company_id`` foreign key that every
+  tenant-owned table needs for the multi-company architecture.
 
 Only :class:`BaseModel` (and, where a model genuinely needs to opt out of
 part of this behaviour, the individual mixins) should be imported by
@@ -199,6 +202,38 @@ class UUIDMixin:
         index=True,
         nullable=False,
         sort_order=-90,
+    )
+
+
+class CompanyScopedMixin:
+    """Adds the mandatory ``company_id`` foreign key for tenant data.
+
+    Any model representing data owned by exactly one company — branches,
+    departments, employees, users, roles, devices, attendance, and so on
+    — must inherit this mixin *in addition to* :class:`BaseModel`, e.g.
+    ``class Employee(CompanyScopedMixin, BaseModel): ...``. It is
+    deliberately not part of :class:`BaseModel` itself, because a handful
+    of models (:class:`~models.company.Company` — the tenant root — and
+    the global :class:`~models.permission.Permission` catalog) must never
+    carry a ``company_id``.
+
+    This FK has no ``ON DELETE`` clause, so it defaults to
+    ``RESTRICT``/``NO ACTION`` on every supported backend: a
+    :class:`~models.company.Company` with any dependent rows cannot be
+    deleted at the database level. Enforcing a deliberate "deactivate,
+    don't delete" tenant offboarding policy is a service-layer concern.
+
+    Every repository query against a company-scoped model must filter by
+    ``company_id == current_company_id`` — this mixin only makes that
+    filtering *possible*; it does not enforce it automatically.
+    """
+
+    company_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("companies.id"),
+        nullable=False,
+        index=True,
+        sort_order=-80,
     )
 
 
