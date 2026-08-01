@@ -32,6 +32,7 @@ from controllers.auth_controller import AuthController
 from database.database import session_scope
 from services.company_service import CompanyService
 from ui.widgets import make_heading_label, make_primary_button, make_secondary_label
+from utils.security import SessionManager
 
 
 def _load_active_companies() -> list[dict[str, Any]]:
@@ -58,12 +59,27 @@ class LoginWindow(QWidget):
     login_successful = Signal(dict, int)
     """Emitted with ``(user_dict, company_id)`` on a successful login."""
 
-    def __init__(self, *, parent: QWidget | None = None) -> None:
-        """Build the login screen and populate the company picker."""
+    def __init__(
+        self, *, session_manager: SessionManager | None = None, parent: QWidget | None = None
+    ) -> None:
+        """Build the login screen and populate the company picker.
+
+        Args:
+            session_manager: The desktop session tracker to authenticate
+                into; defaults to a new, private
+                :class:`~utils.security.SessionManager` (fine for
+                standalone use/tests). The composition root
+                (``main.py``) should inject the same instance it later
+                hands to :class:`~ui.main_window.MainWindow`, so the
+                session's idle-timeout clock actually starts at login
+                rather than being silently discarded.
+            parent: Optional parent widget.
+        """
         super().__init__(parent)
         self.setWindowTitle("تسجيل الدخول - نظام إدارة الحضور والانصراف")
         self.setMinimumSize(920, 560)
 
+        self.session_manager = session_manager or SessionManager()
         self._auth_controller: AuthController | None = None
         self._password_visible = False
 
@@ -207,7 +223,9 @@ class LoginWindow(QWidget):
 
         self.login_button.setEnabled(False)
         try:
-            controller = AuthController(company_id=company_id)
+            controller = AuthController(
+                company_id=company_id, session_manager=self.session_manager
+            )
             controller.operation_failed.connect(self._on_login_failed)
             controller.login_succeeded.connect(
                 lambda user: self._on_login_succeeded(user, company_id)
