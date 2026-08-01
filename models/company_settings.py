@@ -49,6 +49,13 @@ class CompanySettings(CompanyScopedMixin, BaseModel):
         company: The related :class:`~models.company.Company`.
     """
 
+    # TableNameMixin's generic pluralization would turn this into
+    # "company_settingses" (it treats the trailing "s" in "Settings" as
+    # needing "+es", same rule that correctly turns "bus" into "buses").
+    # "Settings" is already plural, so the table name is overridden
+    # explicitly here rather than adjusting the shared heuristic.
+    __tablename__ = "company_settings"
+
     __table_args__ = (
         UniqueConstraint("company_id", name="uq_company_settings_company_id"),
         CheckConstraint("language IN ('ar', 'en')", name="ck_company_settings_language"),
