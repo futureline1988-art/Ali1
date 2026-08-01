@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
         self._pages: dict[str, QWidget] = {}
         self._page_titles: dict[str, str] = {}
         self._active_toasts: list[ToastNotification] = []
+        self._closing_for_transition = False
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -246,10 +247,33 @@ class MainWindow(QMainWindow):
     # Cleanup
     # ------------------------------------------------------------------
 
+    def close_for_transition(self) -> None:
+        """Close this window as part of an internal transition, not an app exit.
+
+        Used by ``main.py``'s ``ApplicationController`` when returning to
+        the login screen (logout, session expiry) - a replacement window
+        is about to be shown, so :meth:`closeEvent` must not treat this
+        as the user quitting the application.
+        """
+        self._closing_for_transition = True
+        self.close()
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        """Stop background timers and remove the global event filter on close."""
+        """Stop background timers, remove the global event filter, and quit if appropriate.
+
+        Quits the application unless this close is part of an internal
+        transition (see :meth:`close_for_transition`) - the desktop
+        window manager's close button ("X") is how a user normally
+        exits this application, and must actually end the process, not
+        just hide the window (this app disables Qt's default
+        quit-on-last-window-closed behavior in ``main.py`` precisely
+        because that heuristic cannot distinguish this case from a
+        transient zero-window instant during a deliberate transition).
+        """
         self._session_timer.stop()
         app_instance = QApplication.instance()
         if app_instance is not None:
             app_instance.removeEventFilter(self)
         super().closeEvent(event)
+        if not self._closing_for_transition and app_instance is not None:
+            app_instance.quit()

@@ -121,7 +121,7 @@ class ApplicationController:
     def _show_login_window(self) -> None:
         """Show a fresh login window, closing any existing main window first."""
         if self._main_window is not None:
-            self._main_window.close()
+            self._main_window.close_for_transition()
             self._main_window = None
 
         self._login_window = LoginWindow(session_manager=self._session_manager)
@@ -205,6 +205,19 @@ def main() -> int:
     app.setApplicationName(config.app_name)
     app.setApplicationVersion(config.app_version)
     app.setOrganizationName(config.organization_name)
+    # This app manages its own window lifecycle explicitly (license window ->
+    # login window -> main window, and back again on logout/session-expiry),
+    # which always involves closing the old top-level window just before
+    # showing its replacement - a transient instant with zero visible
+    # windows. Qt's default quitOnLastWindowClosed=True queues an
+    # application-quit the moment that happens, regardless of a replacement
+    # window being shown microseconds later; every explicit exit path below
+    # already calls app.quit() itself, so this heuristic only ever causes
+    # harm here (see the regression this fixes: activating a license closed
+    # the activation window, and the very next app.processEvents() call
+    # picked up that queued quit and ended the process before the freshly
+    # constructed, visible LoginWindow ever got a chance to run).
+    app.setQuitOnLastWindowClosed(False)
 
     get_locale_manager().bind_application(app)
     get_theme_manager().bind_application(app)

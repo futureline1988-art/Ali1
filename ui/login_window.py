@@ -17,6 +17,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -82,6 +83,7 @@ class LoginWindow(QWidget):
         self.session_manager = session_manager or SessionManager()
         self._auth_controller: AuthController | None = None
         self._password_visible = False
+        self._did_succeed = False
 
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -238,6 +240,7 @@ class LoginWindow(QWidget):
     def _on_login_succeeded(self, user: dict[str, Any], company_id: int) -> None:
         """Relay a successful authentication to :attr:`login_successful`."""
         self.password_edit.clear()
+        self._did_succeed = True
         self.login_successful.emit(user, company_id)
 
     def _on_login_failed(self, message: str) -> None:
@@ -254,3 +257,20 @@ class LoginWindow(QWidget):
                 are meant to reach the user.
         """
         self._show_error(message)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Quit the whole application if this window is closed without logging in.
+
+        The composition root closes this window itself right after a
+        successful login (see ``main.py``'s ``ApplicationController``),
+        which must not be mistaken for the user closing it via the
+        window manager - the ``_did_succeed`` flag distinguishes the
+        two, exactly like
+        :class:`~ui.license_window.LicenseActivationWindow`'s
+        ``_did_activate`` does for the same reason.
+        """
+        super().closeEvent(event)
+        if not self._did_succeed:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
