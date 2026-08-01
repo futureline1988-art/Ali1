@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, ClassVar, Iterable, Mapping
@@ -330,6 +330,8 @@ class SerializationMixin:
     def _json_safe(value: Any) -> Any:
         """Convert a single Python value into a JSON-serializable form."""
         if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
             return value.isoformat()
         if isinstance(value, uuid.UUID):
             return str(value)
