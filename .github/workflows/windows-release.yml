@@ -12,6 +12,18 @@ on:
       - "v*.*.*"
   workflow_dispatch: {}
 
+# windows-latest runners default `run:` steps to PowerShell, not cmd.
+# Every step below uses Windows batch (CMD) syntax -- `if exist`/
+# `if not exist`, `copy /y`, `exit /b` -- which PowerShell does not
+# understand (e.g. it parses `if not exist "X" mkdir "Y"` as a
+# malformed PowerShell `if` statement and fails immediately). Setting
+# the default shell to cmd for the whole job makes every step's `run:`
+# block execute under cmd.exe, matching what each command was written
+# for, without needing a per-step override.
+defaults:
+  run:
+    shell: cmd
+
 jobs:
   build:
     runs-on: windows-latest
@@ -40,7 +52,6 @@ jobs:
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
-        shell: cmd
 
       - name: Build Setup.exe with Inno Setup
         run: |
