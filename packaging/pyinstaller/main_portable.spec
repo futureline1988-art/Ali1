@@ -24,12 +24,20 @@ Windows build procedure.
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent.parent
 
+# See main.spec for the rationale -- kept in sync deliberately.
+_cryptography_datas, _cryptography_binaries, _cryptography_hidden = collect_all("cryptography")
+_bcrypt_datas, _bcrypt_binaries, _bcrypt_hidden = collect_all("bcrypt")
+
 datas = [
     (str(PROJECT_ROOT / "assets"), "assets"),
+    *_cryptography_datas,
+    *_bcrypt_datas,
 ]
 
 hiddenimports = [
@@ -47,12 +55,16 @@ hiddenimports = [
     "reportlab.pdfbase._fontdata_widths_helveticaoblique",
     "reportlab.pdfbase._fontdata_widths_helveticaboldoblique",
     "barcode.writer",
+    *_cryptography_hidden,
+    *_bcrypt_hidden,
 ]
 
 a = Analysis(
-    [str(PROJECT_ROOT / "main.py")],
+    # bootstrap.py, not main.py directly -- see main.spec and
+    # bootstrap.py's module docstring.
+    [str(PROJECT_ROOT / "bootstrap.py")],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
+    binaries=[*_cryptography_binaries, *_bcrypt_binaries],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

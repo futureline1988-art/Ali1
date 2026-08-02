@@ -14,13 +14,27 @@ Windows build procedure.
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
 
 # packaging/pyinstaller/main.spec -> repository root
 PROJECT_ROOT = Path(SPECPATH).resolve().parent.parent
 
+# cryptography and bcrypt both ship compiled/native extensions (Rust and C
+# respectively). PyInstaller's built-in hooks for them are usually
+# sufficient, but a missing transitive DLL from either is a classic cause
+# of a frozen Windows build that fails at import time with no visible
+# error (see bootstrap.py) -- collect_all() is the belt-and-suspenders
+# option: it pulls in every submodule, binary, and data file each package
+# itself declares, rather than relying solely on hook-level detection.
+_cryptography_datas, _cryptography_binaries, _cryptography_hidden = collect_all("cryptography")
+_bcrypt_datas, _bcrypt_binaries, _bcrypt_hidden = collect_all("bcrypt")
+
 datas = [
     (str(PROJECT_ROOT / "assets"), "assets"),
+    *_cryptography_datas,
+    *_bcrypt_datas,
 ]
 
 hiddenimports = [
@@ -54,12 +68,19 @@ hiddenimports = [
     "reportlab.pdfbase._fontdata_widths_helveticaboldoblique",
     # python-barcode picks its writer backend (image vs. SVG) dynamically.
     "barcode.writer",
+    *_cryptography_hidden,
+    *_bcrypt_hidden,
 ]
 
 a = Analysis(
-    [str(PROJECT_ROOT / "main.py")],
+    # bootstrap.py, not main.py directly: a stdlib-only guard that catches
+    # and reports (crash log + native message box) any exception raised
+    # while importing or running main.py -- including an import-time
+    # failure in main.py itself, which is otherwise invisible in a
+    # windowed (console=False) build. See bootstrap.py's module docstring.
+    [str(PROJECT_ROOT / "bootstrap.py")],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
+    binaries=[*_cryptography_binaries, *_bcrypt_binaries],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
