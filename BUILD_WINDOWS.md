@@ -13,9 +13,12 @@ on Linux).
 `.github/workflows/windows-release.yml` runs every step below on a
 `windows-latest` GitHub-hosted runner automatically:
 
-- **On every `v*.*.*` tag push** (e.g. `git tag v1.0.0 && git push --tags`)
-  — builds `Setup.exe`/`Portable.exe` and attaches them to a GitHub
-  Release for that tag.
+- **On every `attendance-v*.*.*` tag push** (e.g.
+  `git tag attendance-v1.0.0 && git push origin attendance-v1.0.0`) —
+  builds `Setup.exe`/`Portable.exe` and attaches them to a GitHub
+  Release for that tag. The `attendance-` prefix is deliberate: this
+  repository hosts more than one project, and an unprefixed `v1.0.0` is
+  already in use by a different one.
 - **On demand** — trigger it manually from the Actions tab
   ("Run workflow") for a build without tagging.
 
