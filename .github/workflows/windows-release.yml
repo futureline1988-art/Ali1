@@ -44,11 +44,80 @@ jobs:
       - name: Build onedir app (for the installer)
         run: pyinstaller packaging\pyinstaller\main.spec --noconfirm
 
+      # These smoke-test steps run in real PowerShell on a real Windows
+      # runner (not a substitute for it) -- each one launches the actual
+      # built/installed executable and asserts it is still running a few
+      # seconds later, rather than trusting "the build succeeded" as proof
+      # the app starts. QT_QPA_PLATFORM=offscreen is used deliberately: it
+      # exercises every line of startup (config, database, license check,
+      # main window construction) without depending on the runner having a
+      # real interactive desktop/window station, so a failure here means a
+      # genuine startup crash, not a CI environment quirk. Any failure
+      # prints startup_crash.log (see bootstrap.py) so the cause is visible
+      # directly in the workflow log, with no artifact download needed.
+      - name: Smoke test - onedir build starts without crashing
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $exePath = "dist\AttendanceManagementSystem\AttendanceManagementSystem.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Executable not found: $exePath"
+            exit 1
+          }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:APP_ENVIRONMENT = "testing"
+          $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_onedir.db"
+          $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $exePath -PassThru
+          Start-Sleep -Seconds 15
+          if ($proc.HasExited) {
+            Write-Host "##[error] Onedir executable exited early (code $($proc.ExitCode)) instead of staying running."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            exit 1
+          }
+          Write-Host "OK: onedir executable is still running after 15s (PID $($proc.Id))."
+          Stop-Process -Id $proc.Id -Force
+
       - name: Build onefile Portable.exe
         run: |
           pyinstaller packaging\pyinstaller\main_portable.spec --noconfirm
           if not exist "Release" mkdir "Release"
           copy /y "dist\AttendanceManagementSystem-Portable.exe" "Release\Portable.exe"
+
+      - name: Smoke test - portable build starts without crashing
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $exePath = "Release\Portable.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Executable not found: $exePath"
+            exit 1
+          }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:APP_ENVIRONMENT = "testing"
+          $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_portable.db"
+          $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $exePath -PassThru
+          Start-Sleep -Seconds 15
+          if ($proc.HasExited) {
+            Write-Host "##[error] Portable executable exited early (code $($proc.ExitCode)) instead of staying running."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            exit 1
+          }
+          Write-Host "OK: portable executable is still running after 15s (PID $($proc.Id))."
+          Stop-Process -Id $proc.Id -Force
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -56,6 +125,59 @@ jobs:
       - name: Build Setup.exe with Inno Setup
         run: |
           "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer\setup.iss
+
+      # The one check that most directly answers "does it work after a
+      # normal user installs it": silently runs the actual Setup.exe,
+      # launches the actual installed .exe from Program Files, then
+      # uninstalls -- exercising the full path a real customer goes
+      # through, not just the PyInstaller output.
+      - name: Smoke test - installed Setup.exe starts without crashing
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $installer = "Release\Setup.exe"
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found: $installer"
+            exit 1
+          }
+          $installProc = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait -PassThru
+          if ($installProc.ExitCode -ne 0) {
+            Write-Error "Setup.exe exited with code $($installProc.ExitCode) during silent install."
+            exit 1
+          }
+          $installedExe = "$env:ProgramFiles\Attendance Management System\AttendanceManagementSystem.exe"
+          if (-not (Test-Path $installedExe)) {
+            Write-Error "Installed executable not found at $installedExe"
+            exit 1
+          }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:APP_ENVIRONMENT = "testing"
+          $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_installed.db"
+          $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $installedExe -PassThru
+          Start-Sleep -Seconds 15
+          $failed = $false
+          if ($proc.HasExited) {
+            Write-Host "##[error] Installed executable exited early (code $($proc.ExitCode))."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            $failed = $true
+          } else {
+            Write-Host "OK: installed executable is still running after 15s (PID $($proc.Id))."
+            Stop-Process -Id $proc.Id -Force
+          }
+          # Uninstall regardless of pass/fail, both to prove the uninstaller
+          # itself works and to leave the runner clean.
+          $uninstaller = "$env:ProgramFiles\Attendance Management System\unins000.exe"
+          if (Test-Path $uninstaller) {
+            Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          }
+          if ($failed) { exit 1 }
 
       - name: Copy documentation into Release\
         run: |
