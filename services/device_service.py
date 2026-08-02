@@ -29,6 +29,7 @@ from models.employee import Employee
 from models.enums import AttendanceSource, AuditAction, DeviceProtocol
 from repositories.attendance_repository import AttendancePunchRepository
 from repositories.audit_log_repository import AuditLogRepository
+from repositories.branch_repository import BranchRepository
 from repositories.device_repository import DeviceRepository
 from repositories.employee_repository import EmployeeRepository
 from utils.logger import logger
@@ -80,6 +81,7 @@ class DeviceService:
         self.device_repo = DeviceRepository(session, company_id=company_id)
         self.employee_repo = EmployeeRepository(session, company_id=company_id)
         self.punch_repo = AttendancePunchRepository(session, company_id=company_id)
+        self.branch_repo = BranchRepository(session, company_id=company_id)
         self.audit_repo = AuditLogRepository(session)
         self.device_manager = device_manager or DeviceManager()
 
@@ -288,6 +290,7 @@ class DeviceService:
             raise DeviceValidationError(f"Invalid device port: {port!r}.")
         if self.device_repo.get_by_name(name) is not None:
             raise DeviceValidationError(f"Device name {name!r} is already in use.")
+        self._validate_branch(branch_id)
 
         device = Device(
             company_id=self.company_id,
@@ -345,6 +348,8 @@ class DeviceService:
             raise DeviceValidationError(f"Invalid device host: {fields['host']!r}.")
         if "port" in fields and not is_valid_port(int(fields["port"])):
             raise DeviceValidationError(f"Invalid device port: {fields['port']!r}.")
+        if "branch_id" in fields:
+            self._validate_branch(fields["branch_id"])
 
         device.update_from_dict(fields, allowed_fields=_UPDATABLE_FIELDS)
         device.updated_by_id = self.actor_user_id
@@ -394,3 +399,12 @@ class DeviceService:
         if active_only:
             return self.device_repo.list_active()
         return self.device_repo.list_all()
+
+    def _validate_branch(self, branch_id: int | None) -> None:
+        """Verify a branch id resolves to a branch in this company."""
+        if branch_id is None:
+            return
+        if self.branch_repo.get_by_id(branch_id) is None:
+            raise DeviceValidationError(
+                f"Branch {branch_id!r} was not found in this company."
+            )

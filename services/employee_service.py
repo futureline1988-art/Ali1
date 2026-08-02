@@ -18,6 +18,7 @@ from models.audit_log import AuditLog
 from models.employee import Employee
 from models.enums import AuditAction, EmploymentStatus
 from repositories.audit_log_repository import AuditLogRepository
+from repositories.branch_repository import BranchRepository
 from repositories.department_repository import DepartmentRepository
 from repositories.employee_repository import EmployeeRepository
 from utils.qr_barcode import generate_employee_codes
@@ -81,6 +82,7 @@ class EmployeeService:
         self.actor_user_id = actor_user_id
         self.employee_repo = EmployeeRepository(session, company_id=company_id)
         self.department_repo = DepartmentRepository(session, company_id=company_id)
+        self.branch_repo = BranchRepository(session, company_id=company_id)
         self.audit_repo = AuditLogRepository(session)
 
     def create_employee(
@@ -133,6 +135,7 @@ class EmployeeService:
             salary=salary,
         )
         self._validate_department(department_id)
+        self._validate_branch(branch_id)
 
         if self.employee_repo.get_by_employee_number(employee_number) is not None:
             raise EmployeeValidationError(
@@ -223,6 +226,8 @@ class EmployeeService:
             raise EmployeeValidationError("Invalid salary amount.")
         if "department_id" in fields:
             self._validate_department(fields["department_id"])
+        if "branch_id" in fields:
+            self._validate_branch(fields["branch_id"])
 
         employee.update_from_dict(fields, allowed_fields=_UPDATABLE_FIELDS)
         employee.updated_by_id = self.actor_user_id
@@ -346,4 +351,13 @@ class EmployeeService:
         if self.department_repo.get_by_id(department_id) is None:
             raise EmployeeValidationError(
                 f"Department {department_id!r} was not found in this company."
+            )
+
+    def _validate_branch(self, branch_id: int | None) -> None:
+        """Verify a branch id resolves to a branch in this company."""
+        if branch_id is None:
+            return
+        if self.branch_repo.get_by_id(branch_id) is None:
+            raise EmployeeValidationError(
+                f"Branch {branch_id!r} was not found in this company."
             )
