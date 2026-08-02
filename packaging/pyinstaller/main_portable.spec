@@ -1,0 +1,102 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""PyInstaller spec: onefile "Portable.exe" build.
+
+A single self-contained executable for users who want to run the app
+from a USB stick or a folder without running Setup.exe. Functionally
+identical to the onedir build (``main.spec``) -- same code, same
+hidden-imports, same bundled assets -- just packed into one file that
+self-extracts to a temp directory (``sys._MEIPASS``) on each launch.
+
+Because that temp directory is thrown away between runs, this build
+relies on the same ``config._resolve_data_root()`` logic as the onedir
+build to keep the database, license, and logs in
+``%LOCALAPPDATA%\\AttendanceManagementSystem`` instead -- nothing about
+this file needs to duplicate that, it is a property of ``sys.frozen``
+being true, which both build modes set identically.
+
+Build with:
+
+    pyinstaller packaging/pyinstaller/main_portable.spec --noconfirm
+
+Run from the ``attendance_system/`` project root. See
+``BUILD_WINDOWS.md`` for the full Windows build procedure.
+"""
+
+from pathlib import Path
+
+block_cipher = None
+
+PROJECT_ROOT = Path(SPECPATH).resolve().parent.parent
+
+datas = [
+    (str(PROJECT_ROOT / "assets"), "assets"),
+]
+
+hiddenimports = [
+    "PySide6.QtSvg",
+    "PySide6.QtPrintSupport",
+    "sqlalchemy.dialects.sqlite",
+    "zk",
+    "zk.exception",
+    "reportlab.pdfbase._fontdata",
+    "reportlab.pdfbase._fontdata_enc_winansi",
+    "reportlab.pdfbase._fontdata_widths_helvetica",
+    "reportlab.pdfbase._fontdata_widths_helveticabold",
+    "reportlab.pdfbase._fontdata_widths_helveticaoblique",
+    "reportlab.pdfbase._fontdata_widths_helveticaboldoblique",
+    "barcode.writer",
+]
+
+a = Analysis(
+    [str(PROJECT_ROOT / "main.py")],
+    pathex=[str(PROJECT_ROOT)],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        "matplotlib",
+        "fastapi",
+        "uvicorn",
+        "apscheduler",
+        "alembic",
+        "psycopg2",
+        "pymysql",
+        "pandas",
+        "pytest",
+        "pytestqt",
+        "tkinter",
+    ],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name="AttendanceManagementSystem-Portable",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=str(PROJECT_ROOT / "assets" / "icons" / "app.ico"),
+    version=str(Path(SPECPATH) / "version_info.txt"),
+    manifest=str(Path(SPECPATH) / "app.manifest"),
+)

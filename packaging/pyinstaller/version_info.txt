@@ -1,0 +1,37 @@
+# UTF-8
+#
+# Windows executable version resource for PyInstaller's --version-file
+# option. Consumed automatically by main.spec / main_portable.spec.
+#
+# Regenerate by hand if attendance_system/config.py's AppConfig.app_version
+# changes -- PyInstaller reads this as a static resource, it does not import
+# config.py to fill these fields in dynamically.
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',
+          [StringStruct(u'CompanyName', u'Attendance Systems'),
+          StringStruct(u'FileDescription', u'Attendance Management System'),
+          StringStruct(u'FileVersion', u'1.0.0.0'),
+          StringStruct(u'InternalName', u'AttendanceManagementSystem'),
+          StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Attendance Systems. All rights reserved.'),
+          StringStruct(u'OriginalFilename', u'AttendanceManagementSystem.exe'),
+          StringStruct(u'ProductName', u'Attendance Management System'),
+          StringStruct(u'ProductVersion', u'1.0.0.0')])
+      ]),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)

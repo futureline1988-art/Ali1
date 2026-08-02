@@ -11,7 +11,17 @@ logs/*.log
 # only copy somewhere secure, outside this repository.
 licensing/vendor/
 
-# PyInstaller build output
+# PyInstaller build output (the spec files themselves, under
+# packaging/pyinstaller/, are hand-authored and must be committed — see
+# the negation below).
 build/
 dist/
 *.spec
+!packaging/pyinstaller/*.spec
+
+# Windows build venv created by packaging/build_all.bat
+.venv-build/
+
+# Windows binaries produced by a real Windows build (see BUILD_WINDOWS.md);
+# only the generated documentation ships from this Linux environment.
+Release/*.exe

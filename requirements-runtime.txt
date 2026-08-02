@@ -1,0 +1,55 @@
+# ==============================================================================
+# Attendance Management System - Frozen Build Dependencies
+# ==============================================================================
+# Used ONLY to build the Windows PyInstaller executable (see
+# packaging/pyinstaller/*.spec and BUILD_WINDOWS.md). This is a trimmed-down
+# subset of requirements.txt containing only packages actually imported by
+# the shipped application code.
+#
+# requirements.txt itself is left untouched and remains the reference list
+# for local development. matplotlib, fastapi, uvicorn, APScheduler, alembic,
+# psycopg2-binary, PyMySQL, pandas, pytest and pytest-qt are declared there
+# for future/optional use but are not imported anywhere in the app today, so
+# they are intentionally excluded here to keep the frozen build smaller,
+# faster to build, and free of unrelated failure modes.
+#
+# Install with: pip install -r requirements-runtime.txt
+# Target interpreter: Python 3.11-3.13 (match the interpreter used to run
+# PyInstaller on the Windows build machine).
+# ==============================================================================
+
+# ---- GUI Framework ----------------------------------------------------------
+PySide6==6.7.2
+
+# ---- Database / ORM ----------------------------------------------------------
+SQLAlchemy==2.0.32
+
+# ---- Security ------------------------------------------------------------
+bcrypt==4.2.0
+cryptography==43.0.0
+
+# ---- Reporting: Excel / PDF ------------------------------------------------
+openpyxl==3.1.5
+reportlab==4.2.2
+arabic-reshaper==3.0.1
+python-bidi==0.6.11
+
+# ---- QR Code / Barcode ---------------------------------------------------
+qrcode==7.4.2
+python-barcode==0.15.1
+Pillow==10.4.0
+
+# ---- Biometric Device Communication ------------------------------------------
+pyzk==0.9
+
+# ---- HTTP (Hikvision ISAPI) ------------------------------------------------
+requests==2.32.3
+
+# ---- Configuration / Environment --------------------------------------------
+python-dotenv==1.0.1
+
+# ---- Logging ---------------------------------------------------------------
+loguru==0.7.2
+
+# ---- Build tooling -----------------------------------------------------------
+pyinstaller==6.11.1
