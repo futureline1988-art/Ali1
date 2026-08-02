@@ -20,6 +20,7 @@ from database.database import DatabaseConnectionError, get_database, session_sco
 from licensing.license_service import LicenseService
 from models.permission import Permission
 from repositories.permission_repository import PermissionRepository
+from services.scheduler_service import SchedulerService
 from ui.attendance import AttendancePage
 from ui.branches import BranchesPage
 from ui.dashboard_page import DashboardPage
@@ -286,6 +287,7 @@ def main() -> int:
     # ApplicationController has a reference that outlives _launch_app()'s
     # own local scope for the rest of the process's lifetime.
     run_state: dict[str, object] = {}
+    scheduler = SchedulerService()
 
     def _launch_app() -> None:
         """Run the rest of startup: database, permissions, splash, main app.
@@ -306,6 +308,7 @@ def main() -> int:
             return
 
         _seed_default_permissions()
+        scheduler.start()
 
         splash = build_splash_screen(app_name=config.app_name_ar)
         splash.show()
@@ -330,6 +333,7 @@ def main() -> int:
 
     exit_code = app.exec()
 
+    scheduler.shutdown()
     get_database().dispose()
     final_code = run_state.get("exit_code", exit_code)
     logger.info("{app_name} exited with code {code}", app_name=config.app_name, code=final_code)
