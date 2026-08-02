@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from controllers.branch_controller import BranchController
 from controllers.device_controller import DeviceController
 from controllers.employee_controller import EmployeeController
 from models.enums import DeviceProtocol
@@ -35,12 +36,16 @@ class DeviceFormDialog(QDialog):
     def __init__(
         self,
         *,
+        branches: list[dict[str, Any]] | None = None,
         existing: dict[str, Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         """Build the form dialog.
 
         Args:
+            branches: Available branches (``{"id", "name", ...}`` dicts)
+                to populate the branch picker; omit or pass an empty
+                list if this company has none defined yet.
             existing: The device being edited, or ``None`` to create a
                 new one.
             parent: Optional parent widget.
@@ -65,6 +70,12 @@ class DeviceFormDialog(QDialog):
         self.host_edit = QLineEdit(self)
         self.host_edit.setPlaceholderText("192.168.1.201")
         form.addRow("عنوان الجهاز (IP) *", self.host_edit)
+
+        self.branch_combo = QComboBox(self)
+        self.branch_combo.addItem("بدون فرع", userData=None)
+        for branch in branches or []:
+            self.branch_combo.addItem(branch["name"], userData=branch["id"])
+        form.addRow("الفرع", self.branch_combo)
 
         self.port_spin = QSpinBox(self)
         self.port_spin.setRange(1, 65535)
@@ -108,6 +119,9 @@ class DeviceFormDialog(QDialog):
             if index >= 0:
                 self.protocol_combo.setCurrentIndex(index)
         self.host_edit.setText(existing.get("host") or "")
+        branch_id = existing.get("branch_id")
+        branch_index = self.branch_combo.findData(branch_id)
+        self.branch_combo.setCurrentIndex(branch_index if branch_index >= 0 else 0)
         if existing.get("port"):
             self.port_spin.setValue(int(existing["port"]))
         if existing.get("timeout_seconds"):
@@ -135,6 +149,7 @@ class DeviceFormDialog(QDialog):
             # an actual enum instance, not its string value.
             "protocol": DeviceProtocol(self.protocol_combo.currentData()),
             "host": self.host_edit.text().strip(),
+            "branch_id": self.branch_combo.currentData(),
             "port": self.port_spin.value(),
             "communication_key": self.communication_key_edit.text().strip() or None,
             "timeout_seconds": self.timeout_spin.value(),
@@ -214,6 +229,11 @@ class DevicesPage(TablePage):
         )
         self._controller.operation_failed.connect(self.show_error)
         self._employee_controller = EmployeeController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
+        self._branch_controller = BranchController(
             company_id=company_id,
             actor_user_id=current_user_id,
             permission_codes=permission_codes,
@@ -301,9 +321,13 @@ class DevicesPage(TablePage):
     # Add / edit / delete
     # ------------------------------------------------------------------
 
+    def _load_branch_choices(self) -> list[dict[str, Any]]:
+        """Fetch every branch for the form's branch picker."""
+        return self._branch_controller.list_branches()
+
     def _on_add_clicked(self) -> None:
         """Open the "add device" dialog and persist the result if accepted."""
-        dialog = DeviceFormDialog(parent=self)
+        dialog = DeviceFormDialog(branches=self._load_branch_choices(), parent=self)
         if dialog.exec() != QDialog.Accepted:
             return
         values = dialog.values()
@@ -323,7 +347,9 @@ class DevicesPage(TablePage):
         on save means "leave it unchanged", since the controller never
         returns the real key for display.
         """
-        dialog = DeviceFormDialog(existing=row, parent=self)
+        dialog = DeviceFormDialog(
+            branches=self._load_branch_choices(), existing=row, parent=self
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         values = dialog.values()

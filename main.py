@@ -21,6 +21,7 @@ from licensing.license_service import LicenseService
 from models.permission import Permission
 from repositories.permission_repository import PermissionRepository
 from ui.attendance import AttendancePage
+from ui.branches import BranchesPage
 from ui.dashboard_page import DashboardPage
 from ui.departments import DepartmentsPage
 from ui.devices import DevicesPage
@@ -89,6 +90,7 @@ _PAGE_DEFINITIONS: list[tuple[str, str, type, tuple[str, ...]]] = [
         ("attendance.view", "attendance.manage"),
     ),
     ("departments", "الأقسام", DepartmentsPage, ("departments.view", "departments.manage")),
+    ("branches", "الفروع", BranchesPage, ("branches.view", "branches.manage")),
     ("devices", "الأجهزة", DevicesPage, ("devices.view", "devices.manage")),
     ("shifts", "الورديات", ShiftsPage, ("shifts.view", "shifts.manage")),
     ("holidays", "العطلات", HolidaysPage, ("holidays.view", "holidays.manage")),

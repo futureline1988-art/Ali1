@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from controllers.branch_controller import BranchController
 from controllers.department_controller import DepartmentController
 from controllers.employee_controller import EmployeeController
 from ui.table_page import TablePage
@@ -38,6 +39,7 @@ class EmployeeFormDialog(QDialog):
         self,
         *,
         departments: list[dict[str, Any]],
+        branches: list[dict[str, Any]] | None = None,
         existing: dict[str, Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -46,6 +48,9 @@ class EmployeeFormDialog(QDialog):
         Args:
             departments: Available departments (``{"id", "name", ...}``
                 dicts) to populate the department picker.
+            branches: Available branches (``{"id", "name", ...}`` dicts)
+                to populate the branch picker; omit or pass an empty
+                list if this company has none defined yet.
             existing: The employee being edited, or ``None`` to create
                 a new one.
             parent: Optional parent widget.
@@ -70,6 +75,12 @@ class EmployeeFormDialog(QDialog):
         for department in departments:
             self.department_combo.addItem(department["name"], userData=department["id"])
         form.addRow("القسم", self.department_combo)
+
+        self.branch_combo = QComboBox(self)
+        self.branch_combo.addItem("بدون فرع", userData=None)
+        for branch in branches or []:
+            self.branch_combo.addItem(branch["name"], userData=branch["id"])
+        form.addRow("الفرع", self.branch_combo)
 
         self.national_id_edit = QLineEdit(self)
         form.addRow("الرقم الوطني", self.national_id_edit)
@@ -119,6 +130,10 @@ class EmployeeFormDialog(QDialog):
         index = self.department_combo.findData(department_id)
         self.department_combo.setCurrentIndex(index if index >= 0 else 0)
 
+        branch_id = existing.get("branch_id")
+        branch_index = self.branch_combo.findData(branch_id)
+        self.branch_combo.setCurrentIndex(branch_index if branch_index >= 0 else 0)
+
         self.national_id_edit.setText(existing.get("national_id") or "")
         self.email_edit.setText(existing.get("email") or "")
         self.phone_edit.setText(existing.get("phone") or "")
@@ -156,6 +171,7 @@ class EmployeeFormDialog(QDialog):
             "employee_number": self.employee_number_edit.text().strip(),
             "full_name": self.full_name_edit.text().strip(),
             "department_id": self.department_combo.currentData(),
+            "branch_id": self.branch_combo.currentData(),
             "national_id": self.national_id_edit.text().strip() or None,
             "email": self.email_edit.text().strip() or None,
             "phone": self.phone_edit.text().strip() or None,
@@ -200,6 +216,11 @@ class EmployeesPage(TablePage):
         )
         self._controller.operation_failed.connect(self.show_error)
         self._department_controller = DepartmentController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
+        self._branch_controller = BranchController(
             company_id=company_id,
             actor_user_id=current_user_id,
             permission_codes=permission_codes,
@@ -266,9 +287,17 @@ class EmployeesPage(TablePage):
         """Fetch every department for the form's department picker."""
         return self._department_controller.list_all()
 
+    def _load_branch_choices(self) -> list[dict[str, Any]]:
+        """Fetch every branch for the form's branch picker."""
+        return self._branch_controller.list_branches()
+
     def _on_add_clicked(self) -> None:
         """Open the "add employee" dialog and persist the result if accepted."""
-        dialog = EmployeeFormDialog(departments=self._load_department_choices(), parent=self)
+        dialog = EmployeeFormDialog(
+            departments=self._load_department_choices(),
+            branches=self._load_branch_choices(),
+            parent=self,
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         values = dialog.values()
@@ -282,7 +311,10 @@ class EmployeesPage(TablePage):
     def _on_edit_row(self, row: dict[str, Any]) -> None:
         """Open the "edit employee" dialog for ``row`` and persist changes."""
         dialog = EmployeeFormDialog(
-            departments=self._load_department_choices(), existing=row, parent=self
+            departments=self._load_department_choices(),
+            branches=self._load_branch_choices(),
+            existing=row,
+            parent=self,
         )
         if dialog.exec() != QDialog.Accepted:
             return
