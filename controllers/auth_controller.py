@@ -67,6 +67,12 @@ class AuthController(BaseController):
             self.actor_user_id = user.id
             data = user.to_dict(exclude={"password_hash"})
             data["role_name"] = user.role_name
+            # Resolved once here, while the role's permissions relationship
+            # is still loaded on an open session, so the composition root
+            # (main.py) can hand every controller it constructs a ready
+            # -made permission set without a repeat query - see
+            # controllers/base_controller.py's requires_permission.
+            data["permission_codes"] = [permission.code for permission in user.role.permissions]
             return data
 
         result = self._run(do_login)
