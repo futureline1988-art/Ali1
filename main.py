@@ -50,6 +50,8 @@ _DEFAULT_PERMISSIONS: list[tuple[str, str, str, str]] = [
     ("employees.manage", "employees", "إدارة الموظفين", "Manage Employees"),
     ("departments.view", "departments", "عرض الأقسام", "View Departments"),
     ("departments.manage", "departments", "إدارة الأقسام", "Manage Departments"),
+    ("branches.view", "branches", "عرض الفروع", "View Branches"),
+    ("branches.manage", "branches", "إدارة الفروع", "Manage Branches"),
     ("attendance.view", "attendance", "عرض الحضور والانصراف", "View Attendance"),
     ("attendance.manage", "attendance", "إدارة الحضور والانصراف", "Manage Attendance"),
     ("devices.view", "devices", "عرض الأجهزة", "View Devices"),
