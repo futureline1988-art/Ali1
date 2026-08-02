@@ -18,6 +18,16 @@ backup API is specifically designed to produce a complete, consistent
 snapshot regardless of WAL/checkpoint state, even while the source
 database is open elsewhere.
 
+Every backup file is encrypted at rest (see :mod:`utils.encryption`,
+the same per-installation key used for encrypted columns): the online
+-backup API first produces a plain, consistent snapshot in a private
+temporary file, which is then encrypted into the real
+``backup_*.db.enc`` file and immediately deleted — a plaintext copy of
+the whole database never sits in :attr:`~config.PathsConfig.backups_dir`
+even momentarily. Restoring reverses this: decrypt to a private
+temporary file, then run the same online-backup copy from that
+temporary file into the live database path.
+
 PostgreSQL/MySQL backups require their own external dump tools
 (``pg_dump``/``mysqldump``), which is out of scope for this in-process
 service; :meth:`BackupService.create_backup` raises
@@ -27,12 +37,15 @@ doing nothing.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from config import DatabaseDialect, get_config
 from database.database import Database, get_database
+from utils.encryption import decrypt_file, encrypt_file
 from utils.logger import logger
 
 
@@ -110,10 +123,22 @@ class BackupService:
         # overwrite each other with no error.
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         suffix = f"_{_sanitize_label(label)}" if label else ""
-        backup_path = config.paths.backups_dir / f"backup_{timestamp}{suffix}.db"
+        backup_path = config.paths.backups_dir / f"backup_{timestamp}{suffix}.db.enc"
 
-        _sqlite_backup(source_path, backup_path)
-        logger.info("Backup created: {path}", path=str(backup_path))
+        # The online-backup API needs a real file to write the consistent
+        # snapshot into before it can be encrypted; that plaintext copy
+        # lives only in a private temp file for the few moments between
+        # these two calls, then is deleted unconditionally.
+        temp_fd, temp_name = tempfile.mkstemp(suffix=".db.tmp")
+        os.close(temp_fd)
+        temp_path = Path(temp_name)
+        try:
+            _sqlite_backup(source_path, temp_path)
+            encrypt_file(temp_path, backup_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        logger.info("Encrypted backup created: {path}", path=str(backup_path))
         return backup_path
 
     def restore_backup(self, backup_path: Path) -> None:
@@ -145,8 +170,15 @@ class BackupService:
         if not backup_path.exists():
             raise FileNotFoundError(f"Backup file not found: {backup_path}")
 
-        self.database.dispose()
-        _sqlite_backup(backup_path, config.database.sqlite_path)
+        temp_fd, temp_name = tempfile.mkstemp(suffix=".db.tmp")
+        os.close(temp_fd)
+        temp_path = Path(temp_name)
+        try:
+            decrypt_file(backup_path, temp_path)
+            self.database.dispose()
+            _sqlite_backup(temp_path, config.database.sqlite_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
         logger.warning("Database restored from backup: {path}", path=str(backup_path))
 
     def list_backups(self) -> list[Path]:
@@ -165,7 +197,7 @@ class BackupService:
         backups_dir = get_config().paths.backups_dir
         if not backups_dir.exists():
             return []
-        return sorted(backups_dir.glob("backup_*.db"), key=lambda p: p.name, reverse=True)
+        return sorted(backups_dir.glob("backup_*.db.enc"), key=lambda p: p.name, reverse=True)
 
     def apply_retention_policy(self, *, retention_count: int | None = None) -> list[Path]:
         """Delete backups beyond the configured retention count.
