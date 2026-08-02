@@ -26,6 +26,7 @@ from ui.departments import DepartmentsPage
 from ui.devices import DevicesPage
 from ui.employees import EmployeesPage
 from ui.holidays import HolidaysPage
+from ui.leave import LeavePage
 from ui.license_window import LicenseActivationWindow
 from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
@@ -57,6 +58,8 @@ _DEFAULT_PERMISSIONS: list[tuple[str, str, str, str]] = [
     ("shifts.manage", "shifts", "إدارة الورديات", "Manage Shifts"),
     ("holidays.view", "holidays", "عرض العطلات", "View Holidays"),
     ("holidays.manage", "holidays", "إدارة العطلات", "Manage Holidays"),
+    ("leave.view", "leave", "عرض الإجازات", "View Leave"),
+    ("leave.manage", "leave", "إدارة الإجازات", "Manage Leave"),
     ("reports.view", "reports", "عرض التقارير", "View Reports"),
     ("reports.export", "reports", "تصدير التقارير", "Export Reports"),
     ("users.view", "users", "عرض المستخدمين", "View Users"),
@@ -160,6 +163,7 @@ class ApplicationController:
         window.register_page("devices", "الأجهزة", DevicesPage(company_id=company_id))
         window.register_page("shifts", "الورديات", ShiftsPage(company_id=company_id))
         window.register_page("holidays", "العطلات", HolidaysPage(company_id=company_id))
+        window.register_page("leave", "الإجازات", LeavePage(company_id=company_id))
         window.register_page("reports", "التقارير", ReportsPage(company_id=company_id))
         window.register_page("users", "المستخدمون", UsersPage(company_id=company_id))
         window.register_page("settings", "الإعدادات", SettingsPage(company_id=company_id))
