@@ -17,17 +17,16 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import (
-    CheckConstraint,
     Date,
     ForeignKey,
     Integer,
-    Numeric,
     String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import BaseModel, CompanyScopedMixin, enum_column_type
+from models.encrypted_types import EncryptedDecimal
 from models.enums import EmploymentStatus
 
 
@@ -52,9 +51,20 @@ class Employee(CompanyScopedMixin, BaseModel):
             each other's data.
         department_id: The employee's department, if assigned.
         position: Free-form job title (e.g. ``"محاسب"``, ``"Accountant"``).
-        salary: Base salary; ``NULL`` if not yet set. Stored as
-            ``Numeric(12, 2)`` for exact decimal arithmetic — payroll
-            figures must never be represented as binary floats.
+        salary: Base salary; ``NULL`` if not yet set. Encrypted at rest
+            by :class:`~models.encrypted_types.EncryptedDecimal`
+            (transparent to every caller - reading/assigning this
+            attribute always sees a real ``Decimal``, never a binary
+            float, so exact decimal arithmetic is preserved even though
+            the underlying column is now opaque ciphertext text rather
+            than a native numeric type). Because of that, the
+            non-negative check this column used to enforce at the
+            database level (``salary >= 0``) can no longer be — a SQL
+            comparison against ciphertext is meaningless — so it is
+            enforced exclusively in the service layer now (see
+            ``services/employee_service.py``'s use of
+            :func:`~utils.validators.is_valid_salary`, which already
+            ran before any database write reached this constraint).
         phone: Contact phone number.
         email: Contact email address; unique within the owning company
             when provided.
@@ -70,9 +80,6 @@ class Employee(CompanyScopedMixin, BaseModel):
     """
 
     __table_args__ = (
-        CheckConstraint(
-            "salary IS NULL OR salary >= 0", name="ck_employees_salary_non_negative"
-        ),
         UniqueConstraint(
             "company_id", "employee_number", name="uq_employees_company_id_employee_number"
         ),
@@ -100,7 +107,7 @@ class Employee(CompanyScopedMixin, BaseModel):
         index=True,
     )
     position: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    salary: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    salary: Mapped[Decimal | None] = mapped_column(EncryptedDecimal, nullable=True)
 
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)

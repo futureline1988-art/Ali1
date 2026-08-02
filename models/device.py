@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import BaseModel, CompanyScopedMixin, UTCDateTime, enum_column_type
 from models.enums import DeviceProtocol, DeviceStatus
+from models.encrypted_types import EncryptedString
 
 
 class Device(CompanyScopedMixin, BaseModel):
@@ -40,12 +41,12 @@ class Device(CompanyScopedMixin, BaseModel):
         port: TCP/UDP port used to reach the device.
         serial_number: Manufacturer serial number, if known.
         communication_key: A device-level shared secret/password some
-            protocols require (e.g. a ZKTeco "comm key"). Stored as
-            whatever string the service layer provides — this model has
-            no opinion on encryption, but callers should encrypt it at
-            rest via ``utils/security.py`` before persisting, since,
-            unlike a user password, it must remain recoverable in order
-            to actually authenticate to the device.
+            protocols require (e.g. a ZKTeco "comm key"). Encrypted at
+            rest by :class:`~models.encrypted_types.EncryptedString`
+            (transparent to every caller - reading/assigning this
+            attribute always sees plaintext); unlike a user password,
+            it must remain recoverable in order to actually authenticate
+            to the device, so it is encrypted rather than hashed.
         status: Last-known :class:`~models.enums.DeviceStatus`.
         last_seen_at: Timestamp of the last successful connectivity
             check (test connection / heartbeat), regardless of whether a
@@ -78,7 +79,7 @@ class Device(CompanyScopedMixin, BaseModel):
     host: Mapped[str] = mapped_column(String(255), nullable=False)
     port: Mapped[int] = mapped_column(Integer, nullable=False)
     serial_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    communication_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    communication_key: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
 
     status: Mapped[DeviceStatus] = mapped_column(
         enum_column_type(DeviceStatus), nullable=False, default=DeviceStatus.UNKNOWN, index=True

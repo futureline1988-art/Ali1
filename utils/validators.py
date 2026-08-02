@@ -108,11 +108,14 @@ def is_valid_username(value: str) -> bool:
 def is_valid_salary(value: Decimal | int | float | str) -> bool:
     """Whether ``value`` is a valid, non-negative salary amount.
 
-    Accepts anything convertible to :class:`~decimal.Decimal`. Gives the
-    UI a way to reject an invalid salary before a save attempt would
-    otherwise fail against
-    :attr:`~models.employee.Employee`'s database-level
-    ``ck_employees_salary_non_negative`` constraint.
+    Accepts anything convertible to :class:`~decimal.Decimal`. This is
+    the *only* place the non-negative rule is enforced —
+    :attr:`~models.employee.Employee.salary` is encrypted at rest (see
+    :class:`~models.encrypted_types.EncryptedDecimal`), so a
+    database-level ``CHECK`` constraint is no longer possible against
+    its now-opaque stored value; every write path
+    (``services/employee_service.py``) calls this before the value ever
+    reaches the database.
     """
     try:
         decimal_value = Decimal(str(value))
