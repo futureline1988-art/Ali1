@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,6 +15,8 @@ from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.department_repository import DepartmentRepository
 from repositories.device_repository import DeviceRepository
 from repositories.employee_repository import EmployeeRepository
+
+_TREND_DAYS = 14
 
 
 class DashboardController(BaseController):
@@ -101,3 +103,68 @@ class DashboardController(BaseController):
             }
 
         return self._run(do_summary)
+
+    @requires_permission("dashboard.view", default=[])
+    def get_attendance_trend(self, *, days: int = _TREND_DAYS) -> list[dict[str, Any]]:
+        """Build the last ``days`` days of company-wide attendance status counts.
+
+        Args:
+            days: How many calendar days to include, ending today
+                (company-local). Defaults to :data:`_TREND_DAYS`.
+
+        Returns:
+            One dict per day, oldest first, each with a ``date`` (ISO
+            format) key plus one integer count per
+            :class:`~models.enums.AttendanceDayStatus` value. Days with
+            no computed records simply have all-zero counts.
+        """
+
+        def do_trend(session: Session) -> list[dict[str, Any]]:
+            today = self._company_today(session)
+            start = today - timedelta(days=days - 1)
+
+            attendance_repo = AttendanceRecordRepository(session, company_id=self.company_id)
+            records = attendance_repo.list_for_company_between(start, today)
+
+            by_day: dict[date, dict[str, int]] = {
+                start + timedelta(days=offset): {status.value: 0 for status in AttendanceDayStatus}
+                for offset in range(days)
+            }
+            for record in records:
+                counts = by_day.get(record.work_date)
+                if counts is not None:
+                    counts[record.status.value] += 1
+
+            return [
+                {"date": day.isoformat(), **counts} for day, counts in sorted(by_day.items())
+            ]
+
+        return self._run(do_trend) or []
+
+    @requires_permission("dashboard.view", default=[])
+    def get_department_breakdown(self) -> list[dict[str, Any]]:
+        """Build active headcount per department.
+
+        Returns:
+            One dict per department with ``name`` and
+            ``employee_count`` keys, sorted by headcount descending.
+            Active employees with no department assigned are grouped
+            under a ``"غير محدد"`` (unspecified) label.
+        """
+
+        def do_breakdown(session: Session) -> list[dict[str, Any]]:
+            employee_repo = EmployeeRepository(session, company_id=self.company_id)
+            counts: dict[str, int] = {}
+            for employee in employee_repo.list_active():
+                name = employee.department.name if employee.department else "غير محدد"
+                counts[name] = counts.get(name, 0) + 1
+            return sorted(
+                (
+                    {"name": name, "employee_count": count}
+                    for name, count in counts.items()
+                ),
+                key=lambda row: row["employee_count"],
+                reverse=True,
+            )
+
+        return self._run(do_breakdown) or []
