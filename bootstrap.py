@@ -25,10 +25,33 @@ distribution, where that safety net doesn't otherwise exist.
 from __future__ import annotations
 
 import datetime
+import faulthandler
 import os
 import sys
 import traceback
 from pathlib import Path
+
+
+def _enable_native_crash_diagnostics(log_path: Path) -> None:
+    """Install a fatal-signal handler that can survive a native crash.
+
+    A plain ``try/except`` around ``_run()`` only ever sees Python-level
+    exceptions. A hard native crash -- an access violation from a
+    misbehaving compiled extension (PySide6/Qt, cryptography's Rust
+    bindings, bcrypt's C extension) or a corrupted/incompatible DLL --
+    terminates the process at the OS level before Python's exception
+    machinery ever runs, so it reaches neither the ``except`` clause
+    below nor even Windows' own unhandled-exception dialog in a
+    windowed build. ``faulthandler`` registers a SEH-based handler on
+    Windows (and a signal handler elsewhere) that fires for exactly
+    that case and prints the Python frame that was executing at the
+    moment of the crash, which a plain exit code cannot show.
+    """
+    try:
+        crash_fh = open(log_path, "a", encoding="utf-8")
+        faulthandler.enable(file=crash_fh)
+    except OSError:
+        pass
 
 
 def _crash_log_path() -> Path:
@@ -92,6 +115,7 @@ def _run() -> int:
 
 
 if __name__ == "__main__":
+    _enable_native_crash_diagnostics(_crash_log_path())
     try:
         sys.exit(_run())
     except SystemExit:

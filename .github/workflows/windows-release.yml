@@ -69,7 +69,15 @@ jobs:
           $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_onedir.db"
           $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
           Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
-          $proc = Start-Process -FilePath $exePath -PassThru
+          $stdout = "$env:RUNNER_TEMP\onedir_stdout.log"
+          $stderr = "$env:RUNNER_TEMP\onedir_stderr.log"
+          # A windowed (console=False) build still has real stdout/stderr
+          # handles when they're explicitly redirected at process creation
+          # like this -- it is only an *inherited console window* that a
+          # windowed build lacks, not the handles themselves. This is how
+          # faulthandler's native-crash traceback (see bootstrap.py) gets
+          # captured even though nothing is visible on a real desktop.
+          $proc = Start-Process -FilePath $exePath -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           Start-Sleep -Seconds 15
           if ($proc.HasExited) {
             Write-Host "##[error] Onedir executable exited early (code $($proc.ExitCode)) instead of staying running."
@@ -79,6 +87,10 @@ jobs:
             } else {
               Write-Host "No startup_crash.log was written either."
             }
+            Write-Host "----- stdout -----"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "----- stderr -----"
+            if (Test-Path $stderr) { Get-Content $stderr }
             exit 1
           }
           Write-Host "OK: onedir executable is still running after 15s (PID $($proc.Id))."
@@ -104,7 +116,9 @@ jobs:
           $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_portable.db"
           $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
           Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
-          $proc = Start-Process -FilePath $exePath -PassThru
+          $stdout = "$env:RUNNER_TEMP\portable_stdout.log"
+          $stderr = "$env:RUNNER_TEMP\portable_stderr.log"
+          $proc = Start-Process -FilePath $exePath -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           Start-Sleep -Seconds 15
           if ($proc.HasExited) {
             Write-Host "##[error] Portable executable exited early (code $($proc.ExitCode)) instead of staying running."
@@ -114,6 +128,10 @@ jobs:
             } else {
               Write-Host "No startup_crash.log was written either."
             }
+            Write-Host "----- stdout -----"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "----- stderr -----"
+            if (Test-Path $stderr) { Get-Content $stderr }
             exit 1
           }
           Write-Host "OK: portable executable is still running after 15s (PID $($proc.Id))."
@@ -155,7 +173,9 @@ jobs:
           $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_installed.db"
           $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
           Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
-          $proc = Start-Process -FilePath $installedExe -PassThru
+          $stdout = "$env:RUNNER_TEMP\installed_stdout.log"
+          $stderr = "$env:RUNNER_TEMP\installed_stderr.log"
+          $proc = Start-Process -FilePath $installedExe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           Start-Sleep -Seconds 15
           $failed = $false
           if ($proc.HasExited) {
@@ -166,6 +186,10 @@ jobs:
             } else {
               Write-Host "No startup_crash.log was written either."
             }
+            Write-Host "----- stdout -----"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "----- stderr -----"
+            if (Test-Path $stderr) { Get-Content $stderr }
             $failed = $true
           } else {
             Write-Host "OK: installed executable is still running after 15s (PID $($proc.Id))."
