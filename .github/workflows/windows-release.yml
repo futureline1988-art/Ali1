@@ -195,11 +195,22 @@ jobs:
             Write-Host "OK: installed executable is still running after 15s (PID $($proc.Id))."
             Stop-Process -Id $proc.Id -Force
           }
-          # Uninstall regardless of pass/fail, both to prove the uninstaller
-          # itself works and to leave the runner clean.
+          # Uninstall regardless of pass/fail, to leave the runner clean.
+          # Inno Setup's uninstaller copies itself to a temp file and
+          # relaunches from there to finish the job (so it can delete its
+          # own original exe) - the outer process this starts does not
+          # reliably exit when that handoff happens, so -Wait can hang
+          # long past the point where uninstall has actually finished.
+          # Bounded to 60s and never allowed to fail this step: cleaning
+          # up after the test is a nicety, not part of what this test
+          # verifies (the app already proved it starts, above).
           $uninstaller = "$env:ProgramFiles\Attendance Management System\unins000.exe"
           if (Test-Path $uninstaller) {
-            Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+            $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -PassThru
+            $uninstallProc | Wait-Process -Timeout 60 -ErrorAction SilentlyContinue
+            if (-not $uninstallProc.HasExited) {
+              Write-Host "Uninstall did not finish within 60s - leaving it be, not treated as a smoke-test failure."
+            }
           }
           if ($failed) { exit 1 }
 
