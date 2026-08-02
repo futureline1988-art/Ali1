@@ -1,0 +1,67 @@
+# ==============================================================================
+# Attendance Management System - Frozen Runtime Lock File (v1.0.0)
+# ==============================================================================
+# The fully-resolved, exact-pin closure of requirements-runtime.txt --
+# every transitive dependency PyInstaller's build venv actually installs,
+# not just the direct ones requirements-runtime.txt lists by hand. Generated
+# with:
+#
+#   python -m venv .lockenv
+#   .lockenv/bin/pip install -r requirements-runtime.txt
+#   .lockenv/bin/pip freeze > requirements-runtime.lock.txt
+#
+# Use this instead of requirements-runtime.txt when you need a byte-for-byte
+# reproducible build (e.g. a regulated/audited release, or debugging a
+# "works on my machine" packaging difference) -- pip install -r against this
+# file installs the exact same dependency graph every time, with no resolver
+# free choice left for any transitive package. requirements-runtime.txt
+# remains the normal, hand-maintained file for everyday builds
+# (packaging/build_all.bat uses it, not this one) since it's far easier to
+# read and edit; regenerate this lock file from it after any dependency
+# change destined for a release.
+#
+# Generated on Linux (this project's development environment) -- every
+# package here is pure-Python or ships platform-specific wheels resolved
+# transparently by pip per-platform, so these exact version numbers are
+# what a Windows build venv resolves too; only the downloaded wheel
+# *files* differ by platform, never the pinned versions themselves.
+# ==============================================================================
+
+altgraph==0.17.5
+APScheduler==3.10.4
+arabic-reshaper==3.0.1
+bcrypt==4.2.0
+certifi==2026.7.22
+cffi==2.1.0
+chardet==7.4.3
+charset-normalizer==3.4.9
+cryptography==43.0.0
+et_xmlfile==2.0.0
+future==1.0.0
+greenlet==3.5.4
+idna==3.18
+loguru==0.7.2
+openpyxl==3.1.5
+packaging==26.2
+pillow==10.4.0
+pycparser==3.0
+pyinstaller==6.11.1
+pyinstaller-hooks-contrib==2026.6
+pypng==0.20220715.0
+PySide6==6.7.2
+PySide6_Addons==6.7.2
+PySide6_Essentials==6.7.2
+python-barcode==0.15.1
+python-bidi==0.6.11
+python-dotenv==1.0.1
+pytz==2026.3.post1
+pyzk==0.9
+qrcode==7.4.2
+reportlab==4.2.2
+requests==2.32.3
+shiboken6==6.7.2
+six==1.17.0
+SQLAlchemy==2.0.32
+typing_extensions==4.16.0
+tzlocal==5.4.4
+urllib3==2.7.0

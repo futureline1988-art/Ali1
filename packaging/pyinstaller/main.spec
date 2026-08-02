@@ -27,6 +27,11 @@ hiddenimports = [
     # PySide6 plugins/submodules PyInstaller's static analysis can miss.
     "PySide6.QtSvg",
     "PySide6.QtPrintSupport",
+    # ui/dashboard_page.py imports this directly, so Analysis should already
+    # find it -- listed explicitly anyway so the dashboard's executive
+    # charts (attendance trend, department breakdown) are never silently
+    # dropped from a build by an unrelated refactor of that import.
+    "PySide6.QtCharts",
     # SQLAlchemy's SQLite dialect is loaded via a plugin-style string
     # lookup (create_engine("sqlite://...")), not a literal top-level
     # import, so PyInstaller's import scanner cannot discover it on its
@@ -65,10 +70,15 @@ a = Analysis(
         # imported anywhere in the shipped app today (see
         # requirements-runtime.txt's header comment for the full
         # rationale) -- excluded to keep the build smaller and faster.
+        # apscheduler is deliberately NOT here: services/scheduler_service.py
+        # genuinely imports it for automatic device sync and backups, so
+        # excluding it would break the frozen build at runtime. fastapi/
+        # uvicorn stay excluded -- they back run_api.py, a separate optional
+        # process main.py never imports, so the desktop build has no need
+        # for them.
         "matplotlib",
         "fastapi",
         "uvicorn",
-        "apscheduler",
         "alembic",
         "psycopg2",
         "pymysql",

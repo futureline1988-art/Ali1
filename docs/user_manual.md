@@ -33,7 +33,11 @@ access:
 - **الموظفون (Employees)** — employee records.
 - **الحضور والانصراف (Attendance)** — punches and daily attendance.
 - **الأقسام (Departments)** — the department tree.
+- **الفروع (Branches)** — the company's physical locations.
 - **الأجهزة (Devices)** — biometric device management.
+- **الورديات (Shifts)** — work shift definitions and employee assignments.
+- **العطلات (Holidays)** — the company holiday calendar.
+- **الإجازات (Leave)** — leave requests and approvals.
 - **التقارير (Reports)** — generate and export reports.
 - **المستخدمون (Users)** — user accounts, roles, and permissions.
 - **الإعدادات (Settings)** — company profile, preferences, backups.
@@ -47,31 +51,27 @@ has been granted — if a section is missing, ask your administrator.
 The dashboard gives an at-a-glance view of the current state of your
 company: number of active employees, number of departments, device
 connection status, and a breakdown of today's attendance (present, late,
-absent, on leave). It refreshes automatically and requires no action from
-you.
+absent, on leave). Below that, two executive charts show a 14-day
+attendance trend (present/late/absent/on leave counts per day) and your
+active headcount broken down by department — useful for spotting a
+pattern (a spike in absences, a department running short-staffed) without
+running a full report. The whole page refreshes automatically and
+requires no action from you.
 
 ## 4. Employees
 
 - **Search**: use the search box to filter by name, employee code, or
   department.
 - **Add an employee**: click Add, fill in the form (name, department,
-  shift, contact details, hire date, etc.), and save. A QR code and
-  barcode are generated automatically for the new employee — use these on
-  printed badges for devices/kiosks that scan codes instead of biometrics.
+  branch, shift, contact details, hire date, etc.), and save. A QR code
+  and barcode are generated automatically for the new employee — use
+  these on printed badges for devices/kiosks that scan codes instead of
+  biometrics.
 - **Edit / deactivate**: select an employee to edit their details, or
   deactivate them if they've left the company (deactivating preserves
   their historical attendance records — it does not delete anything).
 
-## 5. Departments
-
-Departments are organized as a tree (parent/child), matching your
-company's real organizational structure. You can:
-
-- Add a department, optionally under a parent department.
-- Reorder departments by dragging them within the tree.
-- Assign employees to a department from the Employees screen.
-
-## 6. Attendance
+## 5. Attendance
 
 - **Automatic**: punches synced from a connected biometric device appear
   here automatically and are used to compute each employee's daily status
@@ -80,14 +80,42 @@ company's real organizational structure. You can:
   missed punch), use "Add Manual Entry" and select the employee, date,
   and time(s).
 - **Daily status** is computed in your company's configured time zone,
-  taking holidays and approved leave into account.
+  taking the employee's assigned shift, company holidays, and approved
+  leave into account — see sections 7-9 for how those are configured.
 
-## 7. Devices
+## 6. Departments
+
+Departments are organized as a tree (parent/child), matching your
+company's real organizational structure. You can:
+
+- Add a department, optionally under a parent department.
+- Reorder departments by dragging them within the tree.
+- Assign employees to a department from the Employees screen.
+
+## 7. Branches (if your company has more than one location)
+
+Branches represent physical locations, separate from the organizational
+department tree — useful once your company operates from more than one
+site. You can:
+
+- Add a branch (name, code, address, phone).
+- Mark one branch as the company's main branch (only one can hold this
+  designation at a time; marking a new one automatically un-marks the
+  previous one).
+- Assign employees and devices to a branch from their respective Add/Edit
+  forms, once at least one branch exists.
+
+If your company operates from a single location, you can ignore this
+screen entirely — branch assignment is optional everywhere it appears.
+
+## 8. Devices
 
 - **Add a device**: enter its IP address, port, and protocol (ZKTeco or
   Hikvision), then **Test Connection** to confirm the app can reach it
   before saving.
-- **Sync**: pull new punch records from the device into the system.
+- **Sync**: pull new punch records from the device into the system. Your
+  administrator may also have scheduled automatic sync, in which case new
+  punches appear here without anyone clicking Sync.
 - **Push employees**: send employee records to the device so it
   recognizes them at the terminal (fingerprint/face/card enrollment
   itself still happens on the device's own hardware).
@@ -97,7 +125,38 @@ reachable on the network from the computer running this application (same
 subnet, or routed/firewalled to allow the connection), and that the
 IP/port configured here still matches the device.
 
-## 8. Reports
+## 9. Shifts
+
+A shift defines a work schedule: start time, end time, a grace period
+before a late arrival counts as "late," and which days of the week it
+applies to. Define your company's shift patterns here, then assign each
+employee to the shift that applies to them (with an effective-from date —
+an employee can move to a different shift over time without losing the
+history of which shift was in effect on any past day). An employee's
+assigned shift is what daily attendance is computed against.
+
+## 10. Holidays
+
+Maintain your company's official holiday calendar here. A day marked as a
+holiday always computes as "holiday" status for every employee,
+regardless of punches — no one needs to be marked absent or have their
+attendance corrected for a day the company was simply closed. Holidays
+can be one-off or set to recur annually on the same date.
+
+## 11. Leave
+
+Submit and track leave requests here:
+
+1. Select the employee, the leave policy/type, and the date range.
+2. Submit the request.
+3. A user with leave-approval permission reviews and approves (or
+   rejects) it.
+
+An approved leave request automatically makes every covered day compute
+as "on leave" status for that employee's attendance — no manual
+attendance correction needed once a request is approved.
+
+## 12. Reports
 
 Six report types are available: attendance summary, by employee, by
 department, late arrivals, overtime, and absences. For each:
@@ -109,23 +168,24 @@ department, late arrivals, overtime, and absences. For each:
    PDF reports render Arabic text correctly, right-to-left, exactly as it
    appears elsewhere in the application.
 
-## 9. Users (if you have Users management permission)
+## 13. Users (if you have Users management permission)
 
 Administrators can create additional user accounts, assign them a role,
 and customize what each role can see and do via the permission catalog
 (e.g. a role that can view but not edit attendance). See the
 **Administrator Manual** for the full permissions/roles reference.
 
-## 10. Settings
+## 14. Settings
 
 - **Company profile**: name, logo, contact details.
 - **Preferences**: time zone, date format, currency, and other
   display defaults used throughout the app.
 - **Backup & restore**: create a backup of the database on demand, or
-  restore from a previous backup file. See the Administrator Manual for
-  details and recommended backup practice.
+  restore from a previous backup file — or leave automatic scheduled
+  backup running, which needs no action from you once enabled. See the
+  Administrator Manual for details and recommended backup practice.
 
-## 11. Getting Help
+## 15. Getting Help
 
 If you encounter an error message, note exactly what it says and what you
 were doing when it appeared, and contact your system administrator or IT

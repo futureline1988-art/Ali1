@@ -35,6 +35,8 @@ datas = [
 hiddenimports = [
     "PySide6.QtSvg",
     "PySide6.QtPrintSupport",
+    # See main.spec -- the dashboard's executive charts need this.
+    "PySide6.QtCharts",
     "sqlalchemy.dialects.sqlite",
     "zk",
     "zk.exception",
@@ -57,10 +59,12 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # See main.spec's excludes list for the full rationale -- kept in
+        # sync deliberately. apscheduler is genuinely used
+        # (services/scheduler_service.py) and must NOT be excluded.
         "matplotlib",
         "fastapi",
         "uvicorn",
-        "apscheduler",
         "alembic",
         "psycopg2",
         "pymysql",

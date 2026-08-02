@@ -8,7 +8,27 @@ machine is only needed to run the actual compilers (PyInstaller's bootloader
 and Inno Setup's `ISCC.exe` both produce Windows PE binaries and cannot run
 on Linux).
 
-## Prerequisites
+## Option A: automated (GitHub Actions, no Windows machine needed)
+
+`.github/workflows/windows-release.yml` runs every step below on a
+`windows-latest` GitHub-hosted runner automatically:
+
+- **On every `v*.*.*` tag push** (e.g. `git tag v1.0.0 && git push --tags`)
+  — builds `Setup.exe`/`Portable.exe` and attaches them to a GitHub
+  Release for that tag.
+- **On demand** — trigger it manually from the Actions tab
+  ("Run workflow") for a build without tagging.
+
+Either way, download the finished `Setup.exe`/`Portable.exe` from the
+workflow run's Artifacts (or the GitHub Release, for a tag-triggered run)
+— no local Windows machine, Python install, or Inno Setup install
+required on your end. Use Option B below only if you need to build
+locally (e.g. to test a change before tagging, or you don't have GitHub
+Actions available).
+
+## Option B: manual, on a real Windows machine
+
+### Prerequisites
 
 1. **Windows 10 or 11, 64-bit.**
 2. **Python 3.11 - 3.13**, installed from [python.org](https://www.python.org/downloads/windows/)
@@ -23,7 +43,7 @@ on Linux).
 No other software is required — the build script creates its own isolated
 virtual environment and installs every Python dependency into it.
 
-## One-command build
+### One-command build
 
 ```cmd
 cd attendance_system
@@ -37,11 +57,17 @@ This runs, in order:
    containing only what the shipped app actually imports (PySide6,
    SQLAlchemy, bcrypt, cryptography, openpyxl, reportlab, arabic-reshaper,
    python-bidi, qrcode, python-barcode, Pillow, pyzk, requests,
-   python-dotenv, loguru, PyInstaller). It intentionally excludes packages
-   listed in `requirements.txt` that are not imported by any shipped code
-   today (matplotlib, fastapi, uvicorn, APScheduler, alembic,
-   psycopg2-binary, PyMySQL, pandas, pytest, pytest-qt) to keep the build
-   smaller and faster.
+   python-dotenv, loguru, APScheduler, PyInstaller). It intentionally
+   excludes packages listed in `requirements.txt` that are not imported by
+   any shipped code today (matplotlib, alembic, psycopg2-binary, PyMySQL,
+   pandas, pytest, pytest-qt, httpx) to keep the build smaller and faster.
+   fastapi and uvicorn are excluded too, but for a different reason: they
+   back `run_api.py`, a separate optional REST API process `main.py` never
+   imports — see `api/` — so the desktop build genuinely has no need for
+   them, not that they're merely unused. For a byte-for-byte reproducible
+   build instead (every transitive dependency exactly pinned, not just
+   the direct ones), install `requirements-runtime.lock.txt` instead of
+   `requirements-runtime.txt` in step 2.
 3. Cleans any previous `build\` / `dist\` output.
 4. Runs `pyinstaller packaging\pyinstaller\main.spec` — an onedir build,
    producing `dist\AttendanceManagementSystem\` (the exe plus an
@@ -72,7 +98,7 @@ Release/
 markdown, but re-running it is not required just to get `Setup.exe` and
 `Portable.exe`.)
 
-## Manual / step-by-step build
+### Manual / step-by-step build
 
 If you want to run each step yourself instead of `build_all.bat`:
 
@@ -96,7 +122,7 @@ pyinstaller packaging\pyinstaller\main_portable.spec --noconfirm
 `dist\AttendanceManagementSystem-Portable.exe` to `Release\Portable.exe`
 yourself if you skip `build_all.bat`.
 
-## Verifying the installer on a clean machine
+### Verifying the installer on a clean machine
 
 Test on a Windows VM/machine **without Python installed** (or with Python
 completely removed from `PATH`) to confirm the build is truly
@@ -136,7 +162,7 @@ device, reports, database, or licensing *business logic* to work around a
 packaging problem — the fix belongs in the packaging layer or in
 `config.py`'s path resolution, never in feature code.
 
-## Troubleshooting
+### Troubleshooting
 
 - **`ISCC` not found**: install Inno Setup 6 from the link above, or add
   its install directory to `PATH`, or edit `packaging\build_all.bat`'s

@@ -73,6 +73,8 @@ echo ============================================================
 if exist "docs\README.pdf" copy /y "docs\README.pdf" "Release\README.pdf" >nul
 if exist "docs\User Manual.pdf" copy /y "docs\User Manual.pdf" "Release\User Manual.pdf" >nul
 if exist "docs\Administrator Manual.pdf" copy /y "docs\Administrator Manual.pdf" "Release\Administrator Manual.pdf" >nul
+if exist "docs\Installation Guide.pdf" copy /y "docs\Installation Guide.pdf" "Release\Installation Guide.pdf" >nul
+if exist "docs\Release Notes.pdf" copy /y "docs\Release Notes.pdf" "Release\Release Notes.pdf" >nul
 if exist "CHANGELOG.md" copy /y "CHANGELOG.md" "Release\CHANGELOG.md" >nul
 
 echo.
