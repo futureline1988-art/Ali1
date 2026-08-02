@@ -6,9 +6,9 @@ Setup packages the whole output folder into Setup.exe). Build with:
 
     pyinstaller packaging/pyinstaller/main.spec --noconfirm
 
-Run from the ``attendance_system/`` project root so the relative paths
-below resolve correctly. See ``BUILD_WINDOWS.md`` for the full,
-copy-pasteable Windows build procedure.
+Run from the repository root so the relative paths below resolve
+correctly. See ``BUILD_WINDOWS.md`` for the full, copy-pasteable
+Windows build procedure.
 """
 
 import sys
@@ -16,7 +16,7 @@ from pathlib import Path
 
 block_cipher = None
 
-# packaging/pyinstaller/main.spec -> attendance_system/
+# packaging/pyinstaller/main.spec -> repository root
 PROJECT_ROOT = Path(SPECPATH).resolve().parent.parent
 
 datas = [

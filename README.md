@@ -90,7 +90,7 @@ The system covers the full attendance lifecycle: enrolling employees and biometr
 ## هيكل المشروع / Project Structure
 
 ```
-attendance_system/
+(جذر المستودع / repository root)
 ├── main.py                # نقطة الدخول للتطبيق المكتبي (Composition Root)
 ├── run_api.py               # نقطة دخول منفصلة واختيارية لواجهة REST
 ├── config.py               # الإعدادات المركزية (مصدر واحد للحقيقة)
@@ -125,8 +125,6 @@ attendance_system/
 ### خطوات التثبيت / Setup
 
 ```bash
-cd attendance_system
-
 # إنشاء بيئة افتراضية / Create a virtual environment
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate

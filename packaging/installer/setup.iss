@@ -7,7 +7,7 @@
 ; Build with Inno Setup 6:
 ;   ISCC packaging\installer\setup.iss
 ;
-; Run from the attendance_system\ project root (or adjust SourceRoot below).
+; Run from the repository root (or adjust SourceRoot below).
 ; See BUILD_WINDOWS.md for the full build procedure.
 ; ==============================================================================
 

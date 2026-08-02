@@ -3,8 +3,8 @@
 # Windows executable version resource for PyInstaller's --version-file
 # option. Consumed automatically by main.spec / main_portable.spec.
 #
-# Regenerate by hand if attendance_system/config.py's AppConfig.app_version
-# changes -- PyInstaller reads this as a static resource, it does not import
+# Regenerate by hand if config.py's AppConfig.app_version changes --
+# PyInstaller reads this as a static resource, it does not import
 # config.py to fill these fields in dynamically.
 
 VSVersionInfo(

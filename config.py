@@ -16,7 +16,7 @@ Usage:
     >>> from config import get_config
     >>> config = get_config()
     >>> config.database.build_url()
-    'sqlite:///.../attendance_system/data/attendance.db'
+    'sqlite:///.../data/attendance.db'
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from dotenv import load_dotenv
 def _resolve_bundle_dir() -> Path:
     """Where bundled, read-only assets (fonts, icons, translations) live.
 
-    In development this is simply the ``attendance_system`` package
+    In development this is simply this project's repository root
     directory. Frozen under PyInstaller, ``sys.frozen`` is set and bundled
     data files are unpacked to (onefile) or placed alongside (onedir)
     ``sys._MEIPASS`` — never the source tree, which does not exist in a
@@ -87,7 +87,7 @@ def _resolve_data_root() -> Path:
 
 
 BASE_DIR: Final[Path] = _resolve_bundle_dir()
-"""Absolute path to the bundle root: the ``attendance_system`` package
+"""Absolute path to the bundle root: this project's repository root
 directory in development, or the PyInstaller bundle directory when frozen.
 Read-only assets are resolved relative to this; see :data:`DATA_ROOT` for
 where writable runtime data lives instead."""

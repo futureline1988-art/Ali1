@@ -12,7 +12,6 @@ v1.0.0 schema as of this release.
 ## Applying migrations
 
 ```bash
-cd attendance_system
 alembic upgrade head
 ```
 

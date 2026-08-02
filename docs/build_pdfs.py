@@ -9,7 +9,7 @@ Arabic-capable font registration and RTL text shaping
 export, so an embedded Arabic phrase inside an otherwise-English manual
 renders correctly instead of as boxes or reversed glyphs.
 
-Usage (from the ``attendance_system/`` project root):
+Usage (from the repository root):
 
     python docs/build_pdfs.py
 

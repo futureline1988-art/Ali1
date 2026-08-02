@@ -18,8 +18,8 @@ Build with:
 
     pyinstaller packaging/pyinstaller/main_portable.spec --noconfirm
 
-Run from the ``attendance_system/`` project root. See
-``BUILD_WINDOWS.md`` for the full Windows build procedure.
+Run from the repository root. See ``BUILD_WINDOWS.md`` for the full
+Windows build procedure.
 """
 
 from pathlib import Path

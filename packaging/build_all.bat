@@ -11,7 +11,7 @@ REM   - Python 3.11-3.13 on PATH
 REM   - Inno Setup 6 installed, with ISCC.exe on PATH
 REM     (default: C:\Program Files (x86)\Inno Setup 6\ISCC.exe)
 REM
-REM Run from the attendance_system\ project root:
+REM Run from the repository root:
 REM   packaging\build_all.bat
 REM ==============================================================================
 

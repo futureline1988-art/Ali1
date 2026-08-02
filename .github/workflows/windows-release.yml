@@ -1,0 +1,77 @@
+name: Windows Release Build (Attendance Management System)
+
+# Produces the real Windows artifacts (Setup.exe, Portable.exe) that
+# cannot be built on Linux -- PyInstaller's bootloader and Inno Setup's
+# ISCC.exe both only produce Windows PE binaries. See BUILD_WINDOWS.md
+# for the equivalent manual procedure on a real Windows machine; this
+# workflow automates the same steps.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime + build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-runtime.txt
+
+      - name: Build onedir app (for the installer)
+        run: pyinstaller packaging\pyinstaller\main.spec --noconfirm
+
+      - name: Build onefile Portable.exe
+        run: |
+          pyinstaller packaging\pyinstaller\main_portable.spec --noconfirm
+          if not exist "Release" mkdir "Release"
+          copy /y "dist\AttendanceManagementSystem-Portable.exe" "Release\Portable.exe"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+        shell: cmd
+
+      - name: Build Setup.exe with Inno Setup
+        run: |
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer\setup.iss
+
+      - name: Copy documentation into Release\
+        run: |
+          if exist "docs\README.pdf" copy /y "docs\README.pdf" "Release\README.pdf"
+          if exist "docs\User Manual.pdf" copy /y "docs\User Manual.pdf" "Release\User Manual.pdf"
+          if exist "docs\Administrator Manual.pdf" copy /y "docs\Administrator Manual.pdf" "Release\Administrator Manual.pdf"
+          if exist "docs\Installation Guide.pdf" copy /y "docs\Installation Guide.pdf" "Release\Installation Guide.pdf"
+          if exist "docs\Release Notes.pdf" copy /y "docs\Release Notes.pdf" "Release\Release Notes.pdf"
+          if exist "CHANGELOG.md" copy /y "CHANGELOG.md" "Release\CHANGELOG.md"
+
+      - name: Verify build output exists
+        run: |
+          if not exist "Release\Setup.exe" (echo Setup.exe missing & exit /b 1)
+          if not exist "Release\Portable.exe" (echo Portable.exe missing & exit /b 1)
+
+      - name: Upload Release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AttendanceManagementSystem-Windows-Release
+          path: Release/
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Release/Setup.exe
+            Release/Portable.exe
+          generate_release_notes: true

@@ -13,12 +13,10 @@ on Linux).
 `.github/workflows/windows-release.yml` runs every step below on a
 `windows-latest` GitHub-hosted runner automatically:
 
-- **On every `attendance-v*.*.*` tag push** (e.g.
-  `git tag attendance-v1.0.0 && git push origin attendance-v1.0.0`) —
-  builds `Setup.exe`/`Portable.exe` and attaches them to a GitHub
-  Release for that tag. The `attendance-` prefix is deliberate: this
-  repository hosts more than one project, and an unprefixed `v1.0.0` is
-  already in use by a different one.
+- **On every `v*.*.*` tag push** (e.g.
+  `git tag v1.0.0 && git push origin v1.0.0`) — builds
+  `Setup.exe`/`Portable.exe` and attaches them to a GitHub Release for
+  that tag.
 - **On demand** — trigger it manually from the Actions tab
   ("Run workflow") for a build without tagging.
 
@@ -40,7 +38,7 @@ Actions available).
    [jrsoftware.org/isdl.php](https://jrsoftware.org/isdl.php) (default
    install location is fine — `build_all.bat` looks for it there
    automatically if `ISCC.exe` isn't already on `PATH`).
-4. A clone of this repository, with `attendance_system/` as your working
+4. A clone of this repository, with the repository root as your working
    directory for every command below.
 
 No other software is required — the build script creates its own isolated
@@ -49,7 +47,6 @@ virtual environment and installs every Python dependency into it.
 ### One-command build
 
 ```cmd
-cd attendance_system
 packaging\build_all.bat
 ```
 
@@ -106,8 +103,6 @@ markdown, but re-running it is not required just to get `Setup.exe` and
 If you want to run each step yourself instead of `build_all.bat`:
 
 ```cmd
-cd attendance_system
-
 python -m venv .venv-build
 .venv-build\Scripts\activate
 
@@ -187,10 +182,10 @@ packaging problem — the fix belongs in the packaging layer or in
   `dist\AttendanceManagementSystem\_internal\assets\fonts\` after the
   build — `main.spec`/`main_portable.spec` bundle the whole `assets\`
   folder via their `datas` list, so a missing font means the build ran
-  from the wrong working directory (must be `attendance_system\`, not
+  from the wrong working directory (must be the repository root, not
   `packaging\pyinstaller\`).
 - **App can't find/write its database on first launch**: confirm you're
   testing the actual frozen build (`sys.frozen` is only true inside a
   PyInstaller build), not `python main.py` — in development mode the
-  database lives under `attendance_system\data\` instead of
+  database lives under `data\` (repository root) instead of
   `%LOCALAPPDATA%`, by design (see `config.py`'s `_resolve_data_root()`).
