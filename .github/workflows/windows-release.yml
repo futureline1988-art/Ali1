@@ -12,6 +12,16 @@ on:
       - "v*.*.*"
   workflow_dispatch: {}
 
+# The default GITHUB_TOKEN is read-only unless a workflow explicitly
+# requests write access -- without this, the "Attach to GitHub Release"
+# step's calls to create/update a release and upload its assets fail
+# with "Resource not accessible by integration" even though the token
+# can otherwise read the repository fine. contents: write is the
+# minimum scope softprops/action-gh-release needs for both the release
+# itself and its uploaded files.
+permissions:
+  contents: write
+
 # windows-latest runners default `run:` steps to PowerShell, not cmd.
 # Every step below uses Windows batch (CMD) syntax -- `if exist`/
 # `if not exist`, `copy /y`, `exit /b` -- which PowerShell does not
