@@ -84,6 +84,9 @@ a = Analysis(
         "pytest",
         "pytestqt",
         "tkinter",
+        # chardet -- root cause of the real Windows startup crash. See
+        # main.spec's excludes list for the full rationale.
+        "chardet",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

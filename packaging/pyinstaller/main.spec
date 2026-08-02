@@ -107,6 +107,23 @@ a = Analysis(
         "pytest",
         "pytestqt",
         "tkinter",
+        # Root cause of the real Windows startup crash (reproduced and
+        # diagnosed on a windows-latest CI runner via faulthandler --
+        # see bootstrap.py and windows-release.yml's smoke-test steps):
+        # chardet ships mypyc-compiled native extension modules, and an
+        # unpinned transitive install of it crashed the frozen build
+        # with STATUS_ACCESS_VIOLATION the instant chardet\detector.py
+        # was imported. Nothing in this app imports chardet directly --
+        # requests.compat._resolve_char_detection() only tries it as an
+        # optional fallback and already falls back to charset_normalizer
+        # (requests' real, pinned dependency) via its own
+        # `except ImportError: pass`, which is the exact code path every
+        # Linux build/test in this repo has been exercising all along
+        # (chardet isn't installed there either). Excluding it here
+        # makes that fallback the guaranteed behavior on Windows too,
+        # instead of depending on whichever chardet version pip happens
+        # to resolve transitively at build time.
+        "chardet",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
