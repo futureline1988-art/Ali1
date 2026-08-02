@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.enums import AttendanceDayStatus, DeviceStatus
 from repositories.attendance_repository import AttendanceRecordRepository
 from repositories.company_settings_repository import CompanySettingsRepository
@@ -38,6 +38,7 @@ class DashboardController(BaseController):
         tz_name = settings.timezone_name if settings is not None else "Asia/Baghdad"
         return datetime.now(ZoneInfo(tz_name)).date()
 
+    @requires_permission("dashboard.view")
     def get_summary(self) -> dict[str, Any] | None:
         """Build the dashboard's full summary snapshot.
 

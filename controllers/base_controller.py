@@ -103,36 +103,45 @@ class BaseController(QObject):
             return None
 
 
-def requires_permission(*codes: str) -> Callable[[Callable[..., ResultT]], Callable[..., ResultT | None]]:
+def requires_permission(
+    *codes: str, default: Any = None
+) -> Callable[[Callable[..., ResultT]], Callable[..., ResultT]]:
     """Gate a controller method behind one or more permission codes.
 
     Apply directly above a controller method. The wrapped method runs
     only if the controller instance's :attr:`BaseController.permission_codes`
     contains at least one of ``codes``; otherwise it emits
     :attr:`BaseController.operation_failed` with a user-facing message
-    and returns ``None`` immediately, without opening a database
+    and returns ``default`` immediately, without opening a database
     session or calling the wrapped method at all.
 
-    ``None`` is a safe denial return value for every method in this
-    codebase regardless of its declared return type: dict-returning
-    methods already treat ``None`` as "the operation failed" at every
-    call site, list-returning methods already coalesce a ``None`` result
-    to ``[]`` (``self._run(do_list) or []``), and bool-returning methods
-    already do ``bool(result)`` (``bool(None) is False``).
+    ``default`` matters because the decorator sits *outside* the method
+    body: a list-returning method's own ``self._run(do_list) or []``
+    fallback, or a bool-returning method's own ``bool(result)``, never
+    executes on a denial, since the wrapped method is never called at
+    all. Every list-returning method in this codebase must pass
+    ``default=[]`` and every bool-returning one ``default=False`` to
+    match its declared return type and what its callers already assume
+    (e.g. ``ui/table_page.py``'s ``populate()`` calling ``len()`` on
+    whatever a list method returns) - the plain ``None`` default is only
+    correct for the dict-or-None-returning methods, which already treat
+    ``None`` as "the operation failed" at every call site.
 
     Args:
         *codes: One or more :attr:`~models.permission.Permission.code`
             values; any single match grants access (e.g. a role with
             either ``"leave.manage"`` or ``"leave.view"``, for a method
             that's safe for either).
+        default: The value to return when access is denied; must match
+            the wrapped method's own failure-path return value.
 
     Returns:
         A decorator to apply to a :class:`BaseController` method.
     """
 
-    def decorator(method: Callable[..., ResultT]) -> Callable[..., ResultT | None]:
+    def decorator(method: Callable[..., ResultT]) -> Callable[..., ResultT]:
         @functools.wraps(method)
-        def wrapper(self: BaseController, *args: Any, **kwargs: Any) -> ResultT | None:
+        def wrapper(self: BaseController, *args: Any, **kwargs: Any) -> ResultT:
             if not set(codes) & self.permission_codes:
                 self._logger.warning(
                     "Permission denied: user {user} lacks any of {codes} for {method}",
@@ -141,7 +150,7 @@ def requires_permission(*codes: str) -> Callable[[Callable[..., ResultT]], Calla
                     method=method.__qualname__,
                 )
                 self.operation_failed.emit(_ACCESS_DENIED_MESSAGE)
-                return None
+                return default
             return method(self, *args, **kwargs)
 
         return wrapper

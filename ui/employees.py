@@ -169,11 +169,21 @@ class EmployeeFormDialog(QDialog):
 class EmployeesPage(TablePage):
     """The employees management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the employees page.
 
         Args:
             company_id: The company this screen manages employees for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(
@@ -183,9 +193,17 @@ class EmployeesPage(TablePage):
             parent=parent,
         )
         self._company_id = company_id
-        self._controller = EmployeeController(company_id=company_id)
+        self._controller = EmployeeController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
-        self._department_controller = DepartmentController(company_id=company_id)
+        self._department_controller = DepartmentController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
 
         self.delete_button = make_danger_button("حذف", parent=self)
         self.delete_button.setEnabled(False)

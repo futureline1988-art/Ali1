@@ -138,15 +138,29 @@ class LeavePolicyFormDialog(QDialog):
 class LeavePoliciesTab(TablePage):
     """The leave-policy configuration list, nested inside :class:`LeavePage`."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the policies tab.
 
         Args:
             company_id: The company this tab manages leave policies for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(title="سياسات الإجازات", add_button_text="+ إضافة سياسة", parent=parent)
-        self._controller = LeaveController(company_id=company_id)
+        self._controller = LeaveController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
 
         self.edit_button = _secondary_button("تعديل")
@@ -381,6 +395,8 @@ class LeaveRequestsTab(TablePage):
         *,
         company_id: int,
         policies_tab: LeavePoliciesTab,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
         parent: QWidget | None = None,
     ) -> None:
         """Create the requests tab.
@@ -389,12 +405,23 @@ class LeaveRequestsTab(TablePage):
             company_id: The company this tab manages leave requests for.
             policies_tab: The sibling policies tab, used to source the
                 active-policy list for the submission form.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(title="طلبات الإجازة", add_button_text="+ تقديم طلب", parent=parent)
-        self._controller = LeaveController(company_id=company_id)
+        self._controller = LeaveController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
-        self._employee_controller = EmployeeController(company_id=company_id)
+        self._employee_controller = EmployeeController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._policies_tab = policies_tab
 
         self.approve_button = _secondary_button("موافقة")
@@ -517,17 +544,36 @@ class LeaveRequestsTab(TablePage):
 class LeavePage(QTabWidget):
     """The leave policies + leave requests management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the leave page.
 
         Args:
             company_id: The company this screen manages leave for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        self.policies_tab = LeavePoliciesTab(company_id=company_id, parent=self)
+        self.policies_tab = LeavePoliciesTab(
+            company_id=company_id,
+            current_user_id=current_user_id,
+            permission_codes=permission_codes,
+            parent=self,
+        )
         self.requests_tab = LeaveRequestsTab(
-            company_id=company_id, policies_tab=self.policies_tab, parent=self
+            company_id=company_id,
+            policies_tab=self.policies_tab,
+            current_user_id=current_user_id,
+            permission_codes=permission_codes,
+            parent=self,
         )
         self.addTab(self.requests_tab, "طلبات الإجازة")
         self.addTab(self.policies_tab, "سياسات الإجازات")

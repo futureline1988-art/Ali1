@@ -8,7 +8,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.shift import EmployeeShiftAssignment, Shift
 from repositories.employee_repository import EmployeeRepository
 from repositories.shift_repository import ShiftRepository
@@ -43,6 +43,7 @@ class ShiftController(BaseController):
     assignments_changed = Signal()
     """Emitted after a successful employee shift assignment."""
 
+    @requires_permission("shifts.manage")
     def create_shift(self, **fields: Any) -> dict[str, Any] | None:
         """Create a new shift.
 
@@ -64,6 +65,7 @@ class ShiftController(BaseController):
             self.shifts_changed.emit()
         return result
 
+    @requires_permission("shifts.manage")
     def update_shift(self, shift_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update a shift's editable fields.
 
@@ -92,6 +94,7 @@ class ShiftController(BaseController):
             self.shifts_changed.emit()
         return result
 
+    @requires_permission("shifts.manage", default=False)
     def delete_shift(self, shift_id: int) -> bool:
         """Soft-delete a shift.
 
@@ -118,6 +121,7 @@ class ShiftController(BaseController):
             self.shifts_changed.emit()
         return bool(result)
 
+    @requires_permission("shifts.view", "shifts.manage", default=[])
     def list_shifts(self) -> list[dict[str, Any]]:
         """List every shift defined for this company.
 
@@ -131,6 +135,7 @@ class ShiftController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("shifts.manage")
     def assign_employee(
         self,
         *,
@@ -164,6 +169,7 @@ class ShiftController(BaseController):
             self.assignments_changed.emit()
         return result
 
+    @requires_permission("shifts.view", "shifts.manage", default=[])
     def list_assignment_history(self, employee_id: int) -> list[dict[str, Any]]:
         """List an employee's full shift-assignment history.
 
@@ -184,6 +190,7 @@ class ShiftController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("shifts.manage", default=[])
     def list_employees_for_assignment(self) -> list[dict[str, Any]]:
         """List every active employee, for the assignment picker.
 

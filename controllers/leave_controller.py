@@ -8,7 +8,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.enums import LeaveType
 from models.leave import LeavePolicy, LeaveRequest
 from repositories.leave_repository import LeavePolicyRepository, LeaveRequestRepository
@@ -48,6 +48,7 @@ class LeaveController(BaseController):
     # Policies
     # ------------------------------------------------------------------
 
+    @requires_permission("leave.manage")
     def create_policy(
         self,
         *,
@@ -85,6 +86,7 @@ class LeaveController(BaseController):
             self.policies_changed.emit()
         return result
 
+    @requires_permission("leave.manage")
     def update_policy(self, policy_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update a leave policy's editable fields.
 
@@ -114,6 +116,7 @@ class LeaveController(BaseController):
             self.policies_changed.emit()
         return result
 
+    @requires_permission("leave.manage", default=False)
     def delete_policy(self, policy_id: int) -> bool:
         """Soft-delete a leave policy.
 
@@ -140,6 +143,7 @@ class LeaveController(BaseController):
             self.policies_changed.emit()
         return bool(result)
 
+    @requires_permission("leave.view", "leave.manage", default=[])
     def list_policies(self) -> list[dict[str, Any]]:
         """List every leave policy defined for this company.
 
@@ -153,6 +157,7 @@ class LeaveController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("leave.view", "leave.manage", default=[])
     def list_active_policies(self) -> list[dict[str, Any]]:
         """List every leave policy currently open for requests.
 
@@ -170,6 +175,7 @@ class LeaveController(BaseController):
     # Requests
     # ------------------------------------------------------------------
 
+    @requires_permission("leave.manage")
     def submit_request(
         self,
         *,
@@ -207,6 +213,7 @@ class LeaveController(BaseController):
             self.requests_changed.emit()
         return result
 
+    @requires_permission("leave.manage")
     def approve_request(self, request_id: int, *, notes: str | None = None) -> dict[str, Any] | None:
         """Approve a pending leave request as the current user.
 
@@ -237,6 +244,7 @@ class LeaveController(BaseController):
             self.requests_changed.emit()
         return result
 
+    @requires_permission("leave.manage")
     def reject_request(self, request_id: int, *, notes: str | None = None) -> dict[str, Any] | None:
         """Reject a pending leave request as the current user.
 
@@ -268,6 +276,7 @@ class LeaveController(BaseController):
             self.requests_changed.emit()
         return result
 
+    @requires_permission("leave.manage")
     def cancel_request(self, request_id: int) -> dict[str, Any] | None:
         """Cancel a still-pending leave request.
 
@@ -295,6 +304,7 @@ class LeaveController(BaseController):
             self.requests_changed.emit()
         return result
 
+    @requires_permission("leave.view", "leave.manage", default=[])
     def list_all_requests(self) -> list[dict[str, Any]]:
         """List every leave request in this company.
 
@@ -308,6 +318,7 @@ class LeaveController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("leave.view", "leave.manage", default=[])
     def list_pending_requests(self) -> list[dict[str, Any]]:
         """List every request awaiting a decision.
 
@@ -321,6 +332,7 @@ class LeaveController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("leave.view", "leave.manage", default=[])
     def list_requests_for_employee(self, employee_id: int) -> list[dict[str, Any]]:
         """List one employee's leave request history.
 

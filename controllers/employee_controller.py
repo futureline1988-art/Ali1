@@ -9,7 +9,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.employee import Employee
 from repositories.employee_repository import EmployeeRepository
 from services.employee_service import EmployeeService
@@ -30,6 +30,7 @@ class EmployeeController(BaseController):
     employees_changed = Signal()
     """Emitted after any successful create/update/delete, so the UI can refresh."""
 
+    @requires_permission("employees.manage")
     def create_employee(
         self,
         *,
@@ -77,6 +78,7 @@ class EmployeeController(BaseController):
             self.employees_changed.emit()
         return result
 
+    @requires_permission("employees.manage")
     def update_employee(self, employee_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update an existing employee.
 
@@ -106,6 +108,7 @@ class EmployeeController(BaseController):
             self.employees_changed.emit()
         return result
 
+    @requires_permission("employees.manage", default=False)
     def delete_employee(self, employee_id: int) -> bool:
         """Soft-delete an employee.
 
@@ -132,6 +135,7 @@ class EmployeeController(BaseController):
             self.employees_changed.emit()
         return bool(result)
 
+    @requires_permission("employees.view", "employees.manage")
     def get_employee(self, employee_id: int) -> dict[str, Any] | None:
         """Fetch one employee.
 
@@ -150,6 +154,7 @@ class EmployeeController(BaseController):
 
         return self._run(do_get)
 
+    @requires_permission("employees.view", "employees.manage", default=[])
     def list_employees(
         self, *, department_id: int | None = None, active_only: bool = False
     ) -> list[dict[str, Any]]:
@@ -173,6 +178,7 @@ class EmployeeController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("employees.view", "employees.manage", default=[])
     def search_employees(self, query: str) -> list[dict[str, Any]]:
         """Search employees by partial name.
 

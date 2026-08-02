@@ -183,11 +183,21 @@ class PushEmployeeDialog(QDialog):
 class DevicesPage(TablePage):
     """The biometric devices management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the devices page.
 
         Args:
             company_id: The company this screen manages devices for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(
@@ -197,9 +207,17 @@ class DevicesPage(TablePage):
             parent=parent,
         )
         self._company_id = company_id
-        self._controller = DeviceController(company_id=company_id)
+        self._controller = DeviceController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
-        self._employee_controller = EmployeeController(company_id=company_id)
+        self._employee_controller = EmployeeController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
 
         self.test_button = _toolbar_button("اختبار الاتصال")
         self.test_button.clicked.connect(self._on_test_clicked)

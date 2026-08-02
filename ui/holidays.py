@@ -114,12 +114,22 @@ def _format_recurrence(row: dict[str, Any]) -> str:
 class HolidaysPage(TablePage):
     """The holiday calendar management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the holidays page.
 
         Args:
             company_id: The company this screen manages the holiday
                 calendar for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(
@@ -128,7 +138,11 @@ class HolidaysPage(TablePage):
             search_placeholder="بحث بالاسم...",
             parent=parent,
         )
-        self._controller = HolidayController(company_id=company_id)
+        self._controller = HolidayController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
 
         self.delete_button = make_danger_button("حذف", parent=self)

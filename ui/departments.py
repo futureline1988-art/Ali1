@@ -182,15 +182,29 @@ class MoveDepartmentDialog(QDialog):
 class DepartmentsPage(QWidget):
     """The department hierarchy management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the departments page.
 
         Args:
             company_id: The company this screen manages departments for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        self._controller = DepartmentController(company_id=company_id)
+        self._controller = DepartmentController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self._show_error)
         self._departments: list[dict[str, Any]] = []
 

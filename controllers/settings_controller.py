@@ -10,7 +10,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.company import Company
 from models.company_settings import CompanySettings
 from repositories.company_repository import CompanyRepository
@@ -43,6 +43,7 @@ class SettingsController(BaseController):
         *,
         company_id: int,
         actor_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
         backup_service: BackupService | None = None,
     ) -> None:
         """Create a settings controller.
@@ -50,13 +51,20 @@ class SettingsController(BaseController):
         Args:
             company_id: The company to scope every operation to.
             actor_user_id: The current user, for audit attribution.
+            permission_codes: The current user's granted permission
+                codes.
             backup_service: Custom backup service, primarily for
                 injecting a fake in tests; defaults to a new
                 :class:`~services.backup_service.BackupService`.
         """
-        super().__init__(company_id=company_id, actor_user_id=actor_user_id)
+        super().__init__(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            permission_codes=permission_codes,
+        )
         self._backup_service = backup_service or BackupService()
 
+    @requires_permission("settings.view", "settings.manage")
     def get_company_info(self) -> dict[str, Any] | None:
         """Fetch this company's profile.
 
@@ -71,6 +79,7 @@ class SettingsController(BaseController):
 
         return self._run(do_get)
 
+    @requires_permission("settings.manage")
     def update_company_info(self, **fields: Any) -> dict[str, Any] | None:
         """Update this company's profile fields.
 
@@ -97,6 +106,7 @@ class SettingsController(BaseController):
             self.company_info_changed.emit()
         return result
 
+    @requires_permission("settings.view", "settings.manage")
     def get_settings(self) -> dict[str, Any] | None:
         """Fetch this company's preferences, seeding defaults if needed.
 
@@ -111,6 +121,7 @@ class SettingsController(BaseController):
 
         return self._run(do_get)
 
+    @requires_permission("settings.manage")
     def update_settings(self, **fields: Any) -> dict[str, Any] | None:
         """Update this company's preferences.
 
@@ -140,6 +151,7 @@ class SettingsController(BaseController):
             self.settings_changed.emit()
         return result
 
+    @requires_permission("backup.manage")
     def create_backup(self, *, label: str | None = None) -> str | None:
         """Create a database backup.
 
@@ -157,6 +169,7 @@ class SettingsController(BaseController):
             self.operation_failed.emit(str(exc))
             return None
 
+    @requires_permission("backup.manage", default=False)
     def restore_backup(self, backup_path: Path) -> bool:
         """Restore the database from a backup file.
 
@@ -174,6 +187,7 @@ class SettingsController(BaseController):
             self.operation_failed.emit(str(exc))
             return False
 
+    @requires_permission("backup.manage", default=[])
     def list_backups(self) -> list[str]:
         """List existing backup files, most recent first.
 

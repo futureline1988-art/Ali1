@@ -57,19 +57,41 @@ _FORMAT_FILE_FILTERS = {
 class ReportsPage(QWidget):
     """The report generation/export screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the reports page.
 
         Args:
             company_id: The company this screen builds reports for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        self._controller = ReportController(company_id=company_id)
+        self._controller = ReportController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self._show_error)
         self._controller.report_generated.connect(self._show_success)
-        self._employee_controller = EmployeeController(company_id=company_id)
-        self._department_controller = DepartmentController(company_id=company_id)
+        self._employee_controller = EmployeeController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
+        self._department_controller = DepartmentController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)

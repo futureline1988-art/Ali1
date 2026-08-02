@@ -238,11 +238,21 @@ def _format_working_days(row: dict[str, Any]) -> str:
 class ShiftsPage(TablePage):
     """The shift definitions and employee-assignment management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the shifts page.
 
         Args:
             company_id: The company this screen manages shifts for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(
@@ -251,7 +261,11 @@ class ShiftsPage(TablePage):
             search_placeholder="بحث بالاسم...",
             parent=parent,
         )
-        self._controller = ShiftController(company_id=company_id)
+        self._controller = ShiftController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
 
         self.assign_button = _secondary_button("تعيين موظف")

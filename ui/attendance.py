@@ -42,18 +42,38 @@ _ALL_EMPLOYEES = None
 class AttendancePage(QWidget):
     """The attendance viewing, manual-entry, and computation screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the attendance page.
 
         Args:
             company_id: The company this screen manages attendance for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
         self._company_id = company_id
-        self._controller = AttendanceController(company_id=company_id)
+        self._current_user_id = current_user_id
+        self._permission_codes = permission_codes
+        self._controller = AttendanceController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self._show_error)
-        self._employee_controller = EmployeeController(company_id=company_id)
+        self._employee_controller = EmployeeController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._timezone = self._load_company_timezone()
         self._employees: list[dict[str, Any]] = []
         self._records: list[dict[str, Any]] = []
@@ -92,7 +112,11 @@ class AttendancePage(QWidget):
 
     def _load_company_timezone(self) -> ZoneInfo:
         """Resolve this company's configured timezone, for display conversion only."""
-        settings_controller = SettingsController(company_id=self._company_id)
+        settings_controller = SettingsController(
+            company_id=self._company_id,
+            actor_user_id=self._current_user_id,
+            permission_codes=self._permission_codes,
+        )
         settings = settings_controller.get_settings()
         tz_name = (settings or {}).get("timezone_name") or _DEFAULT_TIMEZONE
         try:

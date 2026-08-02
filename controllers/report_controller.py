@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.enums import ReportFormat, ReportType
 from services.report_service import (
     ABSENCE_COLUMNS,
@@ -34,6 +34,7 @@ class ReportController(BaseController):
     report_generated = Signal(str)
     """Emitted with the output file path after a successful export."""
 
+    @requires_permission("reports.view", "reports.export")
     def generate_report(
         self,
         *,

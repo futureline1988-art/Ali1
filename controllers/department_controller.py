@@ -7,7 +7,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.department import Department
 from repositories.department_repository import DepartmentRepository
 from services.department_service import DepartmentService
@@ -27,6 +27,7 @@ class DepartmentController(BaseController):
     departments_changed = Signal()
     """Emitted after any successful create/update/move/delete."""
 
+    @requires_permission("departments.manage")
     def create_department(
         self,
         *,
@@ -60,6 +61,7 @@ class DepartmentController(BaseController):
             self.departments_changed.emit()
         return result
 
+    @requires_permission("departments.manage")
     def update_department(self, department_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update a department's editable fields (not its parent).
 
@@ -89,6 +91,7 @@ class DepartmentController(BaseController):
             self.departments_changed.emit()
         return result
 
+    @requires_permission("departments.manage")
     def move_department(
         self, department_id: int, *, new_parent_id: int | None
     ) -> dict[str, Any] | None:
@@ -119,6 +122,7 @@ class DepartmentController(BaseController):
             self.departments_changed.emit()
         return result
 
+    @requires_permission("departments.manage", default=False)
     def delete_department(self, department_id: int) -> bool:
         """Soft-delete a department.
 
@@ -145,6 +149,7 @@ class DepartmentController(BaseController):
             self.departments_changed.emit()
         return bool(result)
 
+    @requires_permission("departments.view", "departments.manage", default=[])
     def list_hierarchy_roots(self) -> list[dict[str, Any]]:
         """List this company's top-level departments.
 
@@ -158,6 +163,7 @@ class DepartmentController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("departments.view", "departments.manage", default=[])
     def list_all(self) -> list[dict[str, Any]]:
         """List every department in this company (flat, not just roots).
 

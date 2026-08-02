@@ -7,7 +7,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from devices.device_manager import DeviceManager
 from models.device import Device
 from models.enums import DeviceProtocol
@@ -37,6 +37,7 @@ class DeviceController(BaseController):
         *,
         company_id: int,
         actor_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
         device_manager: DeviceManager | None = None,
     ) -> None:
         """Create a device controller.
@@ -44,12 +45,19 @@ class DeviceController(BaseController):
         Args:
             company_id: The company to scope every operation to.
             actor_user_id: The current user, for audit attribution.
+            permission_codes: The current user's granted permission
+                codes.
             device_manager: Custom device manager, primarily for
                 injecting a fake connector in tests.
         """
-        super().__init__(company_id=company_id, actor_user_id=actor_user_id)
+        super().__init__(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            permission_codes=permission_codes,
+        )
         self._device_manager = device_manager
 
+    @requires_permission("devices.manage")
     def create_device(
         self,
         *,
@@ -91,6 +99,7 @@ class DeviceController(BaseController):
             self.devices_changed.emit()
         return result
 
+    @requires_permission("devices.manage")
     def update_device(self, device_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update an existing device.
 
@@ -120,6 +129,7 @@ class DeviceController(BaseController):
             self.devices_changed.emit()
         return result
 
+    @requires_permission("devices.manage", default=False)
     def delete_device(self, device_id: int) -> bool:
         """Soft-delete a device.
 
@@ -146,6 +156,7 @@ class DeviceController(BaseController):
             self.devices_changed.emit()
         return bool(result)
 
+    @requires_permission("devices.view", "devices.manage", default=False)
     def test_connection(self, device_id: int) -> bool:
         """Test connectivity to a device and update its recorded status.
 
@@ -174,6 +185,7 @@ class DeviceController(BaseController):
         self.devices_changed.emit()
         return bool(result)
 
+    @requires_permission("devices.manage", default=0)
     def sync_attendance_logs(self, device_id: int) -> int:
         """Download and persist a device's attendance logs.
 
@@ -202,6 +214,7 @@ class DeviceController(BaseController):
             self.devices_changed.emit()
         return result or 0
 
+    @requires_permission("devices.manage", default=False)
     def push_employee_to_device(self, *, device_id: int, employee_id: int) -> bool:
         """Enroll one employee on a device.
 
@@ -233,6 +246,7 @@ class DeviceController(BaseController):
 
         return bool(self._run(do_push))
 
+    @requires_permission("devices.view", "devices.manage", default=[])
     def list_devices(self, *, active_only: bool = False) -> list[dict[str, Any]]:
         """List this company's devices.
 

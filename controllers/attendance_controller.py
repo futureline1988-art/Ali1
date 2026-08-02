@@ -8,7 +8,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.attendance import AttendanceRecord
 from models.enums import PunchType
 from services.attendance_service import AttendanceService
@@ -32,6 +32,7 @@ class AttendanceController(BaseController):
     attendance_changed = Signal()
     """Emitted after a manual punch is recorded or a day is (re)computed."""
 
+    @requires_permission("attendance.manage", default=False)
     def record_manual_punch(
         self,
         *,
@@ -67,6 +68,7 @@ class AttendanceController(BaseController):
             self.attendance_changed.emit()
         return bool(result)
 
+    @requires_permission("attendance.manage")
     def compute_daily_attendance(
         self, *, employee_id: int, work_date: date
     ) -> dict[str, Any] | None:
@@ -93,6 +95,7 @@ class AttendanceController(BaseController):
             self.attendance_changed.emit()
         return result
 
+    @requires_permission("attendance.manage", default=[])
     def bulk_compute_for_date(self, work_date: date) -> list[dict[str, Any]]:
         """Compute attendance for every active employee on one day.
 
@@ -114,6 +117,7 @@ class AttendanceController(BaseController):
             self.attendance_changed.emit()
         return result or []
 
+    @requires_permission("attendance.view", "attendance.manage", default=[])
     def list_for_employee_between(
         self, employee_id: int, start_date: date, end_date: date
     ) -> list[dict[str, Any]]:
@@ -137,6 +141,7 @@ class AttendanceController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("attendance.view", "attendance.manage", default=[])
     def list_for_company_between(
         self, start_date: date, end_date: date
     ) -> list[dict[str, Any]]:

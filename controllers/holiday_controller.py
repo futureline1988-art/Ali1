@@ -7,7 +7,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from repositories.holiday_repository import HolidayRepository
 from services.holiday_service import HolidayService
 
@@ -18,6 +18,7 @@ class HolidayController(BaseController):
     holidays_changed = Signal()
     """Emitted after any successful create/update/delete."""
 
+    @requires_permission("holidays.manage")
     def create_holiday(self, **fields: Any) -> dict[str, Any] | None:
         """Create a new holiday.
 
@@ -39,6 +40,7 @@ class HolidayController(BaseController):
             self.holidays_changed.emit()
         return result
 
+    @requires_permission("holidays.manage")
     def update_holiday(self, holiday_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update a holiday's editable fields.
 
@@ -68,6 +70,7 @@ class HolidayController(BaseController):
             self.holidays_changed.emit()
         return result
 
+    @requires_permission("holidays.manage", default=False)
     def delete_holiday(self, holiday_id: int) -> bool:
         """Soft-delete a holiday.
 
@@ -94,6 +97,7 @@ class HolidayController(BaseController):
             self.holidays_changed.emit()
         return bool(result)
 
+    @requires_permission("holidays.view", "holidays.manage", default=[])
     def list_holidays(self) -> list[dict[str, Any]]:
         """List every holiday defined for this company.
 

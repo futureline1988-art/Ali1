@@ -358,15 +358,29 @@ class BackupTab(_StatusMixin, QWidget):
 class SettingsPage(QTabWidget):
     """The company settings screen: profile, preferences, and backup."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the settings page.
 
         Args:
             company_id: The company these settings belong to.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        controller = SettingsController(company_id=company_id)
+        controller = SettingsController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         controller.operation_failed.connect(self._on_operation_failed)
         self._controller = controller
 

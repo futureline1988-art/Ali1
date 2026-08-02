@@ -222,11 +222,21 @@ class RoleFormDialog(QDialog):
 class UsersTab(TablePage):
     """The user-accounts list, nested inside :class:`UsersPage`."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the users tab.
 
         Args:
             company_id: The company this tab manages users for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(
@@ -235,7 +245,11 @@ class UsersTab(TablePage):
             search_placeholder="بحث بالاسم...",
             parent=parent,
         )
-        self._controller = UserController(company_id=company_id)
+        self._controller = UserController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self.show_error)
 
         self.reset_password_button = make_primary_button("إعادة تعيين كلمة المرور", parent=self)
@@ -375,15 +389,29 @@ class UsersTab(TablePage):
 class RolesTab(QWidget):
     """The roles + permissions editor, nested inside :class:`UsersPage`."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the roles tab.
 
         Args:
             company_id: The company this tab manages roles for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        self._controller = UserController(company_id=company_id)
+        self._controller = UserController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
         self._controller.operation_failed.connect(self._show_error)
         self._all_permissions = _load_all_permissions()
         self._roles: list[dict[str, Any]] = []
@@ -545,15 +573,35 @@ class RolesTab(QWidget):
 class UsersPage(QTabWidget):
     """The users + roles/permissions management screen."""
 
-    def __init__(self, *, company_id: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        company_id: int,
+        current_user_id: int | None = None,
+        permission_codes: frozenset[str] = frozenset(),
+        parent: QWidget | None = None,
+    ) -> None:
         """Create the users page.
 
         Args:
             company_id: The company this screen manages users for.
+            current_user_id: The signed-in user, for audit attribution.
+            permission_codes: The signed-in user's granted permission
+                codes.
             parent: Optional parent widget.
         """
         super().__init__(parent)
-        self.users_tab = UsersTab(company_id=company_id, parent=self)
-        self.roles_tab = RolesTab(company_id=company_id, parent=self)
+        self.users_tab = UsersTab(
+            company_id=company_id,
+            current_user_id=current_user_id,
+            permission_codes=permission_codes,
+            parent=self,
+        )
+        self.roles_tab = RolesTab(
+            company_id=company_id,
+            current_user_id=current_user_id,
+            permission_codes=permission_codes,
+            parent=self,
+        )
         self.addTab(self.users_tab, "المستخدمون")
         self.addTab(self.roles_tab, "الأدوار والصلاحيات")

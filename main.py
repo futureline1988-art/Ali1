@@ -70,6 +70,37 @@ _DEFAULT_PERMISSIONS: list[tuple[str, str, str, str]] = [
     ("backup.manage", "settings", "إدارة النسخ الاحتياطي", "Manage Backups"),
 ]
 
+# (route, sidebar label, page class, required permission codes) - the
+# sidebar/page registry consulted by ApplicationController._on_login_successful.
+# A page is only constructed and registered if the signed-in user's role
+# grants at least one of its required codes; this is the other half of RBAC
+# enforcement (controllers/base_controller.py's requires_permission is the
+# per-action half) - a user never sees a sidebar entry for a screen every
+# action on it would just reject anyway.
+_PAGE_DEFINITIONS: list[tuple[str, str, type, tuple[str, ...]]] = [
+    ("dashboard", "لوحة التحكم", DashboardPage, ("dashboard.view",)),
+    ("employees", "الموظفون", EmployeesPage, ("employees.view", "employees.manage")),
+    (
+        "attendance",
+        "الحضور والانصراف",
+        AttendancePage,
+        ("attendance.view", "attendance.manage"),
+    ),
+    ("departments", "الأقسام", DepartmentsPage, ("departments.view", "departments.manage")),
+    ("devices", "الأجهزة", DevicesPage, ("devices.view", "devices.manage")),
+    ("shifts", "الورديات", ShiftsPage, ("shifts.view", "shifts.manage")),
+    ("holidays", "العطلات", HolidaysPage, ("holidays.view", "holidays.manage")),
+    ("leave", "الإجازات", LeavePage, ("leave.view", "leave.manage")),
+    ("reports", "التقارير", ReportsPage, ("reports.view", "reports.export")),
+    ("users", "المستخدمون", UsersPage, ("users.view", "users.manage", "roles.manage")),
+    (
+        "settings",
+        "الإعدادات",
+        SettingsPage,
+        ("settings.view", "settings.manage", "backup.manage"),
+    ),
+]
+
 
 def _seed_default_permissions() -> None:
     """Seed the global permission catalog on first run.
@@ -154,20 +185,30 @@ class ApplicationController:
         window.logout_requested.connect(self._on_logout)
         window.session_expired.connect(self._on_session_expired)
 
-        window.register_page("dashboard", "لوحة التحكم", DashboardPage(company_id=company_id))
-        window.register_page("employees", "الموظفون", EmployeesPage(company_id=company_id))
-        window.register_page(
-            "attendance", "الحضور والانصراف", AttendancePage(company_id=company_id)
-        )
-        window.register_page("departments", "الأقسام", DepartmentsPage(company_id=company_id))
-        window.register_page("devices", "الأجهزة", DevicesPage(company_id=company_id))
-        window.register_page("shifts", "الورديات", ShiftsPage(company_id=company_id))
-        window.register_page("holidays", "العطلات", HolidaysPage(company_id=company_id))
-        window.register_page("leave", "الإجازات", LeavePage(company_id=company_id))
-        window.register_page("reports", "التقارير", ReportsPage(company_id=company_id))
-        window.register_page("users", "المستخدمون", UsersPage(company_id=company_id))
-        window.register_page("settings", "الإعدادات", SettingsPage(company_id=company_id))
-        window.show_page("dashboard")
+        permission_codes = frozenset(user.get("permission_codes") or [])
+        for route, label, page_cls, required_codes in _PAGE_DEFINITIONS:
+            if not set(required_codes) & permission_codes:
+                continue
+            page = page_cls(
+                company_id=company_id,
+                current_user_id=user["id"],
+                permission_codes=permission_codes,
+            )
+            window.register_page(route, label, page)
+
+        if window.page_stack.count() == 0:
+            # A role with literally no granted permissions (e.g. a custom
+            # role an admin created but never assigned any code to) - not
+            # something the seeded built-in roles can produce, but a real
+            # possibility for a hand-built one. Leave the user logged in
+            # (they can still reach the top bar's logout) rather than
+            # crashing on an empty page stack.
+            QMessageBox.warning(
+                window,
+                "لا توجد صلاحيات",
+                "حساب المستخدم الحالي لا يملك أي صلاحية للوصول إلى شاشات النظام. "
+                "الرجاء التواصل مع مسؤول النظام.",
+            )
 
         self._main_window = window
         window.show()

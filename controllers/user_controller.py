@@ -7,7 +7,7 @@ from typing import Any
 from PySide6.QtCore import Signal
 from sqlalchemy.orm import Session
 
-from controllers.base_controller import BaseController
+from controllers.base_controller import BaseController, requires_permission
 from models.role import Role
 from models.user import User
 from repositories.role_repository import RoleRepository
@@ -38,6 +38,7 @@ class UserController(BaseController):
     roles_changed = Signal()
     """Emitted after any successful role create/update/delete."""
 
+    @requires_permission("users.manage")
     def create_user(
         self,
         *,
@@ -75,6 +76,7 @@ class UserController(BaseController):
             self.users_changed.emit()
         return result
 
+    @requires_permission("users.manage")
     def update_user(self, user_id: int, **fields: Any) -> dict[str, Any] | None:
         """Update an existing user's editable fields.
 
@@ -102,6 +104,7 @@ class UserController(BaseController):
             self.users_changed.emit()
         return result
 
+    @requires_permission("users.manage")
     def change_user_role(self, user_id: int, role_id: int) -> dict[str, Any] | None:
         """Change a user's assigned role.
 
@@ -129,6 +132,7 @@ class UserController(BaseController):
             self.users_changed.emit()
         return result
 
+    @requires_permission("users.manage", default=False)
     def reset_password(self, user_id: int, new_password: str) -> bool:
         """Administratively reset a user's password.
 
@@ -153,6 +157,7 @@ class UserController(BaseController):
 
         return bool(self._run(do_reset))
 
+    @requires_permission("users.manage", default=False)
     def delete_user(self, user_id: int) -> bool:
         """Soft-delete a user account.
 
@@ -179,6 +184,7 @@ class UserController(BaseController):
             self.users_changed.emit()
         return bool(result)
 
+    @requires_permission("users.view", "users.manage", default=[])
     def list_users(self) -> list[dict[str, Any]]:
         """List every user in this company.
 
@@ -192,6 +198,7 @@ class UserController(BaseController):
 
         return self._run(do_list) or []
 
+    @requires_permission("roles.manage")
     def create_role(
         self, *, name: str, description: str | None = None
     ) -> dict[str, Any] | None:
@@ -217,6 +224,7 @@ class UserController(BaseController):
             self.roles_changed.emit()
         return result
 
+    @requires_permission("roles.manage")
     def update_role_permissions(
         self, role_id: int, permission_codes: list[str]
     ) -> dict[str, Any] | None:
@@ -246,6 +254,7 @@ class UserController(BaseController):
             self.roles_changed.emit()
         return result
 
+    @requires_permission("roles.manage", default=False)
     def delete_role(self, role_id: int) -> bool:
         """Delete a custom (non-built-in) role.
 
@@ -273,6 +282,7 @@ class UserController(BaseController):
             self.roles_changed.emit()
         return bool(result)
 
+    @requires_permission("users.view", "users.manage", "roles.manage", default=[])
     def list_roles(self) -> list[dict[str, Any]]:
         """List every role in this company.
 
