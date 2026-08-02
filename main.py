@@ -30,6 +30,7 @@ from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
 from ui.reports import ReportsPage
 from ui.settings import SettingsPage
+from ui.shifts import ShiftsPage
 from ui.theme import get_theme_manager
 from ui.users import UsersPage
 from ui.widgets import build_splash_screen
@@ -51,6 +52,8 @@ _DEFAULT_PERMISSIONS: list[tuple[str, str, str, str]] = [
     ("attendance.manage", "attendance", "إدارة الحضور والانصراف", "Manage Attendance"),
     ("devices.view", "devices", "عرض الأجهزة", "View Devices"),
     ("devices.manage", "devices", "إدارة الأجهزة", "Manage Devices"),
+    ("shifts.view", "shifts", "عرض الورديات", "View Shifts"),
+    ("shifts.manage", "shifts", "إدارة الورديات", "Manage Shifts"),
     ("reports.view", "reports", "عرض التقارير", "View Reports"),
     ("reports.export", "reports", "تصدير التقارير", "Export Reports"),
     ("users.view", "users", "عرض المستخدمين", "View Users"),
@@ -152,6 +155,7 @@ class ApplicationController:
         )
         window.register_page("departments", "الأقسام", DepartmentsPage(company_id=company_id))
         window.register_page("devices", "الأجهزة", DevicesPage(company_id=company_id))
+        window.register_page("shifts", "الورديات", ShiftsPage(company_id=company_id))
         window.register_page("reports", "التقارير", ReportsPage(company_id=company_id))
         window.register_page("users", "المستخدمون", UsersPage(company_id=company_id))
         window.register_page("settings", "الإعدادات", SettingsPage(company_id=company_id))
