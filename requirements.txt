@@ -58,3 +58,4 @@ APScheduler==3.10.4                # Background job scheduling (threaded)
 # ---- Testing (development) ---------------------------------------------------
 pytest==8.3.2
 pytest-qt==4.4.0
+httpx==0.28.1                     # Required by fastapi.testclient.TestClient
