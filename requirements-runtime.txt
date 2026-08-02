@@ -7,13 +7,16 @@
 # the shipped application code.
 #
 # requirements.txt itself is left untouched and remains the reference list
-# for local development. matplotlib, fastapi, uvicorn, alembic,
-# psycopg2-binary, PyMySQL, pandas, pytest and pytest-qt are declared there
-# for future/optional use but are not imported anywhere in the app today, so
-# they are intentionally excluded here to keep the frozen build smaller,
-# faster to build, and free of unrelated failure modes. APScheduler *is*
-# included below - services/scheduler_service.py uses it for scheduled
-# device sync and automatic backups.
+# for local development. matplotlib, alembic, psycopg2-binary, PyMySQL,
+# pandas, pytest and pytest-qt are declared there for future/optional use
+# but are not imported anywhere in the app today, so they are intentionally
+# excluded here to keep the frozen build smaller, faster to build, and free
+# of unrelated failure modes. APScheduler *is* included below -
+# services/scheduler_service.py uses it for scheduled device sync and
+# automatic backups. fastapi and uvicorn are also genuinely used now (see
+# api/ and run_api.py) but stay excluded here too: that REST API is a
+# separate optional process (`python run_api.py`), never imported by
+# main.py, so the frozen desktop .exe has no need for it.
 #
 # Install with: pip install -r requirements-runtime.txt
 # Target interpreter: Python 3.11-3.13 (match the interpreter used to run

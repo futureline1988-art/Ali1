@@ -43,7 +43,7 @@ pyzk==0.9                        # ZKTeco TCP/IP & UDP protocol client
 
 # ---- HTTP / API-ready ------------------------------------------------------
 requests==2.32.3                  # HTTP client (Hikvision ISAPI, external sync)
-fastapi==0.112.0                  # Optional REST API layer (future exposure)
+fastapi==0.112.0                  # Optional REST API layer - see api/ and run_api.py
 uvicorn==0.30.6                   # ASGI server for the FastAPI layer
 
 # ---- Configuration / Environment --------------------------------------------

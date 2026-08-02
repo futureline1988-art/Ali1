@@ -418,6 +418,33 @@ class DeviceConfig:
 
 
 @dataclass(frozen=True)
+class ApiConfig:
+    """Optional REST API layer settings (see ``api/app.py``).
+
+    The desktop application itself never starts this server — it is a
+    separate, optional process (``run_api.py``) for integrations
+    (mobile apps, external HR/payroll systems) that need programmatic
+    access to the same company data the desktop UI manages. Disabled
+    by default so a plain desktop install never opens a network port.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8000
+    token_expires_minutes: int = 480
+
+    @classmethod
+    def from_env(cls) -> "ApiConfig":
+        """Build an :class:`ApiConfig` from environment variables."""
+        return cls(
+            enabled=_env_bool("API_ENABLED", False),
+            host=os.getenv("API_HOST", "127.0.0.1"),
+            port=_env_int("API_PORT", 8000),
+            token_expires_minutes=_env_int("API_TOKEN_EXPIRES_MINUTES", 480),
+        )
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     """Application logging policy (see ``utils/logger.py`` for the sink)."""
 
@@ -453,6 +480,7 @@ class AppConfig:
     ui: UIConfig = field(default_factory=UIConfig)
     backup: BackupConfig = field(default_factory=BackupConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
+    api: ApiConfig = field(default_factory=ApiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @classmethod
@@ -489,6 +517,7 @@ class AppConfig:
             ui=UIConfig.from_env(),
             backup=BackupConfig.from_env(),
             device=DeviceConfig.from_env(),
+            api=ApiConfig.from_env(),
             logging=LoggingConfig.from_env(),
         )
 
