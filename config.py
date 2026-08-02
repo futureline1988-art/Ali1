@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -35,10 +36,68 @@ from dotenv import load_dotenv
 # any configuration value below is computed.
 # ---------------------------------------------------------------------------
 
-BASE_DIR: Final[Path] = Path(__file__).resolve().parent
-"""Absolute path to the ``attendance_system`` package root."""
+def _resolve_bundle_dir() -> Path:
+    """Where bundled, read-only assets (fonts, icons, translations) live.
 
-load_dotenv(BASE_DIR / ".env")
+    In development this is simply the ``attendance_system`` package
+    directory. Frozen under PyInstaller, ``sys.frozen`` is set and bundled
+    data files are unpacked to (onefile) or placed alongside (onedir)
+    ``sys._MEIPASS`` — never the source tree, which does not exist in a
+    packaged build at all.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent
+
+
+def _resolve_exe_dir() -> Path:
+    """The directory containing the running executable, or this file in development.
+
+    Used only to locate an optional ``.env`` override next to the
+    installed application, so an administrator can find and edit it —
+    unlike :func:`_resolve_bundle_dir`, this must *not* resolve to a
+    onefile build's temporary extraction directory, which is recreated
+    fresh (and discarded) on every launch.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _resolve_data_root() -> Path:
+    """Where writable runtime data (database, logs, backups, uploads, license) lives.
+
+    In development this equals :data:`BASE_DIR`, exactly matching this
+    project's behavior before packaging was a concern — every existing
+    workflow and test is unaffected. Frozen under PyInstaller it resolves
+    to a proper per-user, per-machine writable location instead
+    (``%LOCALAPPDATA%\\AttendanceManagementSystem`` on Windows), because
+    neither alternative is safe to write to: the install directory is
+    typically ``Program Files`` (not writable without elevation), and a
+    onefile build's own directory is a fresh temporary extraction on
+    every single launch — anything written there is silently lost the
+    moment the process exits.
+    """
+    if getattr(sys, "frozen", False):
+        local_appdata = os.getenv("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "AttendanceManagementSystem"
+        return Path.home() / ".attendance_management_system"
+    return BASE_DIR
+
+
+BASE_DIR: Final[Path] = _resolve_bundle_dir()
+"""Absolute path to the bundle root: the ``attendance_system`` package
+directory in development, or the PyInstaller bundle directory when frozen.
+Read-only assets are resolved relative to this; see :data:`DATA_ROOT` for
+where writable runtime data lives instead."""
+
+DATA_ROOT: Final[Path] = _resolve_data_root()
+"""Absolute path to the writable data root — equals :data:`BASE_DIR` in
+development, and a per-user AppData location when running as a packaged
+executable. See :func:`_resolve_data_root` for why the two must differ."""
+
+load_dotenv(_resolve_exe_dir() / ".env")
 
 
 class Environment(str, Enum):
@@ -111,14 +170,14 @@ class PathsConfig:
     """
 
     base_dir: Path = BASE_DIR
-    data_dir: Path = BASE_DIR / "data"
-    logs_dir: Path = BASE_DIR / "logs"
-    backups_dir: Path = BASE_DIR / "data" / "backups"
-    uploads_dir: Path = BASE_DIR / "data" / "uploads"
-    employee_photos_dir: Path = BASE_DIR / "data" / "uploads" / "employees"
-    qrcodes_dir: Path = BASE_DIR / "data" / "uploads" / "qrcodes"
-    barcodes_dir: Path = BASE_DIR / "data" / "uploads" / "barcodes"
-    reports_dir: Path = BASE_DIR / "data" / "reports"
+    data_dir: Path = DATA_ROOT / "data"
+    logs_dir: Path = DATA_ROOT / "logs"
+    backups_dir: Path = DATA_ROOT / "data" / "backups"
+    uploads_dir: Path = DATA_ROOT / "data" / "uploads"
+    employee_photos_dir: Path = DATA_ROOT / "data" / "uploads" / "employees"
+    qrcodes_dir: Path = DATA_ROOT / "data" / "uploads" / "qrcodes"
+    barcodes_dir: Path = DATA_ROOT / "data" / "uploads" / "barcodes"
+    reports_dir: Path = DATA_ROOT / "data" / "reports"
     assets_dir: Path = BASE_DIR / "assets"
     icons_dir: Path = BASE_DIR / "assets" / "icons"
     images_dir: Path = BASE_DIR / "assets" / "images"
@@ -156,7 +215,7 @@ class DatabaseConfig:
     """
 
     dialect: DatabaseDialect = DatabaseDialect.SQLITE
-    sqlite_path: Path = BASE_DIR / "data" / "attendance.db"
+    sqlite_path: Path = DATA_ROOT / "data" / "attendance.db"
     host: str = "localhost"
     port: int = 5432
     username: str = ""
@@ -218,7 +277,7 @@ class DatabaseConfig:
         return cls(
             dialect=dialect,
             sqlite_path=Path(
-                os.getenv("DB_SQLITE_PATH", str(BASE_DIR / "data" / "attendance.db"))
+                os.getenv("DB_SQLITE_PATH", str(DATA_ROOT / "data" / "attendance.db"))
             ),
             host=os.getenv("DB_HOST", "localhost"),
             port=_env_int("DB_PORT", default_port),
