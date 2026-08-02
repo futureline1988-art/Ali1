@@ -3,6 +3,35 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [1.0.1] - 2026-08-02
+
+### Fixed
+
+- **Windows startup crash (the installed app did nothing on launch, with
+  no error)**: root-caused to `chardet` — an optional, unpinned transitive
+  dependency of `requests` that ships mypyc-compiled native extension
+  modules. Its native extension was not correctly bundled by PyInstaller,
+  causing the frozen `.exe` to terminate with a native access violation
+  (`STATUS_ACCESS_VIOLATION`, 0xC0000005) the instant `chardet` was
+  imported — a crash that happens below Python's own exception handling,
+  which is why nothing was ever shown to the user. `chardet` is now
+  excluded from both PyInstaller specs; `requests` already falls back
+  to `charset_normalizer` (its real, pinned dependency) automatically
+  when `chardet` is unavailable, so this has no effect on functionality.
+- Reproduced and confirmed on a real Windows machine via new smoke-test
+  steps in the release workflow, which launch the onedir build, the
+  Portable.exe, and the actual Setup.exe-installed executable on every
+  CI run and fail the build if any of them exits early.
+
+### Added
+
+- `bootstrap.py`: a stdlib-only crash guard now used as the frozen app's
+  entry point. Any future startup exception is written to
+  `%LOCALAPPDATA%\AttendanceManagementSystem\logs\startup_crash.log`
+  (with a native message box on Windows) instead of failing silently,
+  and `faulthandler` is enabled so even a native-level crash can leave a
+  diagnosable trace.
+
 ## [1.0.0] - 2026-08-02
 
 Initial production release.

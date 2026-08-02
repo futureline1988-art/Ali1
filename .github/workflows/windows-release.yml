@@ -242,4 +242,8 @@ jobs:
           files: |
             Release/Setup.exe
             Release/Portable.exe
+            Release/README.pdf
+            Release/User Manual.pdf
+            Release/Administrator Manual.pdf
+            Release/CHANGELOG.md
           generate_release_notes: true
