@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from server.models.sync import ChangeRecord, ChangeStatus, EntityVersion
+from server.models.sync import ChangeRecord, ChangeStatus, EntityVersion, SyncSequence
 from server.repositories.base_repository import BaseRepository
 
 
@@ -31,6 +31,28 @@ class SyncRepository:
         self.session = session
         self.change_records = BaseRepository[ChangeRecord](session, model=ChangeRecord)
         self.entity_versions = BaseRepository[EntityVersion](session, model=EntityVersion)
+
+    def acquire_sequence_lock(self) -> None:
+        """Block until this transaction exclusively holds the sync-sequence lock.
+
+        Must be called exactly once, before any
+        :class:`~server.models.sync.ChangeRecord` insert, in every
+        transaction that writes an
+        :attr:`~server.models.sync.ChangeStatus.APPLIED` change (see
+        :class:`~server.models.sync.SyncSequence`'s docstring for the
+        full argument for why this makes the pull cursor gap-free).
+
+        Under PostgreSQL this emits ``SELECT ... FOR UPDATE`` and
+        genuinely blocks a concurrent transaction until this one
+        commits or rolls back. Under SQLite, ``FOR UPDATE`` has no
+        dialect support and SQLAlchemy silently omits it — harmless,
+        since SQLite already serializes every writer at the database
+        level regardless (see
+        :mod:`tests.test_server_phase7_1_hardening`'s module
+        docstring), so this call is a correct no-op there rather than
+        a broken one.
+        """
+        self.session.execute(select(SyncSequence).with_for_update()).scalar_one()
 
     def get_change_record(self, change_id: int) -> ChangeRecord | None:
         """Fetch a single change record by id, with its device eagerly loaded.

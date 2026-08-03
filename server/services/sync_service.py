@@ -9,9 +9,13 @@ No business domain is wired into it yet.
 Protocol, in one place:
 
 1. **Push** (:meth:`SyncService.push_changes`): a device submits a
-   batch of local changes. Each change carries the version it believes
-   the entity is at (``base_version``) and a checksum of its own
-   payload. For each change, in order:
+   batch of local changes. The whole batch runs in one transaction
+   that first calls :meth:`~server.repositories.sync_repository.SyncRepository.acquire_sequence_lock`
+   — see :class:`~server.models.sync.SyncSequence`'s docstring for
+   exactly what that buys: no concurrent transaction anywhere on the
+   server can insert an :attr:`~server.models.sync.ChangeStatus.APPLIED`
+   row while this one is in flight, which is what makes
+   :meth:`pull_changes`'s cursor gap-free. For each change, in order:
 
    a. The checksum is recomputed server-side and compared —
       :attr:`~server.models.sync.ChangeStatus.REJECTED` immediately on
@@ -35,14 +39,22 @@ Protocol, in one place:
    :class:`~server.models.sync.ChangeRecord` id it has already seen). A
    device that was offline for any length of time simply resumes from
    its last cursor; there is no session or subscription to have
-   expired while it was gone.
+   expired while it was gone. Because every applied insert is
+   serialized through the sequence lock (see above), "everything with
+   id greater than N" can never silently skip a row, no matter how the
+   underlying PostgreSQL transactions happened to interleave.
 
 3. **Conflict resolution** (:meth:`SyncService.resolve_conflict`): a
    human or a future admin tool decides, per conflicting change,
-   whether to force-apply it (bumping the version anyway) or discard
-   it. Nothing here picks a winner automatically — that policy is
-   inherently domain-specific and stays out of scope for a foundation
-   phase.
+   whether to force-apply it or discard it. Nothing here picks a
+   winner automatically — that policy is inherently domain-specific
+   and stays out of scope for a foundation phase. Force-applying
+   *appends a new* :class:`~server.models.sync.ChangeRecord` rather
+   than flipping the original conflicting row's status in place —
+   necessary for the same reason push results are never mutated after
+   the fact: a row that only becomes ``APPLIED`` well after its id was
+   assigned would be invisible to any client that already pulled past
+   that id, exactly the gap this whole design exists to prevent.
 """
 
 from __future__ import annotations
@@ -154,6 +166,7 @@ class SyncService(BaseService):
         results: list[PushResult] = []
         with self._session_scope() as session:
             repo = SyncRepository(session)
+            repo.acquire_sequence_lock()
             for change in changes:
                 results.append(self._apply_one_change(repo, device_id, change))
         return results
@@ -290,14 +303,23 @@ class SyncService(BaseService):
 
         Args:
             change_id: The conflicting :class:`~server.models.sync.ChangeRecord` to resolve.
-            apply_incoming: If ``True``, force-applies the change
-                (bumping the entity's version regardless of the earlier
-                mismatch). If ``False``, marks it
+            apply_incoming: If ``True``, force-applies the change by
+                appending a *new*
+                :class:`~server.models.sync.ChangeRecord` with
+                :attr:`~server.models.sync.ChangeStatus.APPLIED`
+                (bumping the entity's version regardless of the
+                earlier mismatch) — the original conflicting row is
+                left in place, its status changed to
+                :attr:`~server.models.sync.ChangeStatus.REJECTED`
+                ("superseded"), for history. If ``False``, the original
+                row itself is marked
                 :attr:`~server.models.sync.ChangeStatus.REJECTED` and
-                discards it.
+                discarded; nothing new is appended.
 
         Returns:
-            The updated change record.
+            The change record a puller will actually see: the newly
+            appended row when ``apply_incoming`` is ``True``, or the
+            (now-rejected) original row when it is ``False``.
 
         Raises:
             ChangeRecordNotFoundError: No change exists with that id.
@@ -320,13 +342,32 @@ class SyncService(BaseService):
                 session.flush()
                 return record
 
+            # Force-apply: never flip this row's status to APPLIED in
+            # place - its id was assigned back when it was first
+            # pushed, long before this call, so a puller that already
+            # passed that id would never see the transition. Instead,
+            # append a brand-new row through the same locked path
+            # push_changes uses, so it lands at whatever id is
+            # currently next - always ahead of every cursor that could
+            # possibly exist right now. See SyncSequence's docstring.
+            repo.acquire_sequence_lock()
             version_row = repo.get_entity_version(record.entity_type, record.entity_id)
             current_version = version_row.current_version if version_row is not None else 0
             new_version = current_version + 1
 
-            record.status = ChangeStatus.APPLIED
-            record.new_version = new_version
-            record.conflict_reason = f"{record.conflict_reason} Resolved: force-applied."
+            resolved_record = ChangeRecord(
+                device_id=record.device_id,
+                entity_type=record.entity_type,
+                entity_id=record.entity_id,
+                operation=record.operation,
+                payload=record.payload,
+                checksum=record.checksum,
+                base_version=record.base_version,
+                new_version=new_version,
+                status=ChangeStatus.APPLIED,
+                conflict_reason=f"Resolved from conflicting change #{record.id}: force-applied.",
+            )
+            repo.change_records.add(resolved_record)
             if version_row is None:
                 repo.entity_versions.add(
                     EntityVersion(
@@ -337,5 +378,10 @@ class SyncService(BaseService):
                 )
             else:
                 version_row.current_version = new_version
+
+            record.status = ChangeStatus.REJECTED
+            record.conflict_reason = (
+                f"{record.conflict_reason} Resolved: superseded by change #{resolved_record.id}."
+            )
             session.flush()
-            return record
+            return resolved_record

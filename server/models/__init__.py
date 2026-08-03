@@ -12,7 +12,7 @@ phases wire them into this same generic sync mechanism (see
 from __future__ import annotations
 
 from server.models.device import SyncDevice, DeviceType
-from server.models.sync import ChangeRecord, ChangeStatus, EntityVersion, SyncOperation
+from server.models.sync import ChangeRecord, ChangeStatus, EntityVersion, SyncOperation, SyncSequence
 
 __all__ = [
     "SyncDevice",
@@ -21,4 +21,5 @@ __all__ = [
     "ChangeStatus",
     "EntityVersion",
     "SyncOperation",
+    "SyncSequence",
 ]
