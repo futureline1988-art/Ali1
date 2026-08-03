@@ -32,10 +32,12 @@ def main() -> int:
     app.setApplicationVersion(config.app_version)
 
     container = ServiceContainer(config=config, database=database)
+    container.sync_scheduler.start()
     window = MainWindow(container)
     window.show()
 
     exit_code = app.exec()
+    container.sync_scheduler.shutdown()
     database.dispose()
     return exit_code
 

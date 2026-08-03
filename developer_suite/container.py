@@ -27,6 +27,7 @@ from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.license_service import LicenseService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
+from developer_suite.sync.scheduler import SyncSchedulerService
 
 
 class ServiceContainer:
@@ -39,10 +40,16 @@ class ServiceContainer:
             Attendance Server (see
             :mod:`developer_suite.sync.coordinator`), with every
             currently-integrated entity's applier already registered
-            (Phase 8: customers only). Not yet driven by anything in
-            this container automatically — see that module's docstring
-            for how a future phase would wire a periodic push/pull job
-            or a manual "Sync now" UI action to it.
+            (Phase 8: customers only).
+        sync_scheduler: Drives :attr:`sync_coordinator` automatically
+            on a timer (see :mod:`developer_suite.sync.scheduler`).
+            Constructed here but not started — the composition root
+            (:mod:`developer_suite.main`) calls :meth:`~developer_suite.sync.scheduler.SyncSchedulerService.start`
+            once the rest of startup has succeeded, and
+            :meth:`~developer_suite.sync.scheduler.SyncSchedulerService.shutdown`
+            before the application exits, mirroring exactly how the
+            Attendance Client's own ``main.py`` drives
+            :class:`~services.scheduler_service.SchedulerService`.
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
@@ -63,6 +70,7 @@ class ServiceContainer:
         self.configuration_service = ConfigurationService(database)
         self.sync_coordinator = SyncCoordinator(database, config)
         register_customer_sync(self.sync_coordinator)
+        self.sync_scheduler = SyncSchedulerService(self.sync_coordinator, config)
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
     def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:

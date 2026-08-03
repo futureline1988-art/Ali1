@@ -27,6 +27,32 @@ from pathlib import Path
 from config import DatabaseConfig, Environment, LoggingConfig, SecurityConfig
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Read an environment variable as a boolean, accepting common truthy strings.
+
+    A small local duplicate of ``config._env_bool`` rather than an
+    import of it — that helper is module-private (leading underscore),
+    the same "small, independently-parameterized duplication over a
+    private cross-module import" choice this file already makes for
+    ``_resolve_data_root``.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an environment variable as an integer, falling back on error."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 def _resolve_data_root() -> Path:
     """Where this application's writable runtime data lives.
 
@@ -116,6 +142,13 @@ class DeveloperSuiteConfig:
             — knowing the URL grants no access by itself; every actual
             call still authenticates with either a device credential
             or an admin bearer token.
+        sync_enabled: Whether :class:`~developer_suite.sync.scheduler.SyncSchedulerService`
+            starts its periodic job at all. Defaults on, so
+            synchronization runs automatically out of the box, per
+            Phase 9's requirement — the escape hatch exists for the
+            same reason :class:`config.DeviceConfig.auto_sync_enabled`
+            exists for the Attendance Client's own scheduled job.
+        sync_interval_seconds: How often the background sync job runs.
     """
 
     app_name: str = "Developer Suite"
@@ -132,6 +165,8 @@ class DeveloperSuiteConfig:
         / "license_private_key.pem"
     )
     attendance_server_url: str = "http://127.0.0.1:8000"
+    sync_enabled: bool = True
+    sync_interval_seconds: int = 60
 
     @classmethod
     def load(cls) -> "DeveloperSuiteConfig":
@@ -182,6 +217,10 @@ class DeveloperSuiteConfig:
             licensing_private_key_path=licensing_private_key_path,
             attendance_server_url=os.getenv(
                 "DEV_SUITE_ATTENDANCE_SERVER_URL", cls.attendance_server_url
+            ),
+            sync_enabled=_env_bool("DEV_SUITE_SYNC_ENABLED", cls.sync_enabled),
+            sync_interval_seconds=_env_int(
+                "DEV_SUITE_SYNC_INTERVAL_SECONDS", cls.sync_interval_seconds
             ),
         )
 

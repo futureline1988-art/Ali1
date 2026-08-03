@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from developer_suite.models.sync_state import (
@@ -248,6 +248,19 @@ class SyncOutboxRepository:
             .limit(limit)
         )
         return list(self.session.execute(statement).scalars().all())
+
+    def count_pending(self) -> int:
+        """Count queued rows still awaiting a push attempt.
+
+        Used for status reporting (see
+        :meth:`~developer_suite.sync.coordinator.SyncCoordinator.count_pending`)
+        — deliberately a full count, not bounded by
+        :meth:`list_pending`'s batch ``limit``.
+        """
+        statement = select(func.count()).select_from(SyncOutboxEntry).where(
+            SyncOutboxEntry.status == OutboxStatus.PENDING
+        )
+        return self.session.execute(statement).scalar_one()
 
     def mark_pushed(self, entry: SyncOutboxEntry) -> None:
         """Remove a successfully applied entry — nothing is left to queue for it."""

@@ -109,6 +109,20 @@ class SyncCoordinator:
         """
         self._appliers[entity_type] = applier
 
+    def registered_entity_types(self) -> list[str]:
+        """Every entity type with a registered pull applier, in registration order.
+
+        Used by :class:`~developer_suite.sync.scheduler.SyncSchedulerService`
+        to know which entity types to pull, without that class ever
+        needing to name one itself.
+        """
+        return list(self._appliers.keys())
+
+    def count_pending(self) -> int:
+        """Count local changes currently queued in the outbox, waiting to be pushed."""
+        with self._database.session_scope() as session:
+            return SyncOutboxRepository(session).count_pending()
+
     def enroll(self, *, admin_bearer_token: str, name: str, device_type: DeviceType) -> None:
         """Register this installation with the Attendance Server and persist its credential.
 
