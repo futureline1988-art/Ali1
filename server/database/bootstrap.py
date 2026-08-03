@@ -1,4 +1,4 @@
-"""Database bootstrap for the Platform Server.
+"""Database bootstrap for the Attendance Server.
 
 Reuses :class:`~database.database.Database` directly and unmodified —
 it already accepts an injectable :class:`~config.DatabaseConfig` and

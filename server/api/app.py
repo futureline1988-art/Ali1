@@ -1,4 +1,4 @@
-"""FastAPI application factory for the Platform Server.
+"""FastAPI application factory for the Attendance Server.
 
 Mirrors ``api/app.py``'s shape (build the app, mount routers, install a
 catch-all error handler that never leaks a raw traceback to the
@@ -40,7 +40,7 @@ def create_app(config: ServerConfig, database: Database) -> FastAPI:
     """
     app = FastAPI(
         title=config.app_name,
-        description="Platform Server: single source of truth for the commercial platform.",
+        description="Attendance Server: single source of truth for the commercial platform.",
         version=config.app_version,
     )
     app.state.config = config
@@ -53,7 +53,7 @@ def create_app(config: ServerConfig, database: Database) -> FastAPI:
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         """Log unexpected errors and return a generic 500 rather than a raw traceback."""
         logger.error(
-            "Unhandled Platform Server error on {method} {path}: {error}",
+            "Unhandled Attendance Server error on {method} {path}: {error}",
             method=request.method,
             path=request.url.path,
             error=str(exc),

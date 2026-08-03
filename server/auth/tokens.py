@@ -1,4 +1,4 @@
-"""Token issuance and verification for the Platform Server.
+"""Token issuance and verification for the Attendance Server.
 
 Thin wrappers over :func:`utils.security.create_signed_token`/
 :func:`utils.security.verify_signed_token` — the same dependency-free
@@ -7,7 +7,7 @@ HMAC-SHA256 signed-token primitive the Attendance Client's REST API
 directly rather than reimplemented, with one deliberate difference:
 every call here requires an explicit ``config`` argument and never
 falls back to :func:`config.get_config`'s signing secret, so a
-Platform Server token can never be produced or accepted with the
+Attendance Server token can never be produced or accepted with the
 Attendance Client's own ``APP_SECRET_KEY`` (see ``server/config.py``'s
 docstring for why the two must stay independent).
 """

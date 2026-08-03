@@ -1,4 +1,4 @@
-"""Platform Server data-access layer.
+"""Attendance Server data-access layer.
 
 Mirrors the Attendance Client's and Developer Suite's own repository
 pattern (``repositories/base_repository.py``,

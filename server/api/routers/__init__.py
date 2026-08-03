@@ -1,4 +1,4 @@
-"""Platform Server API routers.
+"""Attendance Server API routers.
 
 Only ``health`` and ``version`` exist in this phase — both
 unauthenticated infrastructure endpoints. Business routers (customers,

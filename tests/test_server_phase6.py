@@ -1,4 +1,4 @@
-"""Tests for Phase 6 of the commercial platform work: Platform Server foundation.
+"""Tests for Phase 6 of the commercial platform work: Attendance Server foundation.
 
 Every test here exercises only :mod:`server`; nothing touches the
 Attendance Client's or the Developer Suite's own database, config, or
@@ -34,8 +34,8 @@ from server.repositories.base_repository import BaseRepository
 
 @pytest.fixture
 def server_config(tmp_path, monkeypatch) -> ServerConfig:
-    monkeypatch.setenv("PLATFORM_DB_SQLITE_PATH", str(tmp_path / "platform_server_test.db"))
-    monkeypatch.setenv("PLATFORM_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(tmp_path / "attendance_server_test.db"))
+    monkeypatch.setenv("ATTENDANCE_SERVER_SECRET_KEY", "test-secret-key")
     server_config_module._config_instance = None
     yield get_server_config()
     server_config_module._config_instance = None
@@ -56,15 +56,15 @@ def client(server_config: ServerConfig, server_database: Database) -> TestClient
 
 class TestConfig:
     def test_load_builds_independent_instance(self, server_config: ServerConfig) -> None:
-        assert server_config.app_name == "Attendance Platform Server"
+        assert server_config.app_name == "Attendance Server"
 
     def test_database_path_is_separate_from_other_applications(
         self, server_config: ServerConfig
     ) -> None:
-        assert "platform_server" in str(server_config.database.sqlite_path).lower()
+        assert "attendance_server" in str(server_config.database.sqlite_path).lower()
 
-    def test_database_name_is_platform_server(self, server_config: ServerConfig) -> None:
-        assert server_config.database.database_name == "platform_server"
+    def test_database_name_is_attendance_server(self, server_config: ServerConfig) -> None:
+        assert server_config.database.database_name == "attendance_server"
 
     def test_paths_are_created(self, server_config: ServerConfig) -> None:
         assert server_config.paths.data_dir.exists()
@@ -86,7 +86,7 @@ class TestConfig:
         # DB_SQLITE_PATH (the Attendance Client's own, unprefixed variable)
         # must never leak into this server's database configuration.
         monkeypatch.setenv("DB_SQLITE_PATH", str(tmp_path / "should_not_be_used.db"))
-        monkeypatch.setenv("PLATFORM_DB_SQLITE_PATH", str(tmp_path / "platform_server_test.db"))
+        monkeypatch.setenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(tmp_path / "attendance_server_test.db"))
         server_config_module._config_instance = None
         try:
             config = get_server_config()

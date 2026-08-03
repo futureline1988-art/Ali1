@@ -1,4 +1,4 @@
-"""Platform Server: the single source of truth every other application talks to.
+"""Attendance Server: the single source of truth every other application talks to.
 
 Phase 6 foundation only (see ``docs/PLATFORM_ARCHITECTURE_GAP_ANALYSIS.md``):
 project structure, dependency injection, configuration, database

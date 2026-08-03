@@ -1,4 +1,4 @@
-"""Minimal dependency-injection container for the Platform Server.
+"""Minimal dependency-injection container for the Attendance Server.
 
 Mirrors ``developer_suite/container.py``'s role: one place holding
 this server's configuration and database, so route handlers depend on
@@ -19,7 +19,7 @@ from server.config import ServerConfig
 
 
 class ServiceContainer:
-    """Holds every shared dependency the Platform Server's API layer needs.
+    """Holds every shared dependency the Attendance Server's API layer needs.
 
     Attributes:
         config: This server's configuration.

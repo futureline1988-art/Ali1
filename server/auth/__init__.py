@@ -1,4 +1,4 @@
-"""Platform Server authentication interfaces.
+"""Attendance Server authentication interfaces.
 
 Infrastructure only — token issuance/verification and the "who is
 calling" FastAPI dependency — reused by whatever future phase adds the

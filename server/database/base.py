@@ -1,4 +1,4 @@
-"""Declarative base and base model for the Platform Server's own schema.
+"""Declarative base and base model for the Attendance Server's own schema.
 
 :class:`Base` is a third, independent SQLAlchemy declarative base —
 alongside ``models.base.Base`` (Attendance Client) and
@@ -42,9 +42,9 @@ _metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
 
 class Base(DeclarativeBase):
-    """Declarative base for every Platform Server model.
+    """Declarative base for every Attendance Server model.
 
-    Future Platform Server models (a customer registry, license
+    Future Attendance Server models (a customer registry, license
     metadata, remote configuration, ...) subclass
     :class:`ServerBaseModel`, defined below — never
     ``models.base.Base``/``BaseModel`` or
@@ -63,7 +63,7 @@ class ServerBaseModel(
     IdMixin,
     Base,
 ):
-    """Abstract base every concrete Platform Server model inherits from.
+    """Abstract base every concrete Attendance Server model inherits from.
 
     Combines automatic table naming, an integer primary key, a public
     UUID, created/updated timestamps, and soft delete — the same

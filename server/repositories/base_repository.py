@@ -1,4 +1,4 @@
-"""Generic CRUD repository base for Platform Server models.
+"""Generic CRUD repository base for Attendance Server models.
 
 See this package's ``__init__.py`` for why this is a small,
 independent class rather than a reuse of
@@ -21,7 +21,7 @@ ModelT = TypeVar("ModelT", bound=ServerBaseModel)
 
 
 class BaseRepository(Generic[ModelT]):
-    """Generic CRUD repository for a single Platform Server ORM model.
+    """Generic CRUD repository for a single Attendance Server ORM model.
 
     Every method operates against a caller-supplied
     :class:`~sqlalchemy.orm.Session` — repositories never open, commit,

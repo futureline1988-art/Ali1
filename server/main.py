@@ -1,4 +1,4 @@
-"""Standalone entrypoint for the Platform Server.
+"""Standalone entrypoint for the Attendance Server.
 
 Run with ``python -m server.main``. A separate process from both the
 Attendance Client (``main.py``) and the Developer Suite
@@ -19,7 +19,7 @@ from utils.logger import logger, setup_logging
 
 
 def main() -> int:
-    """Start the Platform Server; returns the process exit code."""
+    """Start the Attendance Server; returns the process exit code."""
     config: ServerConfig = get_server_config()
     config.paths.ensure_created()
     setup_logging(

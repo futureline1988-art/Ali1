@@ -1,4 +1,4 @@
-"""The base every concrete Platform Server service will build on.
+"""The base every concrete Attendance Server service will build on.
 
 Mirrors ``developer_suite/services/base_service.py`` and, through it,
 the Attendance Client's own service-layer pattern (a thin class
@@ -24,7 +24,7 @@ from database.database import Database
 
 
 class BaseService:
-    """Shared foundation for every Platform Server business service.
+    """Shared foundation for every Attendance Server business service.
 
     Attributes:
         database: This server's own database (see

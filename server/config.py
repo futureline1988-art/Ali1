@@ -1,4 +1,4 @@
-"""Platform Server configuration.
+"""Attendance Server configuration.
 
 Composes the pieces of :mod:`config` (the Attendance Client's config
 module) that are already fully generic — :class:`~config.DatabaseConfig`,
@@ -20,9 +20,9 @@ them as-is here would mean this server's database connection and
 signing secret silently collide with the Attendance Client's own
 ``DB_*``/``APP_SECRET_KEY`` variables whenever both happen to run in
 the same environment (exactly the concurrent-test-suite situation this
-repository's own CI runs in). ``PLATFORM_DB_*`` values are therefore
+repository's own CI runs in). ``ATTENDANCE_SERVER_DB_*`` values are therefore
 resolved independently below by :func:`_load_database_config`, and the
-signing secret through its own ``PLATFORM_SECRET_KEY`` variable — the
+signing secret through its own ``ATTENDANCE_SERVER_SECRET_KEY`` variable — the
 *fields* of :class:`~config.DatabaseConfig`/:class:`~config.SecurityConfig`
 are still fully reused, only their environment-variable *names* are
 kept independent, the same tradeoff
@@ -62,14 +62,14 @@ def _resolve_data_root() -> Path:
     """Where this server's writable runtime data (SQLite fallback, logs) lives.
 
     Unlike ``config._resolve_data_root``/``developer_suite.config._resolve_data_root``,
-    this never checks ``sys.frozen`` — the Platform Server is a server
+    this never checks ``sys.frozen`` — the Attendance Server is a server
     process (run via ``python -m server.main`` or a container), never a
     PyInstaller-frozen desktop build.
     """
-    env_override = os.getenv("PLATFORM_DATA_DIR")
+    env_override = os.getenv("ATTENDANCE_SERVER_DATA_DIR")
     if env_override:
         return Path(env_override)
-    return Path(__file__).resolve().parent.parent / "server_data"
+    return Path(__file__).resolve().parent.parent / "attendance_server_data"
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ class ServerPaths:
 
     Attributes:
         data_dir: Where a local SQLite database file lives (development
-            only — a real deployment sets ``PLATFORM_DB_DIALECT`` to
+            only — a real deployment sets ``ATTENDANCE_SERVER_DB_DIALECT`` to
             ``postgresql`` and never touches this).
         logs_dir: Where log files are written.
     """
@@ -99,7 +99,7 @@ class ServerPaths:
 
 
 def _load_database_config(paths: ServerPaths) -> DatabaseConfig:
-    """Build this server's :class:`~config.DatabaseConfig` from ``PLATFORM_DB_*`` variables.
+    """Build this server's :class:`~config.DatabaseConfig` from ``ATTENDANCE_SERVER_DB_*`` variables.
 
     Mirrors :meth:`config.DatabaseConfig.from_env`'s field-by-field
     resolution exactly, but reads independently-namespaced variables so
@@ -108,7 +108,7 @@ def _load_database_config(paths: ServerPaths) -> DatabaseConfig:
     thousands of companies" requirement — never collide with the
     Attendance Client's own ``DB_*`` variables.
     """
-    dialect_raw = os.getenv("PLATFORM_DB_DIALECT", DatabaseDialect.SQLITE.value)
+    dialect_raw = os.getenv("ATTENDANCE_SERVER_DB_DIALECT", DatabaseDialect.SQLITE.value)
     try:
         dialect = DatabaseDialect(dialect_raw.lower())
     except ValueError:
@@ -123,24 +123,24 @@ def _load_database_config(paths: ServerPaths) -> DatabaseConfig:
     return DatabaseConfig(
         dialect=dialect,
         sqlite_path=Path(
-            os.getenv("PLATFORM_DB_SQLITE_PATH", str(paths.data_dir / "platform_server.db"))
+            os.getenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(paths.data_dir / "attendance_server.db"))
         ),
-        host=os.getenv("PLATFORM_DB_HOST", "localhost"),
-        port=_env_int("PLATFORM_DB_PORT", default_port),
-        username=os.getenv("PLATFORM_DB_USERNAME", ""),
-        password=os.getenv("PLATFORM_DB_PASSWORD", ""),
-        database_name=os.getenv("PLATFORM_DB_NAME", "platform_server"),
-        echo_sql=_env_bool("PLATFORM_DB_ECHO_SQL", False),
-        pool_size=_env_int("PLATFORM_DB_POOL_SIZE", 10),
-        max_overflow=_env_int("PLATFORM_DB_MAX_OVERFLOW", 20),
-        pool_recycle_seconds=_env_int("PLATFORM_DB_POOL_RECYCLE_SECONDS", 1800),
-        connect_timeout_seconds=_env_int("PLATFORM_DB_CONNECT_TIMEOUT_SECONDS", 10),
+        host=os.getenv("ATTENDANCE_SERVER_DB_HOST", "localhost"),
+        port=_env_int("ATTENDANCE_SERVER_DB_PORT", default_port),
+        username=os.getenv("ATTENDANCE_SERVER_DB_USERNAME", ""),
+        password=os.getenv("ATTENDANCE_SERVER_DB_PASSWORD", ""),
+        database_name=os.getenv("ATTENDANCE_SERVER_DB_NAME", "attendance_server"),
+        echo_sql=_env_bool("ATTENDANCE_SERVER_DB_ECHO_SQL", False),
+        pool_size=_env_int("ATTENDANCE_SERVER_DB_POOL_SIZE", 10),
+        max_overflow=_env_int("ATTENDANCE_SERVER_DB_MAX_OVERFLOW", 20),
+        pool_recycle_seconds=_env_int("ATTENDANCE_SERVER_DB_POOL_RECYCLE_SECONDS", 1800),
+        connect_timeout_seconds=_env_int("ATTENDANCE_SERVER_DB_CONNECT_TIMEOUT_SECONDS", 10),
     )
 
 
 @dataclass(frozen=True)
 class ServerConfig:
-    """Aggregate configuration root for the Platform Server.
+    """Aggregate configuration root for the Attendance Server.
 
     Attributes:
         app_name: Display name used in logs and the ``/version``
@@ -154,11 +154,11 @@ class ServerConfig:
         paths: This server's own, small filesystem layout (see
             :class:`ServerPaths`).
         database: Reuses :class:`config.DatabaseConfig` directly,
-            resolved from independent ``PLATFORM_DB_*`` variables (see
+            resolved from independent ``ATTENDANCE_SERVER_DB_*`` variables (see
             :func:`_load_database_config`) — never the Attendance
             Client's or Developer Suite's own database.
         security: Reuses :class:`config.SecurityConfig` directly, with
-            its own ``PLATFORM_SECRET_KEY``-sourced signing secret
+            its own ``ATTENDANCE_SERVER_SECRET_KEY``-sourced signing secret
             rather than the Attendance Client's ``APP_SECRET_KEY``.
         logging: Reuses :class:`config.LoggingConfig` directly, with
             its own log file name.
@@ -166,7 +166,7 @@ class ServerConfig:
             and token lifetime are exactly what this server needs too.
     """
 
-    app_name: str = "Attendance Platform Server"
+    app_name: str = "Attendance Server"
     app_version: str = "0.1.0"
     environment: Environment = Environment.PRODUCTION
 
@@ -190,7 +190,7 @@ class ServerConfig:
         Returns:
             A ready-to-use :class:`ServerConfig`.
         """
-        env_raw = os.getenv("PLATFORM_ENVIRONMENT", Environment.PRODUCTION.value)
+        env_raw = os.getenv("ATTENDANCE_SERVER_ENVIRONMENT", Environment.PRODUCTION.value)
         try:
             environment = Environment(env_raw.lower())
         except ValueError:
@@ -204,27 +204,27 @@ class ServerConfig:
         security = replace(
             SecurityConfig.from_env(),
             secret_key=os.getenv(
-                "PLATFORM_SECRET_KEY", "change-this-platform-secret-key-in-production"
+                "ATTENDANCE_SERVER_SECRET_KEY", "change-this-attendance-server-secret-key-in-production"
             ),
         )
 
         logging_config = LoggingConfig(
-            level=os.getenv("PLATFORM_LOG_LEVEL", "INFO").upper(),
-            rotation=os.getenv("PLATFORM_LOG_ROTATION", "10 MB"),
-            retention=os.getenv("PLATFORM_LOG_RETENTION", "30 days"),
-            log_file_name="platform_server.log",
+            level=os.getenv("ATTENDANCE_SERVER_LOG_LEVEL", "INFO").upper(),
+            rotation=os.getenv("ATTENDANCE_SERVER_LOG_ROTATION", "10 MB"),
+            retention=os.getenv("ATTENDANCE_SERVER_LOG_RETENTION", "30 days"),
+            log_file_name="attendance_server.log",
         )
 
         api = ApiConfig(
             enabled=True,
-            host=os.getenv("PLATFORM_API_HOST", "0.0.0.0"),
-            port=_env_int("PLATFORM_API_PORT", 9000),
-            token_expires_minutes=_env_int("PLATFORM_API_TOKEN_EXPIRES_MINUTES", 480),
+            host=os.getenv("ATTENDANCE_SERVER_API_HOST", "0.0.0.0"),
+            port=_env_int("ATTENDANCE_SERVER_API_PORT", 9000),
+            token_expires_minutes=_env_int("ATTENDANCE_SERVER_API_TOKEN_EXPIRES_MINUTES", 480),
         )
 
         return cls(
-            app_name=os.getenv("PLATFORM_APP_NAME", cls.app_name),
-            app_version=os.getenv("PLATFORM_APP_VERSION", cls.app_version),
+            app_name=os.getenv("ATTENDANCE_SERVER_APP_NAME", cls.app_name),
+            app_version=os.getenv("ATTENDANCE_SERVER_APP_VERSION", cls.app_version),
             environment=environment,
             paths=paths,
             database=database,

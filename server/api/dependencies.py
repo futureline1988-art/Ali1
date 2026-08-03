@@ -1,4 +1,4 @@
-"""Shared FastAPI dependencies for the Platform Server.
+"""Shared FastAPI dependencies for the Attendance Server.
 
 Mirrors ``api/dependencies.py``'s ``get_db_session`` (one request, one
 unit of work) with one deliberate difference: the Attendance Client's

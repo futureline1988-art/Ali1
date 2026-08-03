@@ -1,3 +1,3 @@
-"""Platform Server database: its own independent schema."""
+"""Attendance Server database: its own independent schema."""
 
 from __future__ import annotations
