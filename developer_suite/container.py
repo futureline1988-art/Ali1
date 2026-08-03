@@ -11,9 +11,12 @@ one place that wiring changes, not the UI layer.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from database.database import Database
 from developer_suite.config import DeveloperSuiteConfig
-from developer_suite.modules import ALL_MODULES, PlatformModule
+from developer_suite.modules import ALL_MODULES, CustomerManagementModule, PlatformModule
+from developer_suite.services.customer_service import CustomerService
 
 
 class ServiceContainer:
@@ -25,7 +28,7 @@ class ServiceContainer:
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
-        """Create a container and construct every platform module.
+        """Create a container, construct every service, and every platform module.
 
         Args:
             config: This application's configuration.
@@ -35,18 +38,31 @@ class ServiceContainer:
         """
         self.config = config
         self.database = database
+        self.customer_service = CustomerService(database)
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
-    def _build_modules(self) -> dict[str, PlatformModule]:
-        """Construct every registered platform module, keyed by ``module_id``.
+    def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:
+        """Map each module class needing real dependencies to how to build it.
 
-        Every module in Phase 2 has a no-argument constructor (see
-        :mod:`developer_suite.modules` — none has any real dependency
-        yet). A later phase that gives a module a real service
-        dependency changes only this method, not any caller of
+        Any module class in :data:`~developer_suite.modules.ALL_MODULES`
+        not listed here is constructed with no arguments (see
+        :meth:`_build_modules`) — this is the one place a later phase
+        adds an entry when it gives another module a real service
+        dependency, without touching
+        :mod:`developer_suite.ui.main_window` or
         :meth:`modules`/:meth:`get_module`.
         """
-        modules = tuple(module_cls() for module_cls in ALL_MODULES)
+        return {
+            CustomerManagementModule: lambda: CustomerManagementModule(self.customer_service),
+        }
+
+    def _build_modules(self) -> dict[str, PlatformModule]:
+        """Construct every registered platform module, keyed by ``module_id``, in order."""
+        factories = self._module_factories()
+        modules = tuple(
+            factories[module_cls]() if module_cls in factories else module_cls()
+            for module_cls in ALL_MODULES
+        )
         return {module.module_id: module for module in modules}
 
     def modules(self) -> tuple[PlatformModule, ...]:

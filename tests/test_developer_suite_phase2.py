@@ -24,10 +24,25 @@ from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_con
 from developer_suite.container import ServiceContainer
 from developer_suite.database.base import Base as DeveloperSuiteBase
 from developer_suite.database.bootstrap import build_database
-from developer_suite.modules import ALL_MODULES
+from developer_suite.modules import ALL_MODULES, CustomerManagementModule
 from developer_suite.modules.base import PlatformModule
+from developer_suite.services.customer_service import CustomerService
 from developer_suite.ui.main_window import MainWindow
 from developer_suite.ui.navigation import NavigationSidebar
+
+
+def _construct_module(module_cls: type[PlatformModule], database: Database) -> PlatformModule:
+    """Build any registered module class, supplying the real dependency it needs.
+
+    Every module except :class:`CustomerManagementModule` still has a
+    no-argument constructor as of Phase 3; this stays a single,
+    obvious place to extend when a later phase gives another module a
+    real dependency too — mirroring
+    :meth:`developer_suite.container.ServiceContainer._module_factories`.
+    """
+    if module_cls is CustomerManagementModule:
+        return CustomerManagementModule(CustomerService(database))
+    return module_cls()
 
 
 @pytest.fixture
@@ -72,9 +87,11 @@ class TestDatabaseBootstrap:
     def test_build_database_returns_connected_database(self, dev_suite_database: Database) -> None:
         assert dev_suite_database.check_connection() is True
 
-    def test_schema_has_no_tables_in_phase_2(self, dev_suite_database: Database) -> None:
-        # Phase 2 defines no platform-administration models yet.
-        assert len(DeveloperSuiteBase.metadata.tables) == 0
+    def test_schema_includes_registered_models(self, dev_suite_database: Database) -> None:
+        # Empty as of Phase 2; Phase 3 registered the first model
+        # (Customer) against DeveloperSuiteBase -- this now checks for
+        # its table rather than asserting a specific historical count.
+        assert "customers" in DeveloperSuiteBase.metadata.tables
 
     def test_database_file_is_created_at_configured_path(
         self, dev_suite_config: DeveloperSuiteConfig, dev_suite_database: Database
@@ -84,19 +101,25 @@ class TestDatabaseBootstrap:
 
 class TestModuleInterface:
     @pytest.mark.parametrize("module_cls", ALL_MODULES)
-    def test_module_satisfies_platform_module_interface(self, module_cls: type[PlatformModule]) -> None:
-        module = module_cls()
+    def test_module_satisfies_platform_module_interface(
+        self, module_cls: type[PlatformModule], dev_suite_database: Database
+    ) -> None:
+        module = _construct_module(module_cls, dev_suite_database)
         assert isinstance(module, PlatformModule)
         assert isinstance(module.module_id, str) and module.module_id
         assert isinstance(module.display_name_ar, str) and module.display_name_ar
         assert isinstance(module.display_name_en, str) and module.display_name_en
 
-    def test_module_ids_are_unique(self) -> None:
-        module_ids = [module_cls().module_id for module_cls in ALL_MODULES]
+    def test_module_ids_are_unique(self, dev_suite_database: Database) -> None:
+        module_ids = [
+            _construct_module(module_cls, dev_suite_database).module_id for module_cls in ALL_MODULES
+        ]
         assert len(module_ids) == len(set(module_ids))
 
-    def test_all_five_required_modules_are_registered(self) -> None:
-        module_ids = {module_cls().module_id for module_cls in ALL_MODULES}
+    def test_all_five_required_modules_are_registered(self, dev_suite_database: Database) -> None:
+        module_ids = {
+            _construct_module(module_cls, dev_suite_database).module_id for module_cls in ALL_MODULES
+        }
         assert module_ids == {
             "customer_management",
             "license_manager",
@@ -106,10 +129,12 @@ class TestModuleInterface:
         }
 
     @pytest.mark.parametrize("module_cls", ALL_MODULES)
-    def test_build_page_returns_a_widget(self, module_cls: type[PlatformModule], qapp) -> None:
+    def test_build_page_returns_a_widget(
+        self, module_cls: type[PlatformModule], dev_suite_database: Database, qapp
+    ) -> None:
         from PySide6.QtWidgets import QWidget
 
-        module = module_cls()
+        module = _construct_module(module_cls, dev_suite_database)
         page = module.build_page()
         assert isinstance(page, QWidget)
 

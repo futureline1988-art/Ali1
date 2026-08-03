@@ -1,18 +1,29 @@
-"""Declarative base for the Developer Suite's own schema.
+"""Declarative base and base model for the Developer Suite's own schema.
 
-Empty in Phase 2 — no platform administration tables (Customer,
-IssuedLicense, PlatformSettings, AuditLog, RemoteConfigProfile, Update
-metadata) are defined yet. A later phase adds model modules here that
-import and subclass :class:`Base`, exactly matching the pattern
-``models/base.py`` establishes for the Attendance Client — deliberately
-not the *same* ``Base``, since these are two separate schemas that must
-never share one metadata namespace.
+:class:`Base` is a separate SQLAlchemy declarative base from
+``models.base.Base`` — these are two schemas that must never share one
+metadata namespace, per the platform's ownership boundary (see
+``developer_suite/__init__.py``).
+
+:class:`DeveloperSuiteBaseModel` reuses four mixins directly from
+``models.base`` unmodified (:class:`~models.base.IdMixin`,
+:class:`~models.base.UUIDMixin`, :class:`~models.base.TimestampMixin`,
+:class:`~models.base.SoftDeleteMixin`, :class:`~models.base.TableNameMixin`)
+rather than re-implementing surrogate-key/UUID/timestamp/soft-delete
+columns from scratch — those mixins are plain column-adding classes
+with no dependency on ``models.base.Base`` itself, so they compose
+cleanly with this package's own ``Base``. This is the "avoid duplicate
+implementations" platform rule applied concretely: the *behavior* of a
+soft-deletable, timestamped, UUID-bearing row exists in exactly one
+place in this codebase.
 """
 
 from __future__ import annotations
 
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
+
+from models.base import IdMixin, SoftDeleteMixin, TableNameMixin, TimestampMixin, UUIDMixin
 
 # Same naming convention as models/base.py, for the same reason: stable,
 # dialect-independent constraint/index names if/when this schema is ever
@@ -31,9 +42,39 @@ _metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 class Base(DeclarativeBase):
     """Declarative base for every Developer Suite platform-administration model.
 
-    Empty in Phase 2. Future platform-administration models (Customer,
-    IssuedLicense, ...) subclass this — never ``models.base.Base``,
-    which belongs to the Attendance Client's schema.
+    Future platform-administration models (Customer, IssuedLicense,
+    ...) subclass :class:`DeveloperSuiteBaseModel`, defined below —
+    never ``models.base.Base``/``BaseModel``, which belong to the
+    Attendance Client's schema.
     """
 
     metadata = _metadata
+
+
+class DeveloperSuiteBaseModel(
+    TableNameMixin,
+    SoftDeleteMixin,
+    TimestampMixin,
+    UUIDMixin,
+    IdMixin,
+    Base,
+):
+    """Abstract base every concrete Developer Suite model inherits from.
+
+    Combines automatic table naming, an integer primary key, a public
+    UUID, created/updated timestamps, and soft delete — the same
+    composition ``models.base.BaseModel`` uses for the Attendance
+    Client, minus the two mixins (``VersionMixin``, ``AuditMixin``)
+    Phase 3 has no use for yet. A later phase can add them the same
+    way, without touching any existing column.
+
+    Example:
+        >>> class Customer(DeveloperSuiteBaseModel):
+        ...     company_name: Mapped[str] = mapped_column(String(200))
+    """
+
+    __abstract__ = True
+
+    def __repr__(self) -> str:
+        """Return a concise, debugger-friendly representation."""
+        return f"<{self.__class__.__name__} id={getattr(self, 'id', None)!r}>"

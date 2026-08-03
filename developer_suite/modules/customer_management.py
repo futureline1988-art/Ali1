@@ -1,22 +1,34 @@
 """Customer Management module.
 
-Empty in Phase 2. A later phase adds: create/edit/delete customer,
-search, company information (name, phone, email, notes) — all stored
-in the Developer Suite's own database (see this package's parent
+Phase 3: create/edit/delete (soft) customer, search, company status
+(active/suspended), contact information, notes — all stored in the
+Developer Suite's own database (see this package's parent
 ``__init__.py`` for the ownership boundary: customer *accounts*, not
-customer *operational* data).
+customer *operational* data). No remote synchronization, licensing UI,
+update management, or monitoring — those remain out of scope until
+their own approved phases.
 """
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import QWidget
 
-from developer_suite.modules._placeholder import build_placeholder_page
 from developer_suite.modules.base import PlatformModule
+from developer_suite.services.customer_service import CustomerService
+from developer_suite.ui.customer_management_page import CustomerManagementPage
 
 
 class CustomerManagementModule(PlatformModule):
-    """Placeholder implementation — no business logic yet."""
+    """Customer registry: CRUD, search, and active/suspended status."""
+
+    def __init__(self, customer_service: CustomerService) -> None:
+        """Create the module bound to a customer service.
+
+        Args:
+            customer_service: Performs every customer operation this
+                module's page needs.
+        """
+        self._customer_service = customer_service
 
     @property
     def module_id(self) -> str:
@@ -31,4 +43,4 @@ class CustomerManagementModule(PlatformModule):
         return "Customer Management"
 
     def build_page(self) -> QWidget:
-        return build_placeholder_page(self.display_name_ar)
+        return CustomerManagementPage(self._customer_service)
