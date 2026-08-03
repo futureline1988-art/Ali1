@@ -20,7 +20,9 @@ from developer_suite.modules import (
     CustomerManagementModule,
     LicenseManagerModule,
     PlatformModule,
+    RemoteConfigurationModule,
 )
+from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.license_service import LicenseService
 
@@ -48,6 +50,7 @@ class ServiceContainer:
         self.license_service = LicenseService(
             database, private_key_path=config.licensing_private_key_path
         )
+        self.configuration_service = ConfigurationService(database)
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
     def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:
@@ -66,6 +69,7 @@ class ServiceContainer:
             LicenseManagerModule: lambda: LicenseManagerModule(
                 self.license_service, self.customer_service
             ),
+            RemoteConfigurationModule: lambda: RemoteConfigurationModule(self.configuration_service),
         }
 
     def _build_modules(self) -> dict[str, PlatformModule]:

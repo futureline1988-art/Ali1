@@ -25,8 +25,14 @@ from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_con
 from developer_suite.container import ServiceContainer
 from developer_suite.database.base import Base as DeveloperSuiteBase
 from developer_suite.database.bootstrap import build_database
-from developer_suite.modules import ALL_MODULES, CustomerManagementModule, LicenseManagerModule
+from developer_suite.modules import (
+    ALL_MODULES,
+    CustomerManagementModule,
+    LicenseManagerModule,
+    RemoteConfigurationModule,
+)
 from developer_suite.modules.base import PlatformModule
+from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.license_service import LicenseService
 from developer_suite.ui.main_window import MainWindow
@@ -36,10 +42,11 @@ from developer_suite.ui.navigation import NavigationSidebar
 def _construct_module(module_cls: type[PlatformModule], database: Database) -> PlatformModule:
     """Build any registered module class, supplying the real dependency it needs.
 
-    Every module except :class:`CustomerManagementModule` and
-    :class:`LicenseManagerModule` still has a no-argument constructor
-    as of Phase 4; this stays a single, obvious place to extend when a
-    later phase gives another module a real dependency too — mirroring
+    Every module except :class:`CustomerManagementModule`,
+    :class:`LicenseManagerModule`, and :class:`RemoteConfigurationModule`
+    still has a no-argument constructor as of Phase 5; this stays a
+    single, obvious place to extend when a later phase gives another
+    module a real dependency too — mirroring
     :meth:`developer_suite.container.ServiceContainer._module_factories`.
     """
     if module_cls is CustomerManagementModule:
@@ -48,6 +55,8 @@ def _construct_module(module_cls: type[PlatformModule], database: Database) -> P
         customer_service = CustomerService(database)
         license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
         return LicenseManagerModule(license_service, customer_service)
+    if module_cls is RemoteConfigurationModule:
+        return RemoteConfigurationModule(ConfigurationService(database))
     return module_cls()
 
 
