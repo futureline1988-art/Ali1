@@ -32,6 +32,27 @@ import traceback
 from pathlib import Path
 
 
+def _ensure_stdio_streams() -> None:
+    """Give ``sys.stdout``/``sys.stderr`` real (if inert) streams if missing.
+
+    A windowed (``console=False``) PyInstaller build launched with no
+    attached console -- the normal case for a double-clicked ``.exe``
+    or a Start Menu shortcut, not something wrong with this specific
+    build -- has ``sys.stdout`` and ``sys.stderr`` set to ``None``,
+    not a dummy stream (the same is true of any script run via
+    ``pythonw.exe``, PyInstaller or not). That crashes any code,
+    including this app's own logging setup (``utils.logger.setup_logging``)
+    and this file's own last-resort ``print`` below, that
+    unconditionally writes to one of them. Doing this first, before
+    anything else runs, means every later line of code can safely
+    assume both streams exist.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
 def _enable_native_crash_diagnostics(log_path: Path) -> None:
     """Install a fatal-signal handler that can survive a native crash.
 
@@ -115,6 +136,7 @@ def _run() -> int:
 
 
 if __name__ == "__main__":
+    _ensure_stdio_streams()
     _enable_native_crash_diagnostics(_crash_log_path())
     try:
         sys.exit(_run())
@@ -122,5 +144,8 @@ if __name__ == "__main__":
         raise
     except BaseException as exc:  # noqa: BLE001 - last-resort top-level crash handler
         crash_log_path = _report_fatal_startup_error(exc)
-        print(f"Fatal startup error - see {crash_log_path}", file=sys.stderr)
+        try:
+            print(f"Fatal startup error - see {crash_log_path}", file=sys.stderr)
+        except OSError:
+            pass  # never let the crash reporter itself crash
         sys.exit(1)

@@ -3,6 +3,32 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [1.0.2] - 2026-08-03
+
+### Fixed
+
+- **Windows startup crash** (`TypeError: Cannot log to objects of type
+  'NoneType'` in `utils/logger.py`'s `setup_logging()`, reached via
+  `bootstrap.py`): a windowed (`console=False`) build launched with no
+  attached console — the normal case for double-clicking the installed
+  `.exe` or a Start Menu shortcut — has `sys.stdout`/`sys.stderr` set to
+  `None`, not a dummy stream (standard, documented PyInstaller and
+  `pythonw.exe` behavior). `setup_logging()` unconditionally passed
+  `sys.stderr` to Loguru's `logger.add()`, which does not accept `None`.
+  `setup_logging()` now skips the console sink entirely when
+  `sys.stderr is None` — an expected condition, not an error — since
+  the two file-based sinks provide full logging either way.
+  `bootstrap.py` additionally installs a `devnull` fallback for
+  `sys.stdout`/`sys.stderr` before anything else runs, so no other code
+  path (including bootstrap.py's own last-resort crash print) can hit
+  this same class of bug.
+- The release workflow's three Windows smoke tests previously redirected
+  each launched process's stdout/stderr, which — as a side effect —
+  gave those processes real (non-`None`) stream handles and let this
+  exact bug slip through v1.0.1's "all tests green" CI run. The smoke
+  tests no longer redirect stdio, matching how a real user actually
+  launches the app.
+
 ## [1.0.1] - 2026-08-02
 
 ### Fixed

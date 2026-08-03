@@ -148,14 +148,41 @@ def setup_logging(
     _logger.configure(patcher=_patch_record)
     _logger.remove()
 
-    _logger.add(
-        sys.stderr,
-        level=resolved_logging.level,
-        format=_CONSOLE_FORMAT,
-        colorize=True,
-        backtrace=is_development,
-        diagnose=is_development,
-    )
+    # sys.stderr is None when this process has no attached console --
+    # the normal case for a windowed (console=False) frozen build
+    # launched by double-clicking it or from a Start Menu shortcut, or
+    # any app run via pythonw.exe. That is an expected condition, not
+    # an error: passing None to logger.add() would fail with Loguru's
+    # own opaque "Cannot log to objects of type 'NoneType'", so the
+    # console sink is skipped entirely rather than added broken -- the
+    # two file sinks below are unaffected and cover logging either way.
+    # bootstrap.py additionally replaces a None sys.stderr with a real
+    # (inert) stream before this ever runs in the packaged app, so this
+    # branch is normally dead code there; it still matters for
+    # anything that calls setup_logging() without going through
+    # bootstrap.py, e.g. a bare `pythonw.exe main.py`.
+    if sys.stderr is not None:
+        _logger.add(
+            sys.stderr,
+            level=resolved_logging.level,
+            format=_CONSOLE_FORMAT,
+            colorize=True,
+            backtrace=is_development,
+            diagnose=is_development,
+        )
+
+    # PathsConfig/LoggingConfig are plain dataclasses, not enforced at
+    # runtime -- a caller constructing one by hand (most likely a test)
+    # could still pass logs_dir/log_file_name as None. Path.__truediv__
+    # would raise its own TypeError immediately below if so, but this
+    # gives a clear, actionable message instead of chasing that down
+    # through Loguru's stack.
+    if resolved_paths.logs_dir is None or resolved_logging.log_file_name is None:
+        raise RuntimeError(
+            "setup_logging(): paths_config.logs_dir or "
+            "logging_config.log_file_name is None -- refusing to build a "
+            "log file path that would resolve to None."
+        )
 
     log_file_path: Path = resolved_paths.logs_dir / resolved_logging.log_file_name
     _logger.add(

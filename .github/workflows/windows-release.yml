@@ -79,15 +79,18 @@ jobs:
           $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_onedir.db"
           $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
           Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
-          $stdout = "$env:RUNNER_TEMP\onedir_stdout.log"
-          $stderr = "$env:RUNNER_TEMP\onedir_stderr.log"
-          # A windowed (console=False) build still has real stdout/stderr
-          # handles when they're explicitly redirected at process creation
-          # like this -- it is only an *inherited console window* that a
-          # windowed build lacks, not the handles themselves. This is how
-          # faulthandler's native-crash traceback (see bootstrap.py) gets
-          # captured even though nothing is visible on a real desktop.
-          $proc = Start-Process -FilePath $exePath -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          # Deliberately NOT using -RedirectStandardOutput/-RedirectStandardError:
+          # redirecting them gives this process real, non-None stdout/stderr
+          # handles, which is NOT what a real double-click or Start Menu
+          # launch gets (see bootstrap.py's _ensure_stdio_streams -- a
+          # windowed build launched with no attached console has sys.stdout
+          # /sys.stderr as None). An earlier version of this test redirected
+          # both, which is exactly what let a `sys.stderr is None` crash in
+          # setup_logging reach v1.0.1's users despite this smoke test being
+          # green. startup_crash.log (below) is the real diagnostic channel
+          # regardless -- bootstrap.py opens it directly, independent of
+          # stdout/stderr redirection, so nothing is lost by not redirecting.
+          $proc = Start-Process -FilePath $exePath -PassThru
           Start-Sleep -Seconds 15
           if ($proc.HasExited) {
             Write-Host "##[error] Onedir executable exited early (code $($proc.ExitCode)) instead of staying running."
@@ -97,10 +100,6 @@ jobs:
             } else {
               Write-Host "No startup_crash.log was written either."
             }
-            Write-Host "----- stdout -----"
-            if (Test-Path $stdout) { Get-Content $stdout }
-            Write-Host "----- stderr -----"
-            if (Test-Path $stderr) { Get-Content $stderr }
             exit 1
           }
           Write-Host "OK: onedir executable is still running after 15s (PID $($proc.Id))."
@@ -126,9 +125,9 @@ jobs:
           $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_portable.db"
           $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
           Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
-          $stdout = "$env:RUNNER_TEMP\portable_stdout.log"
-          $stderr = "$env:RUNNER_TEMP\portable_stderr.log"
-          $proc = Start-Process -FilePath $exePath -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          # See the onedir smoke test above for why this deliberately does
+          # not redirect stdout/stderr.
+          $proc = Start-Process -FilePath $exePath -PassThru
           Start-Sleep -Seconds 15
           if ($proc.HasExited) {
             Write-Host "##[error] Portable executable exited early (code $($proc.ExitCode)) instead of staying running."
@@ -138,10 +137,6 @@ jobs:
             } else {
               Write-Host "No startup_crash.log was written either."
             }
-            Write-Host "----- stdout -----"
-            if (Test-Path $stdout) { Get-Content $stdout }
-            Write-Host "----- stderr -----"
-            if (Test-Path $stderr) { Get-Content $stderr }
             exit 1
           }
           Write-Host "OK: portable executable is still running after 15s (PID $($proc.Id))."
@@ -183,9 +178,11 @@ jobs:
           $env:DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_installed.db"
           $crashLog = "$env:LOCALAPPDATA\AttendanceManagementSystem\logs\startup_crash.log"
           Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
-          $stdout = "$env:RUNNER_TEMP\installed_stdout.log"
-          $stderr = "$env:RUNNER_TEMP\installed_stderr.log"
-          $proc = Start-Process -FilePath $installedExe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          # See the onedir smoke test above for why this deliberately does
+          # not redirect stdout/stderr -- this is the closest of all three
+          # tests to the real customer scenario (Setup.exe -> Start Menu
+          # shortcut -> double-click), so it matters most here.
+          $proc = Start-Process -FilePath $installedExe -PassThru
           Start-Sleep -Seconds 15
           $failed = $false
           if ($proc.HasExited) {
@@ -196,10 +193,6 @@ jobs:
             } else {
               Write-Host "No startup_crash.log was written either."
             }
-            Write-Host "----- stdout -----"
-            if (Test-Path $stdout) { Get-Content $stdout }
-            Write-Host "----- stderr -----"
-            if (Test-Path $stderr) { Get-Content $stderr }
             $failed = $true
           } else {
             Write-Host "OK: installed executable is still running after 15s (PID $($proc.Id))."

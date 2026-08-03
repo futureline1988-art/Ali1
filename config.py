@@ -469,7 +469,7 @@ class AppConfig:
 
     app_name: str = "Attendance Management System"
     app_name_ar: str = "نظام إدارة الحضور والانصراف"
-    app_version: str = "1.0.1"
+    app_version: str = "1.0.2"
     organization_name: str = "Attendance Systems"
     environment: Environment = Environment.PRODUCTION
 
