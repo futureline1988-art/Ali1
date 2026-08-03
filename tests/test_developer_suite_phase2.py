@@ -38,6 +38,7 @@ from developer_suite.modules import (
 from developer_suite.modules.base import PlatformModule
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
+from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
 from developer_suite.sync.coordinator import SyncCoordinator
@@ -79,7 +80,8 @@ def _construct_module(
         scheduler = SyncSchedulerService(coordinator, config)
         admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
         dashboard_service = DashboardService(customer_service, license_service, scheduler, admin_client, config)
-        return DashboardModule(dashboard_service)
+        refresh_service = DashboardRefreshService(dashboard_service)
+        return DashboardModule(refresh_service, customer_service, license_service)
     if module_cls is CustomerManagementModule:
         customer_service = CustomerService(database)
         license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
@@ -190,6 +192,7 @@ class TestModuleInterface:
             "monitoring",
             "server_status",
             "update_manager",
+            "settings",
         }
 
     @pytest.mark.parametrize("module_cls", ALL_MODULES)

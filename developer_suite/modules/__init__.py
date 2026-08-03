@@ -2,9 +2,15 @@
 
 Customer Management (Phase 3), License Manager (Phase 4), Monitoring
 and Server Status (Phase 10) now have real business logic; Remote
-Configuration and Update Manager remain "coming soon" placeholders
-until their own approved phases. The Dashboard (Phase 10) is first in
-:data:`ALL_MODULES`, making it the main window's default landing page.
+Configuration, Update Manager, and (Phase 12) Settings remain "coming
+soon" placeholders until their own approved phases. The Dashboard
+(Phase 10) is first in :data:`ALL_MODULES`, making it the main
+window's default landing page.
+
+:data:`ALL_MODULES`' order is Phase 12's requested navigation grouping
+verbatim — Dashboard, Customers, Licenses, Remote Configuration,
+Monitoring, Updates, Server, Settings — the same order
+:mod:`developer_suite.ui.navigation` renders top to bottom.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from developer_suite.modules.license_manager import LicenseManagerModule
 from developer_suite.modules.monitoring import MonitoringModule
 from developer_suite.modules.remote_configuration import RemoteConfigurationModule
 from developer_suite.modules.server_status import ServerStatusModule
+from developer_suite.modules.settings import SettingsModule
 from developer_suite.modules.update_manager import UpdateManagerModule
 
 ALL_MODULES: tuple[type[PlatformModule], ...] = (
@@ -24,8 +31,9 @@ ALL_MODULES: tuple[type[PlatformModule], ...] = (
     LicenseManagerModule,
     RemoteConfigurationModule,
     MonitoringModule,
-    ServerStatusModule,
     UpdateManagerModule,
+    ServerStatusModule,
+    SettingsModule,
 )
 """Every platform module, in navigation display order."""
 
@@ -36,7 +44,8 @@ __all__ = [
     "LicenseManagerModule",
     "RemoteConfigurationModule",
     "MonitoringModule",
-    "ServerStatusModule",
     "UpdateManagerModule",
+    "ServerStatusModule",
+    "SettingsModule",
     "ALL_MODULES",
 ]

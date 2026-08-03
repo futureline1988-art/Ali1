@@ -14,6 +14,14 @@ succeeds — mirroring exactly how the Attendance Client's own
 ``main.py`` gates ``ui.main_window.MainWindow`` behind
 ``ui.login_window.LoginWindow``.
 
+Phase 12 adds :attr:`~developer_suite.container.ServiceContainer.dashboard_refresh_service`,
+a second background worker the composition root owns the lifetime of
+— but unlike :attr:`~developer_suite.container.ServiceContainer.sync_scheduler`
+(started unconditionally, since device-credential sync needs no admin
+session), it only starts once :func:`_show_main_window` actually runs:
+starting it any earlier would spend its first tick calling
+admin-scoped endpoints before any admin session exists.
+
 Run directly for local development::
 
     python -m developer_suite.main
@@ -47,6 +55,12 @@ def main() -> int:
     windows: dict[str, object] = {}
 
     def _show_main_window() -> None:
+        # Started only once an admin session actually exists (auto-login
+        # or a fresh login) — starting any earlier would spend its first
+        # tick calling admin-scoped endpoints with no token configured
+        # yet, degrading every remote field to "unknown" until the next
+        # scheduled tick.
+        container.dashboard_refresh_service.start()
         window = MainWindow(container)
         window.show()
         windows["main"] = window  # keep a reference alive past this function's return
@@ -65,6 +79,7 @@ def main() -> int:
         windows["login"] = login_window
 
     exit_code = app.exec()
+    container.dashboard_refresh_service.stop()
     container.sync_scheduler.shutdown()
     database.dispose()
     return exit_code

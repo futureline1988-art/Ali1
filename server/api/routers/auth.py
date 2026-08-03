@@ -34,7 +34,7 @@ from server.api.schemas import (
     AdminPasswordResetRequestBody,
     AdminRefreshRequest,
 )
-from server.auth.dependencies import AuthenticatedPrincipal, get_current_principal
+from server.auth.dependencies import AuthenticatedPrincipal, get_current_principal, require_scope
 from server.services.admin_auth_service import (
     AccountLockedError,
     AccountNotFoundError,
@@ -156,6 +156,29 @@ def list_sessions(
             session_row.to_dict(exclude={"refresh_token_hash"}) for session_row in sessions
         ]
     }
+
+
+_MAX_AUDIT_LOG_LIMIT = 200
+
+
+@router.get("/audit-log")
+def list_audit_log(
+    request: Request,
+    limit: int = 50,
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin", "sync:read")),
+) -> dict:
+    """List the most recent admin authentication audit events, for a monitoring dashboard.
+
+    Read-only, like the Phase 10 ``sync:read``-widened endpoints
+    (``/api/v1/devices``, ``/api/v1/sync/activity``, ``/api/v1/status``)
+    — reuses :meth:`~server.services.admin_auth_service.AdminAuthService.list_audit_log`
+    unmodified; no new logging path, only a broader read shape over the
+    audit trail every other route on this router already appends to.
+    """
+    service: AdminAuthService = request.app.state.container.admin_auth_service
+    clamped_limit = max(1, min(limit, _MAX_AUDIT_LOG_LIMIT))
+    entries = service.list_audit_log(limit=clamped_limit)
+    return {"entries": [entry.to_dict() for entry in entries]}
 
 
 @router.post("/password-reset/request")

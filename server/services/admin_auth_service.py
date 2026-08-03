@@ -326,6 +326,25 @@ class AdminAuthService(BaseService):
             session.flush()
             self._audit(session, session_row.admin_account_id, AdminAuditAction.LOGOUT, None)
 
+    def list_audit_log(self, *, limit: int = 100) -> list[AdminAuditLog]:
+        """List the most recent admin authentication audit events, most recent first.
+
+        Read-only reuse of :meth:`~server.repositories.admin_audit_log_repository.AdminAuditLogRepository.list_recent`
+        — Phase 12's Developer Dashboard is the first caller, surfaced
+        through a new read-only route (see
+        ``server/api/routers/auth.py``); no new audit-writing logic is
+        added here, only a read path over the trail every other method
+        on this service already appends to.
+
+        Args:
+            limit: Maximum number of rows to return.
+
+        Returns:
+            The most recent audit log rows, across every account.
+        """
+        with self._session_scope() as session:
+            return AdminAuditLogRepository(session).list_recent(limit=limit)
+
     def list_sessions(self, account_public_id: uuid.UUID) -> list[AdminSession]:
         """List an account's currently active sessions, most recent first.
 

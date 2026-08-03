@@ -48,6 +48,7 @@ import developer_suite.config as developer_suite_config_module
 from developer_suite.admin.client import (
     AdminApiClient,
     AdminApiNotConfiguredError,
+    AuditLogEntry,
     DeviceInfo,
     ONLINE_THRESHOLD,
     ServerStatus,
@@ -395,6 +396,9 @@ class _FakeAdminClient:
     healthy: bool = True
     version: dict | None = field(default_factory=lambda: {"app_name": "Attendance Server", "app_version": "9.9.9"})
     raise_on_devices: bool = False
+    server_status: ServerStatus | None = None
+    recent_activity: list[SyncActivityEntry] = field(default_factory=list)
+    audit_log: list[AuditLogEntry] = field(default_factory=list)
 
     def check_health(self) -> bool:
         return self.healthy
@@ -408,6 +412,19 @@ class _FakeAdminClient:
 
             raise AdminApiNotConfiguredError("no token")
         return self.devices
+
+    def get_server_status(self) -> ServerStatus:
+        if self.server_status is not None:
+            return self.server_status
+        return ServerStatus(
+            app_name="Attendance Server", app_version="9.9.9", database_connected=True, uptime_seconds=1.0
+        )
+
+    def list_recent_activity(self, *, limit: int = 50) -> list[SyncActivityEntry]:
+        return self.recent_activity
+
+    def list_audit_log(self, *, limit: int = 50) -> list[AuditLogEntry]:
+        return self.audit_log
 
 
 class TestDashboardService:
@@ -551,15 +568,24 @@ class TestDashboardPage:
     def test_builds_and_populates_tiles(
         self, qapp, customer_service, license_service, dev_suite_database, dev_suite_config
     ) -> None:
+        """Superseded in shape by tests.test_phase12_developer_dashboard's own
+        ``TestDashboardPage`` (14 cards, charts, activity tabs, quick
+        actions) — kept here only to prove the Phase 10
+        DashboardService -> DashboardPage data path still works after
+        Phase 12's constructor change (refresh service instead of a
+        direct DashboardService reference)."""
+        from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
         from developer_suite.ui.dashboard_page import DashboardPage
 
         customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
         coordinator = SyncCoordinator(dev_suite_database, dev_suite_config)
         scheduler = SyncSchedulerService(coordinator, dev_suite_config)
         service = DashboardService(customer_service, license_service, scheduler, _FakeAdminClient(), dev_suite_config)
+        refresh_service = DashboardRefreshService(service)
 
-        page = DashboardPage(service)
-        assert page._grid.count() == 12
+        page = DashboardPage(refresh_service, customer_service, license_service)
+        page._populate(service.get_snapshot())
+        assert page._grid.count() == 14
 
 
 class TestCustomerDetailsDialog:

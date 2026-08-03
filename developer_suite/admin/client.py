@@ -116,6 +116,28 @@ class ServerStatus:
 
 
 @dataclass(frozen=True)
+class AuditLogEntry:
+    """One admin authentication audit event, as returned by ``GET /api/v1/auth/audit-log``."""
+
+    public_id: str
+    admin_account_id: int | None
+    action: str
+    description: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_json(cls, data: dict) -> "AuditLogEntry":
+        """Parse one item of a ``GET /api/v1/auth/audit-log`` response's ``entries`` list."""
+        return cls(
+            public_id=data["public_id"],
+            admin_account_id=data.get("admin_account_id"),
+            action=data["action"],
+            description=data.get("description"),
+            created_at=_parse_datetime(data["created_at"]),
+        )
+
+
+@dataclass(frozen=True)
 class SyncActivityEntry:
     """One recent change record, as returned by ``GET /api/v1/sync/activity``."""
 
@@ -241,6 +263,18 @@ class AdminApiClient:
         """
         response = self._authenticated_get("/api/v1/sync/activity", params={"limit": limit})
         return [SyncActivityEntry.from_json(item) for item in response.json()["changes"]]
+
+    def list_audit_log(self, *, limit: int = 50) -> list[AuditLogEntry]:
+        """Fetch ``GET /api/v1/auth/audit-log`` (admin-scoped), most recent first.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response.
+        """
+        response = self._authenticated_get("/api/v1/auth/audit-log", params={"limit": limit})
+        return [AuditLogEntry.from_json(item) for item in response.json()["entries"]]
 
     def _unauthenticated_client(self) -> httpx.Client:
         return httpx.Client(base_url=self._base_url, transport=self._transport, timeout=self._timeout)

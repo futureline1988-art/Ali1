@@ -30,6 +30,7 @@ from developer_suite.modules import (
 )
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
+from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
 from developer_suite.sync.coordinator import SyncCoordinator
@@ -72,6 +73,16 @@ class ServiceContainer:
             :attr:`license_service`, :attr:`sync_scheduler`, and
             :attr:`admin_client` into one dashboard snapshot — see
             :mod:`developer_suite.services.dashboard_service`.
+        dashboard_refresh_service: Computes :attr:`dashboard_service`
+            snapshots on a background thread, on a timer (Phase 12 —
+            see :mod:`developer_suite.services.dashboard_refresh_service`).
+            Constructed here but not started, for the same reason
+            :attr:`sync_scheduler` isn't: the composition root
+            (:mod:`developer_suite.main`) starts/stops it alongside
+            :attr:`sync_scheduler`. Shared by the Dashboard page and
+            :class:`~developer_suite.ui.main_window.MainWindow`'s
+            status bar, so both render from the same background
+            refresh instead of each polling the server independently.
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
@@ -103,6 +114,7 @@ class ServiceContainer:
             self.admin_client,
             config,
         )
+        self.dashboard_refresh_service = DashboardRefreshService(self.dashboard_service)
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
     def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:
@@ -117,7 +129,9 @@ class ServiceContainer:
         :meth:`modules`/:meth:`get_module`.
         """
         return {
-            DashboardModule: lambda: DashboardModule(self.dashboard_service),
+            DashboardModule: lambda: DashboardModule(
+                self.dashboard_refresh_service, self.customer_service, self.license_service
+            ),
             CustomerManagementModule: lambda: CustomerManagementModule(
                 self.customer_service, self.license_service, self.sync_coordinator
             ),
