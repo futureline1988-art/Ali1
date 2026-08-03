@@ -24,4 +24,19 @@ Modules:
         package builds on.
     license_generator: An offline, vendor-only CLI for issuing signed
         license keys. Never imported by the running application.
+
+Subpackages (added in Phase 1 of the commercial platform work — see
+``docs/PLATFORM_ARCHITECTURE_GAP_ANALYSIS.md`` — as foundation code
+only; neither is wired into the running Attendance Client yet):
+    crypto: Private-key Ed25519 operations (keypair generation,
+        signing) for the future Developer Suite application. Never
+        imported by the Attendance Client — only an app holding the
+        private key has any reason to.
+    validator: Pure, side-effect-free predicates
+        (``version_check.is_version_licensed``,
+        ``developer_mode.is_developer_mode_permitted``) that later
+        phases will integrate into ``license_service.LicenseService``
+        and ``main.py`` respectively. Built and tested standalone now
+        so that integration is a small, low-risk addition later
+        instead of new design work done under time pressure then.
 """

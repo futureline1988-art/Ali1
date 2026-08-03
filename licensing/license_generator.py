@@ -112,6 +112,7 @@ def issue_license_key(
     issued_at: date | None = None,
     days: int | None = None,
     company_name: str | None = None,
+    licensed_version: str | None = None,
 ) -> str:
     """Build and sign a license key.
 
@@ -128,6 +129,10 @@ def issue_license_key(
         company_name: The organization this license is issued to, for
             display in the License Information screen; omit if there
             is no distinct organization beyond ``customer_name``.
+        licensed_version: Cap this key to application versions up to
+            and including this one; ``None`` (the default) leaves the
+            key unrestricted. See
+            :attr:`~licensing.license_key.LicensePayload.licensed_version`.
 
     Returns:
         The signed license key string, ready to hand to the customer.
@@ -145,6 +150,7 @@ def issue_license_key(
         machine_id=machine_id,
         issued_at=resolved_issued_at,
         expires_at=_compute_expires_at(license_type, resolved_issued_at, days),
+        licensed_version=licensed_version,
     )
     return encode_license_key(payload, private_key)
 
@@ -180,6 +186,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument(
         "--output", type=Path, default=None, help="Write the key to this file instead of stdout."
     )
+    issue_parser.add_argument(
+        "--licensed-version",
+        default=None,
+        help="Cap this key to application versions up to and including this one (e.g. 1.2.0).",
+    )
 
     return parser
 
@@ -204,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         machine_id=args.machine_id,
         issued_at=args.issued_at,
         days=args.days,
+        licensed_version=args.licensed_version,
     )
     if args.output:
         args.output.write_text(key + "\n", encoding="utf-8")

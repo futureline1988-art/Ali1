@@ -75,6 +75,20 @@ class LicensePayload:
         features: Optional feature-flag codes this key unlocks, for
             future use (empty by default; nothing in this application
             currently branches on it).
+        licensed_version: The highest application version (e.g.
+            ``"1.2.0"``) this license entitles its holder to run - the
+            standard "perpetual license + maintenance window" pattern:
+            a Monthly/Yearly plan naturally caps at whatever version
+            was current through the subscription period, and a
+            customer who lets a subscription lapse keeps using the
+            version they already have rather than losing access
+            outright. ``None`` (the default, and always the case for
+            keys issued before this field existed) means no version
+            restriction. Added in Phase 1 of the commercial platform
+            work as a foundation field only - nothing reads it yet
+            (see :mod:`licensing.validator.version_check`, added
+            alongside it but not wired into
+            :class:`~licensing.license_service.LicenseService`).
     """
 
     license_id: str
@@ -85,6 +99,7 @@ class LicensePayload:
     expires_at: date | None
     features: tuple[str, ...] = ()
     company_name: str | None = None
+    licensed_version: str | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         """Serialize to a JSON-safe dict (dates as ISO strings, enum as its value)."""
@@ -115,6 +130,7 @@ class LicensePayload:
                 ),
                 features=tuple(data.get("features") or ()),
                 company_name=data.get("company_name"),
+                licensed_version=data.get("licensed_version"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise MalformedLicenseKeyError(f"Malformed license payload: {exc}") from exc
