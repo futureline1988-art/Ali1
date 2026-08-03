@@ -298,6 +298,28 @@ class SyncService(BaseService):
         with self._session_scope() as session:
             return SyncRepository(session).list_conflicts(device_id=device_id)
 
+    def list_recent_activity(self, *, limit: int = 50) -> list[ChangeRecord]:
+        """List the most recent change records of any status, most recent first.
+
+        A read-only administrative view over the same append-only
+        ledger :meth:`push_changes`/:meth:`pull_changes` already read
+        and write — no new data, no new write path, purely a
+        different read shape for a monitoring dashboard (see
+        :mod:`developer_suite.admin.client`) than :meth:`pull_changes`
+        (which only ever returns :attr:`~server.models.sync.ChangeStatus.APPLIED`
+        rows, filtered by cursor) or :meth:`list_conflicts` (only
+        :attr:`~server.models.sync.ChangeStatus.CONFLICT` rows) provide.
+
+        Args:
+            limit: Maximum number of change records to return.
+
+        Returns:
+            Up to ``limit`` change records of any status, most recent
+            first.
+        """
+        with self._session_scope() as session:
+            return SyncRepository(session).list_recent(limit=limit)
+
     def resolve_conflict(self, change_id: int, *, apply_incoming: bool) -> ChangeRecord:
         """Resolve a conflicting change by force-applying or discarding it.
 

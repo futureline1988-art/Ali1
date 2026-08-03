@@ -103,6 +103,29 @@ def list_conflicts(
     return {"conflicts": [conflict.to_dict() for conflict in conflicts]}
 
 
+_MAX_ACTIVITY_LIMIT = 200
+
+
+@router.get("/activity")
+def list_recent_activity(
+    request: Request,
+    limit: int = 50,
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin")),
+) -> dict:
+    """List the most recent change records of any status, for a monitoring dashboard.
+
+    Read-only, administrative (``sync:admin``-scoped, like
+    ``/conflicts``): reuses :meth:`~server.services.sync_service.SyncService.list_recent_activity`
+    unmodified — no new write path, no new business logic, only a
+    broader read shape over the same ledger ``/push``/``/pull`` already
+    use.
+    """
+    sync_service: SyncService = request.app.state.container.sync_service
+    clamped_limit = max(1, min(limit, _MAX_ACTIVITY_LIMIT))
+    changes = sync_service.list_recent_activity(limit=clamped_limit)
+    return {"changes": [change.to_dict() for change in changes]}
+
+
 @router.post("/conflicts/{change_id}/resolve")
 def resolve_conflict(
     change_id: int,

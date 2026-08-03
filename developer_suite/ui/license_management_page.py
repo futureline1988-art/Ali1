@@ -22,6 +22,7 @@ from developer_suite.services.license_service import (
     LicenseService,
     LicenseServiceError,
 )
+from developer_suite.ui.license_details_dialog import LicenseDetailsDialog
 from developer_suite.ui.license_form_dialog import LicenseFormDialog
 
 _COLUMN_LABELS = ("الشركة", "نوع الترخيص", "تاريخ الإصدار", "تاريخ الانتهاء", "الأيام المتبقية", "الحالة")
@@ -101,10 +102,15 @@ class LicenseManagementPage(QWidget):
         self.revoke_button.clicked.connect(self._on_revoke_clicked)
         toolbar.addWidget(self.revoke_button)
 
+        self.details_button = QPushButton("عرض التفاصيل", self)
+        self.details_button.clicked.connect(self._on_details_clicked)
+        toolbar.addWidget(self.details_button)
+
         layout.addLayout(toolbar)
 
         self.table = QTableWidget(0, len(_COLUMN_LABELS), self)
         self.table.setHorizontalHeaderLabels(_COLUMN_LABELS)
+        self.table.doubleClicked.connect(self._on_details_clicked)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -208,3 +214,18 @@ class LicenseManagementPage(QWidget):
             QMessageBox.warning(self, "تعذّر الإلغاء", str(exc))
             return
         self.reload()
+
+    def _on_details_clicked(self, *_args: object) -> None:
+        """Open :class:`~developer_suite.ui.license_details_dialog.LicenseDetailsDialog`.
+
+        Connected to both the "View Details" button's ``clicked`` and
+        the table's ``doubleClicked`` — see
+        :meth:`~developer_suite.ui.customer_management_page.CustomerManagementPage._on_details_clicked`
+        for why the signature accepts and ignores either signal's argument.
+        """
+        license_record = self._selected_license()
+        if license_record is None:
+            QMessageBox.information(self, "التفاصيل", "الرجاء اختيار ترخيص أولاً.")
+            return
+        dialog = LicenseDetailsDialog(license_record, self._license_service, parent=self)
+        dialog.exec()

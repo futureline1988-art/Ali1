@@ -22,6 +22,9 @@ from developer_suite.services.customer_service import (
     CustomerService,
     CustomerServiceError,
 )
+from developer_suite.services.license_service import LicenseService
+from developer_suite.sync.coordinator import SyncCoordinator
+from developer_suite.ui.customer_details_dialog import CustomerDetailsDialog
 from developer_suite.ui.customer_form_dialog import CustomerFormDialog
 
 _COLUMN_LABELS = ("الشركة", "جهة الاتصال", "الهاتف", "البريد الإلكتروني", "الحالة")
@@ -39,16 +42,31 @@ class CustomerManagementPage(QWidget):
     directly, matching this platform's established service/UI boundary.
     """
 
-    def __init__(self, customer_service: CustomerService, *, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        customer_service: CustomerService,
+        license_service: LicenseService,
+        sync_coordinator: SyncCoordinator,
+        *,
+        parent: QWidget | None = None,
+    ) -> None:
         """Build the page and load the initial, unfiltered customer list.
 
         Args:
             customer_service: The service this page performs every
                 operation through.
+            license_service: Passed through to
+                :class:`~developer_suite.ui.customer_details_dialog.CustomerDetailsDialog`
+                for its license-history tab.
+            sync_coordinator: Passed through to
+                :class:`~developer_suite.ui.customer_details_dialog.CustomerDetailsDialog`
+                for its synchronization-status field.
             parent: Optional parent widget.
         """
         super().__init__(parent)
         self._service = customer_service
+        self._license_service = license_service
+        self._sync_coordinator = sync_coordinator
         self._customers: list[Customer] = []
 
         layout = QVBoxLayout(self)
@@ -79,10 +97,15 @@ class CustomerManagementPage(QWidget):
         self.toggle_status_button.clicked.connect(self._on_toggle_status_clicked)
         toolbar.addWidget(self.toggle_status_button)
 
+        self.details_button = QPushButton("عرض التفاصيل", self)
+        self.details_button.clicked.connect(self._on_details_clicked)
+        toolbar.addWidget(self.details_button)
+
         layout.addLayout(toolbar)
 
         self.table = QTableWidget(0, len(_COLUMN_LABELS), self)
         self.table.setHorizontalHeaderLabels(_COLUMN_LABELS)
+        self.table.doubleClicked.connect(self._on_details_clicked)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -181,3 +204,18 @@ class CustomerManagementPage(QWidget):
             QMessageBox.warning(self, "تعذّر تغيير الحالة", str(exc))
             return
         self.reload()
+
+    def _on_details_clicked(self, *_args: object) -> None:
+        """Open :class:`~developer_suite.ui.customer_details_dialog.CustomerDetailsDialog`.
+
+        Connected to both the "View Details" button's ``clicked``
+        (which passes a ``bool``) and the table's ``doubleClicked``
+        (which passes a ``QModelIndex``) — neither argument is used,
+        hence the catch-all signature.
+        """
+        customer = self._selected_customer()
+        if customer is None:
+            QMessageBox.information(self, "التفاصيل", "الرجاء اختيار عميل أولاً.")
+            return
+        dialog = CustomerDetailsDialog(customer, self._license_service, self._sync_coordinator, parent=self)
+        dialog.exec()

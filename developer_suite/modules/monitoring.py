@@ -1,22 +1,31 @@
 """Monitoring module.
 
-Empty in Phase 2. A later phase adds a dashboard over this
-application's own database (total companies, active/expired licenses,
-license expiration calendar) plus, once the sync layer exists,
-online/offline status and last-synchronization display. No remote data
-collection exists yet.
+Phase 10 gives this module its real page: read-only visibility over
+registered devices' online/offline state, recent registrations, and
+recent synchronization activity/failures — see
+:mod:`developer_suite.ui.monitoring_page`. No remote actions of any
+kind; every control reloads a read.
 """
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import QWidget
 
-from developer_suite.modules._placeholder import build_placeholder_page
+from developer_suite.admin.client import AdminApiClient
 from developer_suite.modules.base import PlatformModule
+from developer_suite.ui.monitoring_page import MonitoringPage
 
 
 class MonitoringModule(PlatformModule):
-    """Placeholder implementation — no business logic yet."""
+    """Read-only monitoring: device connectivity and recent synchronization activity."""
+
+    def __init__(self, admin_client: AdminApiClient) -> None:
+        """Create the module bound to its dependency.
+
+        Args:
+            admin_client: The read-only client the page queries.
+        """
+        self._admin_client = admin_client
 
     @property
     def module_id(self) -> str:
@@ -31,4 +40,4 @@ class MonitoringModule(PlatformModule):
         return "Monitoring"
 
     def build_page(self) -> QWidget:
-        return build_placeholder_page(self.display_name_ar)
+        return MonitoringPage(self._admin_client)

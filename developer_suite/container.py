@@ -14,16 +14,22 @@ from __future__ import annotations
 from typing import Callable
 
 from database.database import Database
+from developer_suite.admin.client import AdminApiClient
+from developer_suite.admin.token_provider import ConfiguredAdminTokenProvider
 from developer_suite.config import DeveloperSuiteConfig
 from developer_suite.modules import (
     ALL_MODULES,
     CustomerManagementModule,
+    DashboardModule,
     LicenseManagerModule,
+    MonitoringModule,
     PlatformModule,
     RemoteConfigurationModule,
+    ServerStatusModule,
 )
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
+from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
@@ -50,6 +56,20 @@ class ServiceContainer:
             before the application exits, mirroring exactly how the
             Attendance Client's own ``main.py`` drives
             :class:`~services.scheduler_service.SchedulerService`.
+        admin_token_provider: Supplies the bearer token for
+            :attr:`admin_client`'s administrative calls — a
+            **temporary** Phase 10 bootstrap (see
+            :mod:`developer_suite.admin.token_provider`), replaceable
+            later without touching anything that depends on the
+            :class:`~developer_suite.admin.token_provider.AdminTokenProvider`
+            abstraction instead of this concrete class.
+        admin_client: Read-only client for the Attendance Server's
+            administration endpoints (registered devices, recent sync
+            activity, server status) — see :mod:`developer_suite.admin.client`.
+        dashboard_service: Aggregates :attr:`customer_service`,
+            :attr:`license_service`, :attr:`sync_scheduler`, and
+            :attr:`admin_client` into one dashboard snapshot — see
+            :mod:`developer_suite.services.dashboard_service`.
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
@@ -71,6 +91,15 @@ class ServiceContainer:
         self.sync_coordinator = SyncCoordinator(database, config)
         register_customer_sync(self.sync_coordinator)
         self.sync_scheduler = SyncSchedulerService(self.sync_coordinator, config)
+        self.admin_token_provider = ConfiguredAdminTokenProvider(database)
+        self.admin_client = AdminApiClient(config.attendance_server_url, self.admin_token_provider)
+        self.dashboard_service = DashboardService(
+            self.customer_service,
+            self.license_service,
+            self.sync_scheduler,
+            self.admin_client,
+            config,
+        )
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
     def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:
@@ -85,11 +114,16 @@ class ServiceContainer:
         :meth:`modules`/:meth:`get_module`.
         """
         return {
-            CustomerManagementModule: lambda: CustomerManagementModule(self.customer_service),
+            DashboardModule: lambda: DashboardModule(self.dashboard_service),
+            CustomerManagementModule: lambda: CustomerManagementModule(
+                self.customer_service, self.license_service, self.sync_coordinator
+            ),
             LicenseManagerModule: lambda: LicenseManagerModule(
                 self.license_service, self.customer_service
             ),
             RemoteConfigurationModule: lambda: RemoteConfigurationModule(self.configuration_service),
+            MonitoringModule: lambda: MonitoringModule(self.admin_client),
+            ServerStatusModule: lambda: ServerStatusModule(self.admin_client, self.config),
         }
 
     def _build_modules(self) -> dict[str, PlatformModule]:

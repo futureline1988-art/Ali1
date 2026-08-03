@@ -21,6 +21,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import config as attendance_config_module
 import developer_suite.config as developer_suite_config_module
 from database.database import Database
+from developer_suite.admin.client import AdminApiClient
+from developer_suite.admin.token_provider import ConfiguredAdminTokenProvider
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.container import ServiceContainer
 from developer_suite.database.base import Base as DeveloperSuiteBase
@@ -28,35 +30,60 @@ from developer_suite.database.bootstrap import build_database
 from developer_suite.modules import (
     ALL_MODULES,
     CustomerManagementModule,
+    DashboardModule,
     LicenseManagerModule,
+    MonitoringModule,
     RemoteConfigurationModule,
+    ServerStatusModule,
 )
 from developer_suite.modules.base import PlatformModule
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
+from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
+from developer_suite.sync.coordinator import SyncCoordinator
+from developer_suite.sync.customer_sync import register_customer_sync
+from developer_suite.sync.scheduler import SyncSchedulerService
 from developer_suite.ui.main_window import MainWindow
 from developer_suite.ui.navigation import NavigationSidebar
 
 
-def _construct_module(module_cls: type[PlatformModule], database: Database) -> PlatformModule:
+def _construct_module(
+    module_cls: type[PlatformModule], database: Database, config: DeveloperSuiteConfig
+) -> PlatformModule:
     """Build any registered module class, supplying the real dependency it needs.
 
-    Every module except :class:`CustomerManagementModule`,
-    :class:`LicenseManagerModule`, and :class:`RemoteConfigurationModule`
-    still has a no-argument constructor as of Phase 5; this stays a
-    single, obvious place to extend when a later phase gives another
-    module a real dependency too — mirroring
+    A single, obvious place to extend when a later phase gives another
+    module a real dependency — mirroring
     :meth:`developer_suite.container.ServiceContainer._module_factories`.
     """
+    if module_cls is DashboardModule:
+        customer_service = CustomerService(database)
+        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
+        coordinator = SyncCoordinator(database, config)
+        register_customer_sync(coordinator)
+        scheduler = SyncSchedulerService(coordinator, config)
+        admin_client = AdminApiClient(config.attendance_server_url, ConfiguredAdminTokenProvider(database))
+        dashboard_service = DashboardService(customer_service, license_service, scheduler, admin_client, config)
+        return DashboardModule(dashboard_service)
     if module_cls is CustomerManagementModule:
-        return CustomerManagementModule(CustomerService(database))
+        customer_service = CustomerService(database)
+        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
+        coordinator = SyncCoordinator(database, config)
+        register_customer_sync(coordinator)
+        return CustomerManagementModule(customer_service, license_service, coordinator)
     if module_cls is LicenseManagerModule:
         customer_service = CustomerService(database)
         license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
         return LicenseManagerModule(license_service, customer_service)
     if module_cls is RemoteConfigurationModule:
         return RemoteConfigurationModule(ConfigurationService(database))
+    if module_cls is MonitoringModule:
+        admin_client = AdminApiClient(config.attendance_server_url, ConfiguredAdminTokenProvider(database))
+        return MonitoringModule(admin_client)
+    if module_cls is ServerStatusModule:
+        admin_client = AdminApiClient(config.attendance_server_url, ConfiguredAdminTokenProvider(database))
+        return ServerStatusModule(admin_client, config)
     return module_cls()
 
 
@@ -117,39 +144,51 @@ class TestDatabaseBootstrap:
 class TestModuleInterface:
     @pytest.mark.parametrize("module_cls", ALL_MODULES)
     def test_module_satisfies_platform_module_interface(
-        self, module_cls: type[PlatformModule], dev_suite_database: Database
+        self, module_cls: type[PlatformModule], dev_suite_database: Database, dev_suite_config: DeveloperSuiteConfig
     ) -> None:
-        module = _construct_module(module_cls, dev_suite_database)
+        module = _construct_module(module_cls, dev_suite_database, dev_suite_config)
         assert isinstance(module, PlatformModule)
         assert isinstance(module.module_id, str) and module.module_id
         assert isinstance(module.display_name_ar, str) and module.display_name_ar
         assert isinstance(module.display_name_en, str) and module.display_name_en
 
-    def test_module_ids_are_unique(self, dev_suite_database: Database) -> None:
+    def test_module_ids_are_unique(
+        self, dev_suite_database: Database, dev_suite_config: DeveloperSuiteConfig
+    ) -> None:
         module_ids = [
-            _construct_module(module_cls, dev_suite_database).module_id for module_cls in ALL_MODULES
+            _construct_module(module_cls, dev_suite_database, dev_suite_config).module_id
+            for module_cls in ALL_MODULES
         ]
         assert len(module_ids) == len(set(module_ids))
 
-    def test_all_five_required_modules_are_registered(self, dev_suite_database: Database) -> None:
+    def test_all_required_modules_are_registered(
+        self, dev_suite_database: Database, dev_suite_config: DeveloperSuiteConfig
+    ) -> None:
         module_ids = {
-            _construct_module(module_cls, dev_suite_database).module_id for module_cls in ALL_MODULES
+            _construct_module(module_cls, dev_suite_database, dev_suite_config).module_id
+            for module_cls in ALL_MODULES
         }
         assert module_ids == {
+            "dashboard",
             "customer_management",
             "license_manager",
             "remote_configuration",
             "monitoring",
+            "server_status",
             "update_manager",
         }
 
     @pytest.mark.parametrize("module_cls", ALL_MODULES)
     def test_build_page_returns_a_widget(
-        self, module_cls: type[PlatformModule], dev_suite_database: Database, qapp
+        self,
+        module_cls: type[PlatformModule],
+        dev_suite_database: Database,
+        dev_suite_config: DeveloperSuiteConfig,
+        qapp,
     ) -> None:
         from PySide6.QtWidgets import QWidget
 
-        module = _construct_module(module_cls, dev_suite_database)
+        module = _construct_module(module_cls, dev_suite_database, dev_suite_config)
         page = module.build_page()
         assert isinstance(page, QWidget)
 

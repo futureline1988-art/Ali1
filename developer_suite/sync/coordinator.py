@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from database.database import Database
 from developer_suite.config import DeveloperSuiteConfig
+from developer_suite.models.sync_state import OutboxStatus, SyncOperation
 from developer_suite.repositories.sync_repository import (
     SyncCredentialRepository,
     SyncCursorRepository,
@@ -31,6 +32,28 @@ from developer_suite.repositories.sync_repository import (
 from developer_suite.sync.client import ChangeStatus, ChangeToPush, DeviceType, PulledChange, SyncClient, register_device
 
 Applier = Callable[[Session, PulledChange], None]
+
+
+@dataclass(frozen=True)
+class EntitySyncState:
+    """One entity's current synchronization state, for a details/status view.
+
+    Attributes:
+        known_version: This installation's last confirmed server
+            version for the entity; ``0`` if never synced.
+        pending_operation: The queued outbox entry's operation, if any
+            local change is still waiting to be pushed.
+        pending_status: The queued outbox entry's status, if any.
+        pending_conflict_reason: The queued outbox entry's recorded
+            reason, if its :attr:`pending_status` is
+            :attr:`~developer_suite.models.sync_state.OutboxStatus.CONFLICT`
+            or :attr:`~developer_suite.models.sync_state.OutboxStatus.REJECTED`.
+    """
+
+    known_version: int
+    pending_operation: SyncOperation | None
+    pending_status: OutboxStatus | None
+    pending_conflict_reason: str | None
 
 
 class DeviceNotEnrolledError(Exception):
@@ -154,6 +177,33 @@ class SyncCoordinator:
         """Whether this installation has already enrolled with the Attendance Server."""
         with self._database.session_scope() as session:
             return SyncCredentialRepository(session).get() is not None
+
+    def get_entity_sync_state(self, entity_type: str, entity_id: str) -> EntitySyncState:
+        """Read one entity's current local synchronization state.
+
+        A generic read for a details/status view (e.g. a Customer
+        Details page showing its own sync status) — entirely
+        entity-agnostic, like every other method here; the caller
+        supplies ``entity_type``/``entity_id``, this never hard-codes
+        one.
+
+        Args:
+            entity_type: The entity type to look up.
+            entity_id: The entity's public UUID, as a string.
+
+        Returns:
+            The entity's current known version and any queued,
+            not-yet-pushed local change.
+        """
+        with self._database.session_scope() as session:
+            known_version = SyncEntityVersionRepository(session).get_known_version(entity_type, entity_id)
+            entry = SyncOutboxRepository(session).get_by_entity(entity_type, entity_id)
+            return EntitySyncState(
+                known_version=known_version,
+                pending_operation=entry.operation if entry is not None else None,
+                pending_status=entry.status if entry is not None else None,
+                pending_conflict_reason=entry.conflict_reason if entry is not None else None,
+            )
 
     def _build_client(self, session: Session) -> SyncClient:
         credential = SyncCredentialRepository(session).get()

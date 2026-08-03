@@ -143,3 +143,30 @@ class SyncRepository:
         if device_id is not None:
             statement = statement.where(ChangeRecord.device_id == device_id)
         return list(self.session.execute(statement).unique().scalars().all())
+
+    def list_recent(self, *, limit: int = 50) -> list[ChangeRecord]:
+        """List the most recent change records of any status, most recent first.
+
+        The generic read behind an administrative "recent activity"
+        view (see :meth:`~server.services.sync_service.SyncService.list_recent_activity`) —
+        deliberately unfiltered by status, so a caller can derive
+        "latest activity," "recent errors" (``REJECTED``), or a
+        synchronization-failure view (``CONFLICT``/``REJECTED``) from
+        one query instead of this repository growing one near
+        -duplicate method per view.
+
+        Args:
+            limit: Maximum number of change records to return.
+
+        Returns:
+            Up to ``limit`` change records, most recent first, with
+            each row's device eagerly loaded.
+        """
+        statement = (
+            select(ChangeRecord)
+            .options(joinedload(ChangeRecord.device))
+            .where(ChangeRecord.is_deleted.is_(False))
+            .order_by(ChangeRecord.id.desc())
+            .limit(limit)
+        )
+        return list(self.session.execute(statement).unique().scalars().all())

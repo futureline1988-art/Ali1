@@ -11,6 +11,7 @@ templates.
 
 from __future__ import annotations
 
+from developer_suite.models.admin_token import AdminBootstrapToken
 from developer_suite.models.attendance_policy_profile import AttendancePolicyProfile
 from developer_suite.models.backup_profile import BackupLocationType, BackupProfile
 from developer_suite.models.customer import Customer, CustomerStatus
@@ -48,4 +49,5 @@ __all__ = [
     "SyncOutboxEntry",
     "SyncOperation",
     "OutboxStatus",
+    "AdminBootstrapToken",
 ]
