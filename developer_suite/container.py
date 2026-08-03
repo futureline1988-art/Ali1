@@ -14,8 +14,9 @@ from __future__ import annotations
 from typing import Callable
 
 from database.database import Database
+from developer_suite.admin.auth_client import AdminAuthClient
 from developer_suite.admin.client import AdminApiClient
-from developer_suite.admin.token_provider import ConfiguredAdminTokenProvider
+from developer_suite.admin.session_manager import AdminSessionManager
 from developer_suite.config import DeveloperSuiteConfig
 from developer_suite.modules import (
     ALL_MODULES,
@@ -56,13 +57,14 @@ class ServiceContainer:
             before the application exits, mirroring exactly how the
             Attendance Client's own ``main.py`` drives
             :class:`~services.scheduler_service.SchedulerService`.
-        admin_token_provider: Supplies the bearer token for
-            :attr:`admin_client`'s administrative calls — a
-            **temporary** Phase 10 bootstrap (see
-            :mod:`developer_suite.admin.token_provider`), replaceable
-            later without touching anything that depends on the
-            :class:`~developer_suite.admin.token_provider.AdminTokenProvider`
-            abstraction instead of this concrete class.
+        admin_auth_client: Talks to the Attendance Server's
+            ``/api/v1/auth/*`` endpoints (login, refresh, logout,
+            password change) — see :mod:`developer_suite.admin.auth_client`.
+        admin_session_manager: Owns the current admin session's state
+            (Phase 11 — see :mod:`developer_suite.admin.session_manager`);
+            the concrete :class:`~developer_suite.admin.token_provider.AdminTokenProvider`
+            implementation, replacing Phase 10's temporary
+            ``ConfiguredAdminTokenProvider`` bootstrap.
         admin_client: Read-only client for the Attendance Server's
             administration endpoints (registered devices, recent sync
             activity, server status) — see :mod:`developer_suite.admin.client`.
@@ -91,8 +93,9 @@ class ServiceContainer:
         self.sync_coordinator = SyncCoordinator(database, config)
         register_customer_sync(self.sync_coordinator)
         self.sync_scheduler = SyncSchedulerService(self.sync_coordinator, config)
-        self.admin_token_provider = ConfiguredAdminTokenProvider(database)
-        self.admin_client = AdminApiClient(config.attendance_server_url, self.admin_token_provider)
+        self.admin_auth_client = AdminAuthClient(config.attendance_server_url)
+        self.admin_session_manager = AdminSessionManager(database, self.admin_auth_client)
+        self.admin_client = AdminApiClient(config.attendance_server_url, self.admin_session_manager)
         self.dashboard_service = DashboardService(
             self.customer_service,
             self.license_service,

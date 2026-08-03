@@ -110,12 +110,14 @@ _MAX_ACTIVITY_LIMIT = 200
 def list_recent_activity(
     request: Request,
     limit: int = 50,
-    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin")),
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin", "sync:read")),
 ) -> dict:
     """List the most recent change records of any status, for a monitoring dashboard.
 
-    Read-only, administrative (``sync:admin``-scoped, like
-    ``/conflicts``): reuses :meth:`~server.services.sync_service.SyncService.list_recent_activity`
+    Read-only: accepts either ``sync:admin`` or ``sync:read`` (unlike
+    ``/conflicts``, which stays ``sync:admin``-only since resolving a
+    conflict is a write). Reuses
+    :meth:`~server.services.sync_service.SyncService.list_recent_activity`
     unmodified — no new write path, no new business logic, only a
     broader read shape over the same ledger ``/push``/``/pull`` already
     use.

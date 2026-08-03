@@ -1,12 +1,15 @@
-"""Developer Suite administration: read-only Attendance Server monitoring.
+"""Developer Suite administration: authentication + Attendance Server monitoring.
 
-Everything here is Phase 10's "Developer Dashboard & Administration"
-work — reading, never writing, remote operational state (registered
-devices, recent sync activity, server health) over the Attendance
-Server's read-only administrative APIs. See
-:mod:`developer_suite.admin.token_provider` for the temporary
-bootstrap-token mechanism these calls authenticate with, and
-:mod:`developer_suite.admin.client` for the HTTP client itself.
+:mod:`developer_suite.admin.client` reads, never writes, remote
+operational state (registered devices, recent sync activity, server
+health) over the Attendance Server's administrative APIs — Phase 10's
+"Developer Dashboard & Administration" work. Those calls authenticate
+via the :class:`~developer_suite.admin.token_provider.AdminTokenProvider`
+abstraction, whose real implementation
+(:class:`~developer_suite.admin.session_manager.AdminSessionManager`,
+backed by :mod:`developer_suite.admin.auth_client`) is Phase 11's real
+login/session/refresh/logout system, replacing Phase 10's temporary
+bootstrap token.
 """
 
 from __future__ import annotations

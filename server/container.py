@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from database.database import Database
 from server.config import ServerConfig
+from server.services.admin_auth_service import AdminAuthService
 from server.services.device_service import DeviceService
 from server.services.sync_service import SyncService
 
@@ -28,6 +29,11 @@ class ServiceContainer:
         device_service: Registers and authenticates devices.
         sync_service: Push/pull/conflict-resolution against the
             generic change ledger.
+        admin_auth_service: Login/refresh/logout/password-change-and
+            -reset for admin accounts (Phase 11) — entirely unrelated
+            to :attr:`device_service`/:attr:`sync_service`'s device
+            -credential auth, see
+            :mod:`server.services.admin_auth_service`'s own docstring.
     """
 
     def __init__(self, config: ServerConfig, database: Database) -> None:
@@ -42,3 +48,4 @@ class ServiceContainer:
         self.database = database
         self.device_service = DeviceService(database, config=config)
         self.sync_service = SyncService(database)
+        self.admin_auth_service = AdminAuthService(database, config=config)

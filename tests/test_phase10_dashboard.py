@@ -53,10 +53,8 @@ from developer_suite.admin.client import (
     ServerStatus,
     SyncActivityEntry,
 )
-from developer_suite.admin.token_provider import ConfiguredAdminTokenProvider
 from developer_suite.config import DeveloperSuiteConfig, DeveloperSuitePaths, get_developer_suite_config
 from developer_suite.database.bootstrap import build_database as build_dev_suite_database
-from developer_suite.repositories.admin_token_repository import AdminBootstrapTokenRepository
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
@@ -273,46 +271,15 @@ class TestServerAdminEndpoints:
 
 
 # ---------------------------------------------------------------------------
-# AdminTokenProvider: temporary bootstrap, encrypted persistence.
-# ---------------------------------------------------------------------------
-
-
-class TestConfiguredAdminTokenProvider:
-    def test_returns_none_when_nothing_is_configured(self, dev_suite_database, monkeypatch) -> None:
-        monkeypatch.delenv("DEV_SUITE_SYNC_ADMIN_TOKEN", raising=False)
-        provider = ConfiguredAdminTokenProvider(dev_suite_database)
-        assert provider.get_token() is None
-
-    def test_reads_from_environment_once_and_persists(self, dev_suite_database, monkeypatch) -> None:
-        monkeypatch.setenv("DEV_SUITE_SYNC_ADMIN_TOKEN", "secret-token-abc")
-        provider = ConfiguredAdminTokenProvider(dev_suite_database)
-        assert provider.get_token() == "secret-token-abc"
-
-        with dev_suite_database.session_scope() as session:
-            record = AdminBootstrapTokenRepository(session).get()
-            assert record is not None
-            assert record.token == "secret-token-abc"
-
-    def test_second_call_reads_the_stored_token_even_if_env_var_is_removed(
-        self, dev_suite_database, monkeypatch
-    ) -> None:
-        monkeypatch.setenv("DEV_SUITE_SYNC_ADMIN_TOKEN", "secret-token-abc")
-        provider = ConfiguredAdminTokenProvider(dev_suite_database)
-        provider.get_token()
-
-        monkeypatch.delenv("DEV_SUITE_SYNC_ADMIN_TOKEN")
-        assert provider.get_token() == "secret-token-abc"
-
-    def test_token_is_encrypted_at_rest(self, dev_suite_database, dev_suite_config, monkeypatch) -> None:
-        monkeypatch.setenv("DEV_SUITE_SYNC_ADMIN_TOKEN", "super-secret-value")
-        ConfiguredAdminTokenProvider(dev_suite_database).get_token()
-
-        raw_bytes = dev_suite_config.database.sqlite_path.read_bytes()
-        assert b"super-secret-value" not in raw_bytes
-
-
-# ---------------------------------------------------------------------------
 # AdminApiClient, against a real running server.
+#
+# The Phase 10 ConfiguredAdminTokenProvider/AdminBootstrapToken bootstrap
+# mechanism that used to be tested here was replaced outright in Phase
+# 11 by real authentication (see tests/test_phase11_server_auth.py and
+# tests/test_phase11_developer_suite_auth.py) — AdminApiClient itself
+# needs no change, since it always depended only on the
+# AdminTokenProvider abstraction, exercised below via a test-only
+# _StaticTokenProvider.
 # ---------------------------------------------------------------------------
 
 
@@ -655,14 +622,18 @@ class TestServerStatusPage:
 
 
 class TestZeroImpactOnOtherApplications:
-    def test_admin_bootstrap_table_lives_only_in_developer_suite_schema(self) -> None:
+    def test_admin_session_record_table_lives_only_in_developer_suite_schema(self) -> None:
+        """Phase 10's ``admin_bootstrap_token`` table was replaced outright
+        by Phase 11's ``admin_session_record`` (see
+        tests.test_phase11_developer_suite_auth) — this isolation check
+        follows the same table under its new name."""
         from developer_suite.database.base import Base as DeveloperSuiteBase
         from models.base import Base as AttendanceBase
         from server.database.base import Base as ServerBase
 
-        assert "admin_bootstrap_token" in DeveloperSuiteBase.metadata.tables
-        assert "admin_bootstrap_token" not in AttendanceBase.metadata.tables
-        assert "admin_bootstrap_token" not in ServerBase.metadata.tables
+        assert "admin_session_record" in DeveloperSuiteBase.metadata.tables
+        assert "admin_session_record" not in AttendanceBase.metadata.tables
+        assert "admin_session_record" not in ServerBase.metadata.tables
 
     def test_new_server_endpoints_import_nothing_from_developer_suite(self) -> None:
         import ast

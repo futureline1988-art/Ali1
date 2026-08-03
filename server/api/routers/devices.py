@@ -48,12 +48,14 @@ def register_device(
 @router.get("")
 def list_devices(
     request: Request,
-    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin")),
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin", "sync:read")),
 ) -> dict:
     """List every registered device (both Attendance Client and Developer Suite installations).
 
     Never includes ``api_key_hash`` — same exclusion
-    :func:`register_device` already applies.
+    :func:`register_device` already applies. Read-only, so a
+    ``sync:read``-scoped token (e.g. a Phase 11 ``VIEWER`` admin
+    account) suffices, not only ``sync:admin``.
     """
     device_service: DeviceService = request.app.state.container.device_service
     devices = device_service.list_devices()

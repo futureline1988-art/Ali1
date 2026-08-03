@@ -4,9 +4,10 @@ Deliberately separate from the existing, unauthenticated ``/health``
 and ``/version`` (see :mod:`server.api.routers.health`/:mod:`server.api.routers.version`,
 both left completely unchanged) — this endpoint exposes operational
 detail (live database connectivity, process uptime) one level beyond a
-bare liveness probe, so it is gated behind ``require_scope("sync:admin")``
-like every other administrative endpoint, per Phase 10's explicit
-"keep all new server endpoints protected" requirement.
+bare liveness probe, so it is gated behind an authenticated, scoped
+token (``sync:admin`` or, since it is read-only, ``sync:read``), per
+Phase 10's explicit "keep all new server endpoints protected"
+requirement.
 
 Reuses :meth:`~database.database.Database.check_connection` unmodified
 for the database check — no new connectivity-probing logic.
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/api/v1", tags=["status"])
 @router.get("/status")
 def get_status(
     request: Request,
-    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin")),
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin", "sync:read")),
 ) -> dict:
     """Report this server's version, live database connectivity, and uptime.
 

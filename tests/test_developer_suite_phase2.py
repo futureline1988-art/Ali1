@@ -22,7 +22,6 @@ import config as attendance_config_module
 import developer_suite.config as developer_suite_config_module
 from database.database import Database
 from developer_suite.admin.client import AdminApiClient
-from developer_suite.admin.token_provider import ConfiguredAdminTokenProvider
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.container import ServiceContainer
 from developer_suite.database.base import Base as DeveloperSuiteBase
@@ -48,6 +47,21 @@ from developer_suite.ui.main_window import MainWindow
 from developer_suite.ui.navigation import NavigationSidebar
 
 
+class _NullAdminTokenProvider:
+    """A test-only :class:`~developer_suite.admin.token_provider.AdminTokenProvider`
+    that never has a token.
+
+    These module-construction tests only need *some* object satisfying
+    the abstraction — never an actual authenticated call — so a bare
+    stub is enough; the real implementation is
+    :class:`~developer_suite.admin.session_manager.AdminSessionManager`
+    (Phase 11), exercised in its own test file.
+    """
+
+    def get_token(self) -> str | None:
+        return None
+
+
 def _construct_module(
     module_cls: type[PlatformModule], database: Database, config: DeveloperSuiteConfig
 ) -> PlatformModule:
@@ -63,7 +77,7 @@ def _construct_module(
         coordinator = SyncCoordinator(database, config)
         register_customer_sync(coordinator)
         scheduler = SyncSchedulerService(coordinator, config)
-        admin_client = AdminApiClient(config.attendance_server_url, ConfiguredAdminTokenProvider(database))
+        admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
         dashboard_service = DashboardService(customer_service, license_service, scheduler, admin_client, config)
         return DashboardModule(dashboard_service)
     if module_cls is CustomerManagementModule:
@@ -79,10 +93,10 @@ def _construct_module(
     if module_cls is RemoteConfigurationModule:
         return RemoteConfigurationModule(ConfigurationService(database))
     if module_cls is MonitoringModule:
-        admin_client = AdminApiClient(config.attendance_server_url, ConfiguredAdminTokenProvider(database))
+        admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
         return MonitoringModule(admin_client)
     if module_cls is ServerStatusModule:
-        admin_client = AdminApiClient(config.attendance_server_url, ConfiguredAdminTokenProvider(database))
+        admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
         return ServerStatusModule(admin_client, config)
     return module_cls()
 

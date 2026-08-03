@@ -44,3 +44,43 @@ class ResolveConflictRequest(BaseModel):
     """POST /api/v1/sync/conflicts/{change_id}/resolve request body."""
 
     apply_incoming: bool
+
+
+class AdminLoginRequest(BaseModel):
+    """POST /api/v1/auth/login request body."""
+
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1)
+    user_agent: str | None = Field(default=None, max_length=200)
+
+
+class AdminRefreshRequest(BaseModel):
+    """POST /api/v1/auth/refresh request body."""
+
+    refresh_token: str = Field(min_length=1)
+
+
+class AdminLogoutRequest(BaseModel):
+    """POST /api/v1/auth/logout request body."""
+
+    refresh_token: str = Field(min_length=1)
+
+
+class AdminChangePasswordRequest(BaseModel):
+    """POST /api/v1/auth/change-password request body."""
+
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
+class AdminPasswordResetRequestBody(BaseModel):
+    """POST /api/v1/auth/password-reset/request request body."""
+
+    username: str = Field(min_length=1, max_length=100)
+
+
+class AdminPasswordResetCompleteRequest(BaseModel):
+    """POST /api/v1/auth/password-reset/complete request body."""
+
+    reset_token: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
