@@ -11,5 +11,6 @@ customers and licenses.
 from __future__ import annotations
 
 from developer_suite.models.customer import Customer, CustomerStatus
+from developer_suite.models.license import IssuedLicense, IssuedLicenseStatus
 
-__all__ = ["Customer", "CustomerStatus"]
+__all__ = ["Customer", "CustomerStatus", "IssuedLicense", "IssuedLicenseStatus"]

@@ -101,6 +101,15 @@ class DeveloperSuiteConfig:
         security: Reuses :class:`config.SecurityConfig` directly.
         logging: Reuses :class:`config.LoggingConfig` directly, with
             its own log file name.
+        licensing_private_key_path: Where this application looks for
+            the vendor's Ed25519 signing private key — the same key
+            format :mod:`licensing.license_generator` and
+            :mod:`licensing.crypto.signing` use, held only by this
+            application, never the Attendance Client. A missing file
+            at this path simply means license issuance isn't available
+            yet (see
+            :class:`~developer_suite.services.license_service.LicenseSigningKeyError`);
+            nothing else in the Developer Suite depends on it.
     """
 
     app_name: str = "Developer Suite"
@@ -111,6 +120,11 @@ class DeveloperSuiteConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    licensing_private_key_path: Path = field(
+        default_factory=lambda: DeveloperSuitePaths.default().data_dir
+        / "keys"
+        / "license_private_key.pem"
+    )
 
     @classmethod
     def load(cls) -> "DeveloperSuiteConfig":
@@ -143,6 +157,13 @@ class DeveloperSuiteConfig:
 
         logging_config = LoggingConfig(log_file_name="developer_suite.log")
 
+        licensing_private_key_path = Path(
+            os.getenv(
+                "DEV_SUITE_LICENSE_PRIVATE_KEY_PATH",
+                str(paths.data_dir / "keys" / "license_private_key.pem"),
+            )
+        )
+
         return cls(
             app_name=os.getenv("DEV_SUITE_APP_NAME", cls.app_name),
             app_version=os.getenv("DEV_SUITE_APP_VERSION", cls.app_version),
@@ -151,6 +172,7 @@ class DeveloperSuiteConfig:
             database=database,
             security=SecurityConfig.from_env(),
             logging=logging_config,
+            licensing_private_key_path=licensing_private_key_path,
         )
 
 

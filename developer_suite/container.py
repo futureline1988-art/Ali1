@@ -15,8 +15,14 @@ from typing import Callable
 
 from database.database import Database
 from developer_suite.config import DeveloperSuiteConfig
-from developer_suite.modules import ALL_MODULES, CustomerManagementModule, PlatformModule
+from developer_suite.modules import (
+    ALL_MODULES,
+    CustomerManagementModule,
+    LicenseManagerModule,
+    PlatformModule,
+)
 from developer_suite.services.customer_service import CustomerService
+from developer_suite.services.license_service import LicenseService
 
 
 class ServiceContainer:
@@ -39,6 +45,9 @@ class ServiceContainer:
         self.config = config
         self.database = database
         self.customer_service = CustomerService(database)
+        self.license_service = LicenseService(
+            database, private_key_path=config.licensing_private_key_path
+        )
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
     def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:
@@ -54,6 +63,9 @@ class ServiceContainer:
         """
         return {
             CustomerManagementModule: lambda: CustomerManagementModule(self.customer_service),
+            LicenseManagerModule: lambda: LicenseManagerModule(
+                self.license_service, self.customer_service
+            ),
         }
 
     def _build_modules(self) -> dict[str, PlatformModule]:
