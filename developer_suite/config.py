@@ -110,6 +110,12 @@ class DeveloperSuiteConfig:
             yet (see
             :class:`~developer_suite.services.license_service.LicenseSigningKeyError`);
             nothing else in the Developer Suite depends on it.
+        attendance_server_url: Base URL of the Attendance Server this
+            installation synchronizes against (see
+            :mod:`developer_suite.sync.client`). Purely configuration
+            — knowing the URL grants no access by itself; every actual
+            call still authenticates with either a device credential
+            or an admin bearer token.
     """
 
     app_name: str = "Developer Suite"
@@ -125,6 +131,7 @@ class DeveloperSuiteConfig:
         / "keys"
         / "license_private_key.pem"
     )
+    attendance_server_url: str = "http://127.0.0.1:8000"
 
     @classmethod
     def load(cls) -> "DeveloperSuiteConfig":
@@ -173,6 +180,9 @@ class DeveloperSuiteConfig:
             security=SecurityConfig.from_env(),
             logging=logging_config,
             licensing_private_key_path=licensing_private_key_path,
+            attendance_server_url=os.getenv(
+                "DEV_SUITE_ATTENDANCE_SERVER_URL", cls.attendance_server_url
+            ),
         )
 
 

@@ -5,7 +5,7 @@
 metadata namespace, per the platform's ownership boundary (see
 ``developer_suite/__init__.py``).
 
-:class:`DeveloperSuiteBaseModel` reuses four mixins directly from
+:class:`DeveloperSuiteBaseModel` reuses five mixins directly from
 ``models.base`` unmodified (:class:`~models.base.IdMixin`,
 :class:`~models.base.UUIDMixin`, :class:`~models.base.TimestampMixin`,
 :class:`~models.base.SoftDeleteMixin`, :class:`~models.base.TableNameMixin`)
@@ -16,6 +16,14 @@ cleanly with this package's own ``Base``. This is the "avoid duplicate
 implementations" platform rule applied concretely: the *behavior* of a
 soft-deletable, timestamped, UUID-bearing row exists in exactly one
 place in this codebase.
+
+Phase 8 adds :class:`~models.base.SerializationMixin` to that
+composition, for the same reason ``server/database/base.py`` added it
+in Phase 7: a model that participates in synchronization needs a
+generic, reflection-based ``to_dict()`` to build its outbound sync
+payload from (see :mod:`developer_suite.services.customer_service`).
+Purely additive — every model built before Phase 8 keeps working
+unchanged.
 """
 
 from __future__ import annotations
@@ -23,7 +31,14 @@ from __future__ import annotations
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
 
-from models.base import IdMixin, SoftDeleteMixin, TableNameMixin, TimestampMixin, UUIDMixin
+from models.base import (
+    IdMixin,
+    SerializationMixin,
+    SoftDeleteMixin,
+    TableNameMixin,
+    TimestampMixin,
+    UUIDMixin,
+)
 
 # Same naming convention as models/base.py, for the same reason: stable,
 # dialect-independent constraint/index names if/when this schema is ever
@@ -53,6 +68,7 @@ class Base(DeclarativeBase):
 
 class DeveloperSuiteBaseModel(
     TableNameMixin,
+    SerializationMixin,
     SoftDeleteMixin,
     TimestampMixin,
     UUIDMixin,
@@ -62,11 +78,13 @@ class DeveloperSuiteBaseModel(
     """Abstract base every concrete Developer Suite model inherits from.
 
     Combines automatic table naming, an integer primary key, a public
-    UUID, created/updated timestamps, and soft delete — the same
-    composition ``models.base.BaseModel`` uses for the Attendance
-    Client, minus the two mixins (``VersionMixin``, ``AuditMixin``)
-    Phase 3 has no use for yet. A later phase can add them the same
-    way, without touching any existing column.
+    UUID, created/updated timestamps, soft delete, and generic
+    ``to_dict``/``update_from_dict`` (see
+    :class:`~models.base.SerializationMixin`) — the same composition
+    ``models.base.BaseModel`` uses for the Attendance Client, minus the
+    two mixins (``VersionMixin``, ``AuditMixin``) nothing here needs
+    yet. A later phase can add them the same way, without touching any
+    existing column.
 
     Example:
         >>> class Customer(DeveloperSuiteBaseModel):

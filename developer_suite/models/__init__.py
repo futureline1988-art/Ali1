@@ -18,6 +18,14 @@ from developer_suite.models.device_profile import DeviceProfile
 from developer_suite.models.license import IssuedLicense, IssuedLicenseStatus
 from developer_suite.models.print_profile import PaperSize, PrintProfile
 from developer_suite.models.remote_configuration import RemoteConfiguration
+from developer_suite.models.sync_state import (
+    OutboxStatus,
+    SyncCursor,
+    SyncDeviceCredential,
+    SyncEntityVersion,
+    SyncOperation,
+    SyncOutboxEntry,
+)
 from developer_suite.models.theme_profile import ThemeMode, ThemeProfile
 
 __all__ = [
@@ -34,4 +42,10 @@ __all__ = [
     "BackupProfile",
     "BackupLocationType",
     "RemoteConfiguration",
+    "SyncDeviceCredential",
+    "SyncCursor",
+    "SyncEntityVersion",
+    "SyncOutboxEntry",
+    "SyncOperation",
+    "OutboxStatus",
 ]

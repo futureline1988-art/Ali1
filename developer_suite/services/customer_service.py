@@ -5,14 +5,36 @@ Reuses ``utils.validators`` directly (``is_valid_email``,
 stdlib-only helpers already documented as shared between the desktop
 UI and service layers, exactly the kind of shared library this
 platform's design rules call for reusing rather than reimplementing.
+
+Phase 8 adds one small addition: every create/update/delete/suspend
+/reactivate also queues an outbox entry via
+:meth:`CustomerService._enqueue_sync`, inside the *same* transaction as
+the business write it accompanies — see that method's docstring for
+why atomicity here matters, and
+:mod:`developer_suite.sync.coordinator` for what actually drains the
+queue. This is the only Customer-specific code Phase 8 adds to this
+service; everything the queue entry is built from
+(:func:`~developer_suite.sync.protocol.compute_checksum`, the outbox's
+coalescing :meth:`~developer_suite.repositories.sync_repository.SyncOutboxRepository.enqueue`)
+is entirely generic and already existed for any future entity to reuse
+unchanged.
 """
 
 from __future__ import annotations
 
+from sqlalchemy.orm import Session
+
 from developer_suite.models.customer import Customer, CustomerStatus
 from developer_suite.repositories.customer_repository import CustomerRepository
+from developer_suite.repositories.sync_repository import SyncEntityVersionRepository, SyncOutboxRepository
 from developer_suite.services.base_service import BaseService
+from developer_suite.sync.protocol import SyncOperation, compute_checksum
 from utils.validators import is_valid_email, is_valid_phone, is_within_length
+
+# Must match developer_suite.sync.customer_sync.ENTITY_TYPE — the
+# string identifying this entity type on both sides of the outbox
+# (this service's writer side, and that module's pull-applier side).
+_SYNC_ENTITY_TYPE = "customer"
 
 
 class CustomerServiceError(Exception):
@@ -29,6 +51,40 @@ class CustomerNotFoundError(CustomerServiceError):
 
 class CustomerService(BaseService):
     """Create, update, search, suspend, and reactivate customer records."""
+
+    def _enqueue_sync(self, session: Session, customer: Customer, operation: SyncOperation) -> None:
+        """Queue ``customer``'s current state as one outbox entry, in the caller's own transaction.
+
+        Must be called with the *same* ``session`` the business write
+        was made on, before that ``with self._session_scope() as
+        session:`` block exits — never from a separately opened
+        transaction. Otherwise a crash between the two commits could
+        leave the business row persisted with no corresponding outbox
+        entry, silently dropping the change from synchronization
+        entirely, which no amount of retrying inside
+        :mod:`developer_suite.sync.coordinator` could ever recover
+        from (it would have nothing queued to retry).
+
+        Args:
+            session: The open session for the current unit of work.
+            customer: The customer whose current state to queue —
+                already flushed, so ``customer.public_id`` is
+                populated.
+            operation: What kind of change this is.
+        """
+        entity_id = str(customer.public_id)
+        known_version = SyncEntityVersionRepository(session).get_known_version(
+            _SYNC_ENTITY_TYPE, entity_id
+        )
+        payload = customer.to_dict(exclude={"id", "created_at", "updated_at"})
+        SyncOutboxRepository(session).enqueue(
+            entity_type=_SYNC_ENTITY_TYPE,
+            entity_id=entity_id,
+            operation=operation,
+            payload=payload,
+            checksum=compute_checksum(payload),
+            base_version=known_version,
+        )
 
     def _validate(
         self,
@@ -97,6 +153,7 @@ class CustomerService(BaseService):
                 status=CustomerStatus.ACTIVE,
             )
             CustomerRepository(session).add(customer)
+            self._enqueue_sync(session, customer, SyncOperation.CREATE)
             return customer
 
     def update_customer(
@@ -142,6 +199,7 @@ class CustomerService(BaseService):
             customer.address = address.strip() if address else None
             customer.notes = notes.strip() if notes else None
             session.flush()
+            self._enqueue_sync(session, customer, SyncOperation.UPDATE)
             return customer
 
     def delete_customer(self, customer_id: int) -> None:
@@ -159,6 +217,7 @@ class CustomerService(BaseService):
             if customer is None:
                 raise CustomerNotFoundError(f"No customer with id={customer_id!r}.")
             repo.delete(customer)
+            self._enqueue_sync(session, customer, SyncOperation.DELETE)
 
     def get_customer(self, customer_id: int) -> Customer | None:
         """Fetch a single customer by id.
@@ -194,6 +253,7 @@ class CustomerService(BaseService):
                 raise CustomerNotFoundError(f"No customer with id={customer_id!r}.")
             customer.status = status
             session.flush()
+            self._enqueue_sync(session, customer, SyncOperation.UPDATE)
             return customer
 
     def suspend(self, customer_id: int) -> Customer:

@@ -45,6 +45,11 @@ pyzk==0.9                        # ZKTeco TCP/IP & UDP protocol client
 requests==2.32.3                  # HTTP client (Hikvision ISAPI, external sync)
 fastapi==0.112.0                  # Optional REST API layer - see api/ and run_api.py
 uvicorn==0.30.6                   # ASGI server for the FastAPI layer
+httpx==0.28.1                     # HTTP client for developer_suite/sync (Attendance
+                                   # Server push/pull) - ASGI-transportable, so the
+                                   # same client class is exercised in tests with no
+                                   # real socket; also required by
+                                   # fastapi.testclient.TestClient (see below)
 
 # ---- Configuration / Environment --------------------------------------------
 python-dotenv==1.0.1               # Load environment variables from .env
@@ -58,4 +63,3 @@ APScheduler==3.10.4                # Background job scheduling (threaded)
 # ---- Testing (development) ---------------------------------------------------
 pytest==8.3.2
 pytest-qt==4.4.0
-httpx==0.28.1                     # Required by fastapi.testclient.TestClient
