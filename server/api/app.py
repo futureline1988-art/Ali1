@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from database.database import Database
-from server.api.routers import health, version
+from server.api.routers import devices, health, sync, version
 from server.config import ServerConfig
 from server.container import ServiceContainer
 from utils.logger import logger
@@ -34,9 +34,11 @@ def create_app(config: ServerConfig, database: Database) -> FastAPI:
 
     Returns:
         A ready-to-serve :class:`~fastapi.FastAPI` instance with
-        ``/health`` and ``/version`` mounted and a catch-all error
-        handler installed. No business router is mounted yet — see
-        this package's parent ``__init__.py``.
+        ``/health``, ``/version``, device registration, and the
+        push/pull/conflict-resolution sync endpoints mounted, plus a
+        catch-all error handler. Still no business-domain router
+        (customers, licenses, configuration, ...) — see this package's
+        parent ``__init__.py``.
     """
     app = FastAPI(
         title=config.app_name,
@@ -48,6 +50,8 @@ def create_app(config: ServerConfig, database: Database) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(version.router)
+    app.include_router(devices.router)
+    app.include_router(sync.router)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

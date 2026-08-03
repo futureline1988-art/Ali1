@@ -1,0 +1,46 @@
+"""Pydantic request models for the Attendance Server API.
+
+Mirrors ``api/schemas.py``'s own convention exactly: Pydantic models
+here validate *requests*; response bodies are plain ``dict`` built from
+:meth:`~models.base.SerializationMixin.to_dict` (now part of
+:class:`~server.database.base.ServerBaseModel`'s composition — see
+that module's docstring), the same ORM-to-dict path
+``api/schemas.py``'s own docstring describes.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+from server.models.device import DeviceType
+from server.models.sync import SyncOperation
+
+
+class DeviceRegisterRequest(BaseModel):
+    """POST /api/v1/devices/register request body."""
+
+    name: str = Field(min_length=1, max_length=200)
+    device_type: DeviceType
+
+
+class ChangeItemRequest(BaseModel):
+    """One entry in a POST /api/v1/sync/push request body's ``changes`` list."""
+
+    entity_type: str = Field(min_length=1, max_length=100)
+    entity_id: str = Field(min_length=1, max_length=64)
+    operation: SyncOperation
+    payload: dict
+    checksum: str = Field(min_length=64, max_length=64)
+    base_version: int = Field(default=0, ge=0)
+
+
+class PushRequest(BaseModel):
+    """POST /api/v1/sync/push request body."""
+
+    changes: list[ChangeItemRequest] = Field(min_length=1, max_length=500)
+
+
+class ResolveConflictRequest(BaseModel):
+    """POST /api/v1/sync/conflicts/{change_id}/resolve request body."""
+
+    apply_incoming: bool

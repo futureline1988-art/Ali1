@@ -1,21 +1,22 @@
 """Minimal dependency-injection container for the Attendance Server.
 
 Mirrors ``developer_suite/container.py``'s role: one place holding
-this server's configuration and database, so route handlers depend on
-this container (via ``request.app.state.container``, wired in
-:func:`server.api.app.create_app`) rather than reaching for any
-process-wide singleton. Holds no services yet — Phase 6 has none to
-hold (see ``server/services/__init__.py``); a later phase extends
-:class:`ServiceContainer` the same way
-:class:`developer_suite.container.ServiceContainer` already grew from
-holding nothing to holding ``customer_service``, ``license_service``,
-and ``configuration_service`` one phase at a time.
+this server's configuration, database, and services, so route handlers
+depend on this container (via ``request.app.state.container``, wired
+in :func:`server.api.app.create_app`) rather than reaching for any
+process-wide singleton. Phase 7 is the first phase with services to
+hold — grown one phase at a time, the same way
+:class:`developer_suite.container.ServiceContainer` grew from holding
+nothing to holding ``customer_service``, ``license_service``, and
+``configuration_service``.
 """
 
 from __future__ import annotations
 
 from database.database import Database
 from server.config import ServerConfig
+from server.services.device_service import DeviceService
+from server.services.sync_service import SyncService
 
 
 class ServiceContainer:
@@ -24,10 +25,13 @@ class ServiceContainer:
     Attributes:
         config: This server's configuration.
         database: This server's own database.
+        device_service: Registers and authenticates devices.
+        sync_service: Push/pull/conflict-resolution against the
+            generic change ledger.
     """
 
     def __init__(self, config: ServerConfig, database: Database) -> None:
-        """Create a container.
+        """Create a container, constructing every service.
 
         Args:
             config: This server's configuration.
@@ -36,3 +40,5 @@ class ServiceContainer:
         """
         self.config = config
         self.database = database
+        self.device_service = DeviceService(database, config=config)
+        self.sync_service = SyncService(database)

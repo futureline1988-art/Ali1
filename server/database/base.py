@@ -7,8 +7,8 @@ schemas that must never share one metadata namespace, per the
 platform's ownership boundary (see this package's parent
 ``server/__init__.py``).
 
-:class:`ServerBaseModel` reuses the same four mixins directly from
-``models.base`` that both other schemas already reuse
+:class:`ServerBaseModel` reuses the same mixins directly from
+``models.base`` that the other two schemas already reuse
 (:class:`~models.base.IdMixin`, :class:`~models.base.UUIDMixin`,
 :class:`~models.base.TimestampMixin`, :class:`~models.base.SoftDeleteMixin`,
 :class:`~models.base.TableNameMixin`) — they have no dependency on
@@ -18,6 +18,14 @@ independent ``Base`` exactly as they already do with
 implementations" platform rule applied a second time: the behavior of
 a soft-deletable, timestamped, UUID-bearing row still exists in
 exactly one place in this codebase.
+
+Phase 7 adds :class:`~models.base.SerializationMixin` to that
+composition (Developer Suite's own base model does not need it yet —
+its UI reads ORM attributes directly; the Attendance Server's API
+layer needs to turn a row into a JSON response, exactly the problem
+``SerializationMixin.to_dict`` already solves generically via mapper
+reflection). Purely additive: every model built in earlier phases —
+there are none yet — would keep working unchanged.
 """
 
 from __future__ import annotations
@@ -25,7 +33,14 @@ from __future__ import annotations
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
 
-from models.base import IdMixin, SoftDeleteMixin, TableNameMixin, TimestampMixin, UUIDMixin
+from models.base import (
+    IdMixin,
+    SerializationMixin,
+    SoftDeleteMixin,
+    TableNameMixin,
+    TimestampMixin,
+    UUIDMixin,
+)
 
 # Same naming convention as models/base.py and developer_suite/database/base.py,
 # for the same reason: stable, dialect-independent constraint/index
@@ -57,6 +72,7 @@ class Base(DeclarativeBase):
 
 class ServerBaseModel(
     TableNameMixin,
+    SerializationMixin,
     SoftDeleteMixin,
     TimestampMixin,
     UUIDMixin,
@@ -66,9 +82,10 @@ class ServerBaseModel(
     """Abstract base every concrete Attendance Server model inherits from.
 
     Combines automatic table naming, an integer primary key, a public
-    UUID, created/updated timestamps, and soft delete — the same
-    composition ``models.base.BaseModel`` and
-    ``developer_suite.database.base.DeveloperSuiteBaseModel`` use.
+    UUID, created/updated timestamps, soft delete, and generic
+    ``to_dict``/``serialize`` (see :class:`~models.base.SerializationMixin`)
+    — the same composition ``models.base.BaseModel`` uses, minus
+    ``VersionMixin``/``AuditMixin``, which nothing here needs yet.
 
     Example:
         >>> class SomeFutureModel(ServerBaseModel):
