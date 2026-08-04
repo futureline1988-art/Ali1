@@ -21,6 +21,21 @@ watches for log output, not a windowed desktop app -- see
 server/services/admin_auth_service.py), but none of the Attendance
 Client/Developer Suite's device-communication, QR/barcode, or
 PDF/Excel reporting dependencies are.
+
+One more dependency this server needs despite having no UI: importing
+anything from ``models.base`` (see ``utils/security.py`` and every
+``server/models/*.py`` file) runs ``models/__init__.py``, which -- to
+guarantee every table is always registered on ``Base.metadata`` (see
+that module's own docstring) -- eagerly imports every model in the
+shared client/server ``models/`` package, including
+``models.device.Device``. That model uses the shared
+``models.encrypted_types.EncryptedString`` column type for its
+encrypted-at-rest fields, which needs ``cryptography.fernet.Fernet``.
+So although this server's own code never imports ``cryptography``
+directly, it is a real, unavoidable transitive dependency -- omitting
+it fails at import time with "ModuleNotFoundError: No module named
+'cryptography'" (caught first by a real Windows-runner build, see
+``build-attendance-server``'s "Build onedir app" and smoke-test steps).
 """
 
 from pathlib import Path
@@ -32,15 +47,18 @@ block_cipher = None
 # packaging/pyinstaller/attendance_server.spec -> repository root
 PROJECT_ROOT = Path(SPECPATH).resolve().parent.parent
 
-# bcrypt ships a compiled C extension. PyInstaller's built-in hook is
-# usually sufficient, but a missing transitive DLL is a classic cause
-# of a frozen Windows build that fails at import time with no visible
+# bcrypt and cryptography both ship compiled/native extensions (C and
+# Rust respectively). PyInstaller's built-in hooks are usually
+# sufficient, but a missing transitive DLL is a classic cause of a
+# frozen Windows build that fails at import time with no visible
 # error -- collect_all() is the belt-and-suspenders option, same
-# rationale main.spec/developer_suite.spec already apply to it.
+# rationale main.spec/developer_suite.spec already apply to both.
 _bcrypt_datas, _bcrypt_binaries, _bcrypt_hidden = collect_all("bcrypt")
+_cryptography_datas, _cryptography_binaries, _cryptography_hidden = collect_all("cryptography")
 
 datas = [
     *_bcrypt_datas,
+    *_cryptography_datas,
 ]
 
 hiddenimports = [
@@ -71,6 +89,7 @@ hiddenimports = [
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
     *_bcrypt_hidden,
+    *_cryptography_hidden,
 ]
 
 a = Analysis(
@@ -81,7 +100,7 @@ a = Analysis(
     # server_bootstrap.py's module docstring.
     [str(PROJECT_ROOT / "server_bootstrap.py")],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[*_bcrypt_binaries],
+    binaries=[*_bcrypt_binaries, *_cryptography_binaries],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

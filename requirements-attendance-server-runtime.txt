@@ -28,8 +28,13 @@ uvicorn==0.30.6
 # ---- Database / ORM ----------------------------------------------------------
 SQLAlchemy==2.0.32
 
-# ---- Security (admin account password hashing) ------------------------------
+# ---- Security (admin account password hashing; encrypted-at-rest columns) ---
 bcrypt==4.2.0
+# server/models/device.py (via the shared models.encrypted_types.EncryptedString
+# column type, the same one the Attendance Client uses) needs Fernet
+# symmetric encryption for encrypted-at-rest device fields -- same
+# version pinned by requirements-runtime.txt/requirements-developer-suite-runtime.txt.
+cryptography==43.0.0
 
 # ---- Configuration / Environment --------------------------------------------
 python-dotenv==1.0.1
