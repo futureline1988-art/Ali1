@@ -33,6 +33,7 @@ its data directory.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -61,14 +62,29 @@ def _env_int(name: str, default: int) -> int:
 def _resolve_data_root() -> Path:
     """Where this server's writable runtime data (SQLite fallback, logs) lives.
 
-    Unlike ``config._resolve_data_root``/``developer_suite.config._resolve_data_root``,
-    this never checks ``sys.frozen`` — the Attendance Server is a server
-    process (run via ``python -m server.main`` or a container), never a
-    PyInstaller-frozen desktop build.
+    Most real deployments set ``ATTENDANCE_SERVER_DATA_DIR`` explicitly
+    (a container volume, a service account's chosen directory, ...),
+    which always wins below regardless of how this process was
+    started. Absent that, this mirrors
+    ``config._resolve_data_root``/``developer_suite.config._resolve_data_root``'s
+    frozen-vs-development split: a PyInstaller-frozen build of this
+    server (``packaging/pyinstaller/attendance_server.spec``, for an
+    operator who just wants to double-click an .exe rather than run
+    ``python -m server.main``) resolves under ``%LOCALAPPDATA%\\AttendanceServer``
+    so its SQLite database and logs persist across restarts instead of
+    landing inside PyInstaller's own temp extraction path, which is
+    wiped between runs. A non-frozen ``python -m server.main`` process
+    keeps using the repository-relative ``attendance_server_data/``
+    directory it always has.
     """
     env_override = os.getenv("ATTENDANCE_SERVER_DATA_DIR")
     if env_override:
         return Path(env_override)
+    if getattr(sys, "frozen", False):
+        local_appdata = os.getenv("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "AttendanceServer"
+        return Path.home() / ".attendance_server"
     return Path(__file__).resolve().parent.parent / "attendance_server_data"
 
 
@@ -167,7 +183,7 @@ class ServerConfig:
     """
 
     app_name: str = "Attendance Server"
-    app_version: str = "0.1.0"
+    app_version: str = "1.0.0"
     environment: Environment = Environment.PRODUCTION
 
     paths: ServerPaths = field(default_factory=ServerPaths.default)

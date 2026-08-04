@@ -1,21 +1,21 @@
-name: Windows Release Build (Attendance Management System + Developer Suite)
+name: Windows Release Build (Attendance Management System + Developer Suite + Attendance Server)
 
 # Produces the real Windows artifacts (Setup.exe, Portable.exe,
-# DeveloperSuite-Setup.exe) that cannot be built on Linux --
-# PyInstaller's bootloader and Inno Setup's ISCC.exe both only produce
-# Windows PE binaries. See BUILD_WINDOWS.md for the equivalent manual
-# procedure on a real Windows machine; this workflow automates the
-# same steps.
+# DeveloperSuite-Setup.exe, AttendanceServer-Setup.exe) that cannot be
+# built on Linux -- PyInstaller's bootloader and Inno Setup's ISCC.exe
+# both only produce Windows PE binaries. See BUILD_WINDOWS.md for the
+# equivalent manual procedure on a real Windows machine; this workflow
+# automates the same steps.
 #
-# Two independent jobs, one release: `build` produces the Attendance
-# Client's assets, `build-developer-suite` produces the Developer
-# Suite's -- both attach to the *same* GitHub Release (the one for the
-# pushed `v*.*.*` tag) since they are distributed together. They run
-# in parallel and never touch the same output filename (see
-# `build-developer-suite`'s own comments), so there is no race between
-# them beyond both calling the release-attach action for the same tag,
-# which softprops/action-gh-release handles fine -- each call only
-# adds/replaces the files it lists.
+# Three independent jobs, one release: `build` produces the Attendance
+# Client's assets, `build-developer-suite` the Developer Suite's, and
+# `build-attendance-server` the platform server's -- all three attach
+# to the *same* GitHub Release (the one for the pushed `v*.*.*` tag)
+# since they are distributed together. They run in parallel and never
+# touch the same output filename (see each job's own comments), so
+# there is no race between them beyond each calling the release-attach
+# action for the same tag, which softprops/action-gh-release handles
+# fine -- each call only adds/replaces the files it lists.
 on:
   push:
     tags:
@@ -436,3 +436,176 @@ jobs:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           files: |
             Release/DeveloperSuite-Setup.exe
+
+  # The Attendance Server's own build -- the third and smallest of the
+  # three (no UI at all, see attendance_server.spec's own comments),
+  # publishing to the same release the other two jobs do. Unlike the
+  # two desktop apps' smoke tests (which only prove the process stays
+  # alive), this server's smoke tests hit its own GET /health endpoint
+  # over a real HTTP request -- a stronger check that is easy to make
+  # here since this application's entire purpose is answering HTTP
+  # requests, not rendering a window.
+  build-attendance-server:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime + build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-attendance-server-runtime.txt
+
+      - name: Build onedir app (for the installer)
+        run: pyinstaller packaging\pyinstaller\attendance_server.spec --noconfirm
+
+      # See the `build` job's onedir smoke test for the general
+      # rationale (real Windows runner, deliberately unredirected
+      # stdout/stderr -- moot here since console=True already gives
+      # this process real stdio, startup_crash.log as the diagnostic
+      # channel either way). The readiness check itself is a real
+      # GET /health call, polled for up to 20s to give uvicorn time to
+      # bind its socket, rather than only checking the process is
+      # still alive.
+      - name: Smoke test - onedir build serves GET /health
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $exePath = "dist\AttendanceServer\AttendanceServer.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Executable not found: $exePath"
+            exit 1
+          }
+          $env:ATTENDANCE_SERVER_ENVIRONMENT = "testing"
+          $env:ATTENDANCE_SERVER_DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_server_onedir.db"
+          $crashLog = "$env:LOCALAPPDATA\AttendanceServer\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $exePath -PassThru
+          $healthy = $false
+          $deadline = (Get-Date).AddSeconds(20)
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) { break }
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:9000/health" -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $healthy = $true; break }
+            } catch {
+              Start-Sleep -Seconds 1
+            }
+          }
+          if (-not $healthy) {
+            Write-Host "##[error] Onedir server never answered GET /health (exited: $($proc.HasExited), exit code: $($proc.ExitCode))."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+            exit 1
+          }
+          Write-Host "OK: onedir server answered GET /health with 200 (PID $($proc.Id))."
+          Stop-Process -Id $proc.Id -Force
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build AttendanceServer-Setup.exe with Inno Setup
+        run: |
+          if not exist "Release" mkdir "Release"
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer\setup_attendance_server.iss
+
+      # Silently runs the actual installer, launches the actual
+      # installed .exe from Program Files, polls GET /health, then
+      # uninstalls -- see the `build` job's identical installed-build
+      # smoke test for the general rationale.
+      - name: Smoke test - installed AttendanceServer-Setup.exe serves GET /health
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $installer = "Release\AttendanceServer-Setup.exe"
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found: $installer"
+            exit 1
+          }
+          $installProc = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait -PassThru
+          if ($installProc.ExitCode -ne 0) {
+            Write-Error "AttendanceServer-Setup.exe exited with code $($installProc.ExitCode) during silent install."
+            exit 1
+          }
+          $installedExe = "$env:ProgramFiles\Attendance Server\AttendanceServer.exe"
+          if (-not (Test-Path $installedExe)) {
+            Write-Error "Installed executable not found at $installedExe"
+            exit 1
+          }
+          $env:ATTENDANCE_SERVER_ENVIRONMENT = "testing"
+          $env:ATTENDANCE_SERVER_DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_server_installed.db"
+          $crashLog = "$env:LOCALAPPDATA\AttendanceServer\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $installedExe -PassThru
+          $healthy = $false
+          $deadline = (Get-Date).AddSeconds(20)
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) { break }
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:9000/health" -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $healthy = $true; break }
+            } catch {
+              Start-Sleep -Seconds 1
+            }
+          }
+          $failed = $false
+          if (-not $healthy) {
+            Write-Host "##[error] Installed server never answered GET /health (exited: $($proc.HasExited), exit code: $($proc.ExitCode))."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            $failed = $true
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          } else {
+            Write-Host "OK: installed server answered GET /health with 200 (PID $($proc.Id))."
+            Stop-Process -Id $proc.Id -Force
+          }
+          # Uninstall regardless of pass/fail, to leave the runner clean
+          # -- see the `build` job's identical step for why this is
+          # bounded to 60s and never allowed to fail this step.
+          $uninstaller = "$env:ProgramFiles\Attendance Server\unins000.exe"
+          if (Test-Path $uninstaller) {
+            $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -PassThru
+            $uninstallProc | Wait-Process -Timeout 60 -ErrorAction SilentlyContinue
+            if (-not $uninstallProc.HasExited) {
+              Write-Host "Uninstall did not finish within 60s - leaving it be, not treated as a smoke-test failure."
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Verify build output exists
+        run: |
+          if not exist "Release\AttendanceServer-Setup.exe" (echo AttendanceServer-Setup.exe missing & exit /b 1)
+
+      - name: Upload Release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AttendanceServer-Windows-Release
+          path: Release/AttendanceServer-Setup.exe
+          if-no-files-found: error
+
+      # Deliberately no generate_release_notes here, same reasoning as
+      # the build-developer-suite job's identical step.
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            Release/AttendanceServer-Setup.exe

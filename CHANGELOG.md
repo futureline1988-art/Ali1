@@ -51,6 +51,34 @@ Windows build for the first time:
   version number, even though both now ship from the same GitHub
   Release.
 
+- **Attendance Server Windows installer** (`AttendanceServer-Setup.exe`),
+  published as a third asset on this same `v1.1.0` release: previously the
+  only way to run the Attendance Server at all was `python -m server.main`
+  from a Python environment with its dependencies installed, which meant
+  neither the Attendance Client's sync/update features nor the Developer
+  Suite's First Run Setup/login could do anything useful without a
+  hand-run Python process. Built from `packaging/pyinstaller/attendance_server.spec`
+  (console-mode PyInstaller build — an operator watches its own log
+  output the same way `python -m server.main` already behaves in
+  development, so no windowed-app stdio/message-box workarounds are
+  needed) and `packaging/installer/setup_attendance_server.iss` (its own
+  AppId, so all three applications install side by side without
+  conflicting). By far the smallest of the three builds: no PySide6, no
+  device-communication or QR/barcode/reporting dependencies — just
+  FastAPI, uvicorn, SQLAlchemy, and bcrypt. Fixed a real bug found while
+  packaging it: `server/config.py`'s `_resolve_data_root()` never checked
+  `sys.frozen`, so a frozen build would have written its SQLite database
+  into PyInstaller's own temp extraction path (wiped between runs)
+  instead of persisting it — now resolves under
+  `%LOCALAPPDATA%\AttendanceServer`, matching the other two applications'
+  frozen-build path logic. Windows-runner smoke-tested with a real
+  `GET /health` HTTP request against both the unpacked build and the
+  installed executable (stronger than the two desktop apps' "still
+  running" checks, since this application's entire job is answering HTTP
+  requests). `server/config.py`'s `ServerConfig.app_version` is bumped
+  from the placeholder `0.1.0` to `1.0.0` for this first installable
+  build.
+
 ### Security
 
 - **Removed the Developer Suite's hidden bootstrap-admin credential

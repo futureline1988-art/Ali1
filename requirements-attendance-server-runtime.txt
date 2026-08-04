@@ -1,0 +1,52 @@
+# ==============================================================================
+# Attendance Server - Frozen Build Dependencies
+# ==============================================================================
+# Used ONLY to build the Attendance Server's Windows PyInstaller
+# executable (see packaging/pyinstaller/attendance_server.spec and
+# packaging/installer/setup_attendance_server.iss). This is this
+# application's own trimmed dependency list, independent of
+# requirements-runtime.txt (Attendance Client) and
+# requirements-developer-suite-runtime.txt (Developer Suite) -- all
+# three applications are built, versioned, and distributed separately.
+#
+# By far the smallest of the three: this server has no UI (no PySide6
+# at all), no biometric-device or QR/barcode code, and no PDF/Excel
+# reporting -- it is a pure FastAPI/uvicorn JSON API plus its own
+# SQLAlchemy-backed database. It also never calls out to anyone (no
+# requests/httpx) -- the other two applications are the HTTP clients
+# that call *this* server, not the other way around.
+#
+# Install with: pip install -r requirements-attendance-server-runtime.txt
+# Target interpreter: Python 3.11-3.13 (match the interpreter used to run
+# PyInstaller on the Windows build machine).
+# ==============================================================================
+
+# ---- Web framework / ASGI server --------------------------------------------
+fastapi==0.112.0
+uvicorn==0.30.6
+
+# ---- Database / ORM ----------------------------------------------------------
+SQLAlchemy==2.0.32
+
+# ---- Security (admin account password hashing) ------------------------------
+bcrypt==4.2.0
+
+# ---- Configuration / Environment --------------------------------------------
+python-dotenv==1.0.1
+
+# ---- Logging ---------------------------------------------------------------
+loguru==0.7.2
+
+# ---- Build tooling -----------------------------------------------------------
+pyinstaller==6.11.1
+
+# ---- PyInstaller/setuptools packaging fix (not imported by app code) --------
+# Same fix requirements-runtime.txt documents in detail: modern
+# setuptools vendors pkg_resources, whose bundled jaraco.context imports
+# backports.tarfile under Python < 3.12, and PyInstaller always bundles
+# pkg_resources's runtime hook once pkg_resources is present in the
+# build venv at all -- so the frozen .exe crashes at startup with
+# "ModuleNotFoundError: No module named 'backports'" unless this is
+# installed too. This is a build-tool-level issue, not specific to
+# this application's own code.
+backports.tarfile==1.2.0
