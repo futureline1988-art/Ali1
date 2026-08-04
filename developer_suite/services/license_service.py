@@ -12,9 +12,15 @@ licensing library instead of reimplementing any of it:
   back the computed ``issued_at``/``expires_at``/``license_id`` for
   this application's own bookkeeping row — a self-consistency check as
   a side benefit, not a second, separate calculation of those values.
-* :func:`licensing.crypto.signing.load_private_key` loads the vendor's
+* :func:`licensing.crypto.signing.ensure_keypair` loads the vendor's
   private key from wherever this application is configured to keep it
-  (see :attr:`~developer_suite.config.DeveloperSuiteConfig.licensing_private_key_path`).
+  (see :attr:`~developer_suite.config.DeveloperSuiteConfig.licensing_private_key_path`),
+  generating it once, automatically, the first time this application
+  is ever asked to issue or renew a license on a machine that doesn't
+  have one yet — this is the Developer Suite's own signing key, held
+  only here, so "this machine" is by construction always a developer
+  /vendor machine, never a customer's Attendance Client installation
+  (see :meth:`LicenseService._load_private_key`).
 
 This module intentionally does not touch the Attendance Client's own
 license *verification* path (:mod:`licensing.license_service`,
@@ -30,7 +36,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from licensing.crypto.signing import SigningKeyError, load_private_key
+from licensing.crypto.signing import SigningKeyError, ensure_keypair
 from licensing.enums import LicenseType
 from licensing.license_generator import issue_license_key
 from licensing.license_key import decode_and_verify_license_key
@@ -52,18 +58,29 @@ class LicenseNotFoundError(LicenseServiceError):
 
 
 class LicenseSigningKeyError(LicenseServiceError):
-    """The vendor's signing private key is missing or invalid.
+    """The vendor's signing private key exists but is invalid.
 
-    Raised instead of letting :class:`licensing.crypto.signing.SigningKeyError`
-    or a bare :class:`FileNotFoundError` propagate, so the UI layer has
-    one exception type to catch for every licensing operation.
+    A *missing* key no longer reaches the UI as an error at all — see
+    :meth:`LicenseService._load_private_key` — so this now only fires
+    for a key file that is present but corrupt (not valid Ed25519 PEM),
+    which genuinely does need a human to look at it rather than being
+    silently replaced. Raised instead of letting
+    :class:`licensing.crypto.signing.SigningKeyError` propagate
+    directly, so the UI layer has one exception type to catch for
+    every licensing operation.
     """
 
 
 class LicenseService(BaseService):
     """Issue, renew, revoke, and search the vendor's issued licenses."""
 
-    def __init__(self, database: Database, *, private_key_path: Path) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        private_key_path: Path,
+        public_key_path: Path | None = None,
+    ) -> None:
         """Create a license service bound to ``database`` and a signing key location.
 
         Args:
@@ -72,25 +89,46 @@ class LicenseService(BaseService):
                 signing private key from for every issuance/renewal
                 (see
                 :attr:`~developer_suite.config.DeveloperSuiteConfig.licensing_private_key_path`).
+                Auto-created here, once, the first time it's needed if
+                nothing exists at this path yet — see
+                :func:`licensing.crypto.signing.ensure_keypair`.
+            public_key_path: Where to also write the matching public
+                key if a new keypair is generated (see
+                :attr:`~developer_suite.config.DeveloperSuiteConfig.licensing_public_key_path`)
+                — purely so the vendor can retrieve it afterwards and
+                embed it in the next Attendance Client build's
+                ``licensing/keys.py``. Optional; omit to skip writing
+                it out.
         """
         super().__init__(database)
         self._private_key_path = private_key_path
+        self._public_key_path = public_key_path
 
     def _load_private_key(self) -> Ed25519PrivateKey:
-        """Load the configured signing private key, or raise a UI-friendly error.
+        """Load the configured signing private key, generating it once if missing.
+
+        This machine is, by construction, always the vendor's own —
+        the private key configured here is never present on (or
+        needed by) a customer's Attendance Client installation, which
+        only ever holds ``licensing/keys.py``'s embedded *public* key.
+        So the first time this is called with nothing on disk yet, a
+        fresh keypair is created automatically (see
+        :func:`~licensing.crypto.signing.ensure_keypair`) rather than
+        surfacing a "please run this CLI command yourself" error a
+        packaged, Python-less Windows install has no way to act on.
+
+        An *existing* key is always loaded as-is and never regenerated
+        or overwritten, even if the caller wanted a different one — a
+        deliberate re-key is a separate, explicit operation, not a
+        side effect of clicking "Issue License".
 
         Raises:
-            LicenseSigningKeyError: The key file is missing or does not
-                contain a valid Ed25519 private key.
+            LicenseSigningKeyError: A key file exists at the
+                configured path but does not contain a valid Ed25519
+                private key.
         """
         try:
-            return load_private_key(self._private_key_path)
-        except FileNotFoundError as exc:
-            raise LicenseSigningKeyError(
-                f"No license signing key found at {self._private_key_path}. "
-                "Generate one first with licensing/license_generator.py's "
-                "generate-keypair command."
-            ) from exc
+            return ensure_keypair(self._private_key_path, public_key_path=self._public_key_path)
         except SigningKeyError as exc:
             raise LicenseSigningKeyError(str(exc)) from exc
 
@@ -149,8 +187,9 @@ class LicenseService(BaseService):
 
         Raises:
             CustomerNotFoundError: No customer exists with that id.
-            LicenseSigningKeyError: The vendor's signing key is missing
-                or invalid.
+            LicenseSigningKeyError: The vendor's signing key exists but
+                is invalid (a missing one is auto-created instead —
+                see :meth:`_load_private_key`).
         """
         with self._session_scope() as session:
             customer = CustomerRepository(session).get_by_id(customer_id)
@@ -197,8 +236,9 @@ class LicenseService(BaseService):
 
         Raises:
             LicenseNotFoundError: No license exists with that id.
-            LicenseSigningKeyError: The vendor's signing key is missing
-                or invalid.
+            LicenseSigningKeyError: The vendor's signing key exists but
+                is invalid (a missing one is auto-created instead —
+                see :meth:`_load_private_key`).
         """
         with self._session_scope() as session:
             repo = LicenseRepository(session)

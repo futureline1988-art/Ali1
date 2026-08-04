@@ -35,7 +35,7 @@ from developer_suite.services.license_service import (
 )
 from developer_suite.ui.license_form_dialog import LicenseFormDialog
 from developer_suite.ui.license_management_page import LicenseManagementPage
-from licensing.crypto.signing import generate_keypair, save_private_key
+from licensing.crypto.signing import generate_keypair, load_private_key, save_private_key
 from licensing.enums import LicenseType
 from licensing.license_key import decode_and_verify_license_key
 
@@ -269,10 +269,64 @@ class TestLicenseService:
         with pytest.raises(CustomerNotFoundError):
             license_service.issue_license(customer_id=999999, license_type=LicenseType.TRIAL)
 
-    def test_issue_license_raises_when_signing_key_missing(
+    def test_issue_license_auto_creates_a_missing_signing_key_and_succeeds(
         self, dev_suite_database, customer: Customer, tmp_path
     ) -> None:
-        service = LicenseService(dev_suite_database, private_key_path=tmp_path / "missing.pem")
+        """A missing key is auto-bootstrapped, once, rather than blocking issuance.
+
+        This is the exact "click Issue License on a brand-new install"
+        path a real user hits — the private key file must not need to
+        exist beforehand (see
+        :meth:`~developer_suite.services.license_service.LicenseService._load_private_key`).
+        """
+        key_path = tmp_path / "keys" / "license_private_key.pem"
+        assert not key_path.exists()
+        service = LicenseService(dev_suite_database, private_key_path=key_path)
+
+        record = service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
+
+        assert record.id is not None
+        assert key_path.exists()
+
+    def test_issue_license_also_writes_the_public_key_on_first_bootstrap(
+        self, dev_suite_database, customer: Customer, tmp_path
+    ) -> None:
+        key_path = tmp_path / "keys" / "license_private_key.pem"
+        public_key_path = tmp_path / "keys" / "license_public_key.pem"
+        service = LicenseService(
+            dev_suite_database, private_key_path=key_path, public_key_path=public_key_path
+        )
+
+        service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
+
+        assert public_key_path.exists()
+        assert b"BEGIN PUBLIC KEY" in public_key_path.read_bytes()
+
+    def test_issue_license_reuses_an_already_bootstrapped_key_across_calls(
+        self, dev_suite_database, customer: Customer, tmp_path
+    ) -> None:
+        """Never overwrites: a second issuance must sign with the same key as the first."""
+        key_path = tmp_path / "keys" / "license_private_key.pem"
+        service = LicenseService(dev_suite_database, private_key_path=key_path)
+
+        first = service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
+        key_bytes_after_first = key_path.read_bytes()
+        second = service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
+
+        assert key_path.read_bytes() == key_bytes_after_first
+        public_key = load_private_key(key_path).public_key()
+        decode_and_verify_license_key(first.license_key, public_key)
+        decode_and_verify_license_key(second.license_key, public_key)
+
+    def test_issue_license_raises_for_a_corrupt_signing_key(
+        self, dev_suite_database, customer: Customer, tmp_path
+    ) -> None:
+        """A present-but-invalid key must never be silently replaced -- it must error."""
+        key_path = tmp_path / "keys" / "license_private_key.pem"
+        key_path.parent.mkdir(parents=True)
+        key_path.write_bytes(b"not a valid PEM key")
+        service = LicenseService(dev_suite_database, private_key_path=key_path)
+
         with pytest.raises(LicenseSigningKeyError):
             service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
 
@@ -304,8 +358,6 @@ class TestLicenseService:
             machine_id="MACHINE-1",
             licensed_version="1.2.0",
         )
-        from licensing.crypto.signing import load_private_key
-
         public_key = load_private_key(private_key_path).public_key()
         payload = decode_and_verify_license_key(record.license_key, public_key)
         assert payload.customer_name == "Jane Doe"

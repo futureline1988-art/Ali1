@@ -121,6 +121,47 @@ Windows build for the first time:
 
 ### Fixed
 
+- **"No license signing key found" when clicking Issue License** (this
+  release): a fresh Developer Suite installation had no signing
+  keypair, and nothing ever created one — key generation only existed
+  as `licensing/license_generator.py`'s offline CLI, unusable from a
+  packaged, Python-less Windows install, and it wrote to a repo
+  -relative path (`licensing/vendor/private_key.pem`) the packaged
+  application never looked at anyway. `licensing/crypto/signing.py`
+  gained `ensure_keypair()`: loads an existing signing key as-is
+  (never overwrites it, even under two Developer Suite processes
+  racing to bootstrap the same missing key at once — verified with
+  real concurrent threads, not mocked), or generates and atomically
+  persists a fresh Ed25519 keypair the first time one is actually
+  needed, with no algorithm or key-format change.
+  `developer_suite/services/license_service.py`'s and
+  `update_manager_service.py`'s `_load_private_key()` (the vendor's
+  license-signing and update-signing keys, respectively — both hit the
+  identical bug) now call it instead of requiring the file to already
+  exist; a *missing* key no longer reaches the UI as an error at all,
+  only a genuinely corrupt one does. This key is held only by the
+  Developer Suite — the Attendance Client never imports
+  `licensing.crypto.signing` or anything that could produce a
+  signature, only `licensing/keys.py`'s embedded public key (verified
+  by a new, dynamic-import isolation test, not just by convention).
+  Separately, the private keys matching the previously-committed
+  `licensing/keys.py` and `updates/keys.py` public keys were generated
+  in an early development session and never persisted anywhere
+  retrievable (correctly excluded from git) — lost before any license
+  or update package was ever actually issued under them, so both were
+  safely re-keyed as part of this fix; `licensing/keys.py`'s and
+  `updates/keys.py`'s embedded `PUBLIC_KEY_PEM` constants are updated
+  to match. Verified with a real, unmocked end-to-end test covering
+  the full lifecycle: generate → issue → activate → verify → renew,
+  crossing from the Developer Suite's real issuance code into the
+  Attendance Client's real, unmodified verification code.
+  `developer_suite/config.py`'s `DeveloperSuiteConfig.app_version` is
+  bumped to `1.0.2` and `config.py`'s `AppConfig.app_version` to
+  `1.1.1` for this fix (the Attendance Client rebuild is required
+  because it embeds the updated `licensing/keys.py`/`updates/keys.py`
+  public keys), published as updated `DeveloperSuite-Setup.exe` /
+  `Setup.exe` / `Portable.exe` assets on this same `v1.1.0` release
+  train (no new major/minor tag).
 - **Windows build (this release)**: `requirements-runtime.txt` was
   missing `httpx`, a hard dependency of the new remote-configuration-sync
   and software-update client code `main.py` imports unconditionally —

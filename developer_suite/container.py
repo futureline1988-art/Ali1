@@ -124,7 +124,9 @@ class ServiceContainer:
         self.customer_service = CustomerService(database)
         self.customer_group_service = CustomerGroupService(database)
         self.license_service = LicenseService(
-            database, private_key_path=config.licensing_private_key_path
+            database,
+            private_key_path=config.licensing_private_key_path,
+            public_key_path=config.licensing_public_key_path,
         )
         self.configuration_service = ConfigurationService(database)
         self.configuration_publish_service = ConfigurationPublishService(database)
@@ -135,7 +137,9 @@ class ServiceContainer:
         self.admin_session_manager = AdminSessionManager(database, self.admin_auth_client)
         self.admin_client = AdminApiClient(config.attendance_server_url, self.admin_session_manager)
         self.update_manager_service = UpdateManagerService(
-            self.admin_client, private_key_path=config.update_signing_private_key_path
+            self.admin_client,
+            private_key_path=config.update_signing_private_key_path,
+            public_key_path=config.update_signing_public_key_path,
         )
         self.dashboard_service = DashboardService(
             self.customer_service,

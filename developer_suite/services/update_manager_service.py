@@ -56,7 +56,7 @@ from developer_suite.admin.client import (
     UpdateVersionInfo,
 )
 from developer_suite.models.customer import Customer
-from licensing.crypto.signing import SigningKeyError, load_private_key, sign_bytes
+from licensing.crypto.signing import SigningKeyError, ensure_keypair, sign_bytes
 
 _T = TypeVar("_T")
 
@@ -78,10 +78,11 @@ class UpdateManagerServiceError(Exception):
 
 
 class UpdateSigningKeyError(UpdateManagerServiceError):
-    """The update-signing private key is missing or invalid.
+    """The update-signing private key exists but is invalid.
 
-    Raised instead of letting :class:`licensing.crypto.signing.SigningKeyError`
-    propagate directly, mirroring
+    A *missing* key no longer reaches the UI as an error at all — see
+    :meth:`UpdateManagerService._load_private_key` — so this now only
+    fires for a key file that is present but corrupt, mirroring
     :class:`~developer_suite.services.license_service.LicenseSigningKeyError`'s
     own reasoning: a UI layer should be able to catch one clear
     exception type without importing from ``licensing.crypto`` itself.
@@ -91,7 +92,13 @@ class UpdateSigningKeyError(UpdateManagerServiceError):
 class UpdateManagerService:
     """Create, sign, upload, target, publish, and roll back software updates."""
 
-    def __init__(self, admin_client: AdminApiClient, *, private_key_path: Path) -> None:
+    def __init__(
+        self,
+        admin_client: AdminApiClient,
+        *,
+        private_key_path: Path,
+        public_key_path: Path | None = None,
+    ) -> None:
         """Create an update manager service bound to an admin client and signing key location.
 
         Args:
@@ -101,24 +108,39 @@ class UpdateManagerService:
                 *update-signing* private key from (see
                 :attr:`~developer_suite.config.DeveloperSuiteConfig.update_signing_private_key_path`
                 — a separate key from the license-signing one).
+                Auto-created here, once, the first time it's needed if
+                nothing exists at this path yet — see
+                :func:`licensing.crypto.signing.ensure_keypair`.
+            public_key_path: Where to also write the matching public
+                key if a new keypair is generated (see
+                :attr:`~developer_suite.config.DeveloperSuiteConfig.update_signing_public_key_path`),
+                purely so the vendor can retrieve it afterwards and
+                embed it in the next Attendance Client build's
+                ``updates/keys.py``. Optional; omit to skip writing it
+                out.
         """
         self._admin_client = admin_client
         self._private_key_path = private_key_path
+        self._public_key_path = public_key_path
 
     def _load_private_key(self) -> Ed25519PrivateKey:
-        """Load the configured update-signing private key, or raise a UI-friendly error.
+        """Load the configured update-signing private key, generating it once if missing.
+
+        Mirrors :meth:`~developer_suite.services.license_service.LicenseService._load_private_key`'s
+        reasoning exactly, for the separate update-signing keypair:
+        this machine is always the vendor's own (a customer's
+        Attendance Client never holds or needs this key, only
+        ``updates/keys.py``'s embedded public half), so a first call
+        with nothing on disk yet bootstraps a fresh keypair rather than
+        erroring. An existing key is always loaded as-is, never
+        regenerated.
 
         Raises:
-            UpdateSigningKeyError: The key file is missing or does not
-                contain a valid Ed25519 private key.
+            UpdateSigningKeyError: A key file exists at the configured
+                path but does not contain a valid Ed25519 private key.
         """
         try:
-            return load_private_key(self._private_key_path)
-        except FileNotFoundError as exc:
-            raise UpdateSigningKeyError(
-                f"No update-signing key found at {self._private_key_path}. "
-                "Generate one first with licensing/crypto/signing.py's generate_keypair()."
-            ) from exc
+            return ensure_keypair(self._private_key_path, public_key_path=self._public_key_path)
         except SigningKeyError as exc:
             raise UpdateSigningKeyError(str(exc)) from exc
 
@@ -164,8 +186,9 @@ class UpdateManagerService:
                 upload.
 
         Raises:
-            UpdateSigningKeyError: The update-signing private key is
-                missing or invalid.
+            UpdateSigningKeyError: The update-signing private key
+                exists but is invalid (a missing one is auto-created
+                instead — see :meth:`_load_private_key`).
             UpdateManagerServiceError: The upload could not be
                 completed (no admin token, unreachable server,
                 checksum rejected, ...).

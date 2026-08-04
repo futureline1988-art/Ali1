@@ -10,14 +10,22 @@ later phase integrates it.
 
 from __future__ import annotations
 
+import ast
+import subprocess
+import sys
+import threading
 from datetime import date
+from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 from config import Environment
 from licensing.crypto.signing import (
     InvalidPrivateKeyError,
+    ensure_keypair,
     generate_keypair,
     load_private_key,
     save_private_key,
@@ -124,6 +132,192 @@ class TestSigning:
 
         with pytest.raises(InvalidPrivateKeyError):
             load_private_key(path)
+
+
+class TestEnsureKeypair:
+    """``ensure_keypair`` — auto-bootstrap-if-missing for a signing key."""
+
+    def test_generates_a_new_key_when_none_exists(self, tmp_path) -> None:
+        private_path = tmp_path / "keys" / "private_key.pem"
+        assert not private_path.exists()
+
+        private_key = ensure_keypair(private_path)
+
+        assert private_path.exists()
+        signature = sign_bytes(private_key, b"payload")
+        private_key.public_key().verify(signature, b"payload")
+
+    def test_also_writes_the_public_key_when_a_path_is_given(self, tmp_path) -> None:
+        private_path = tmp_path / "private_key.pem"
+        public_path = tmp_path / "public_key.pem"
+
+        private_key = ensure_keypair(private_path, public_key_path=public_path)
+
+        assert public_path.exists()
+        assert b"BEGIN PUBLIC KEY" in public_path.read_bytes()
+        signature = sign_bytes(private_key, b"payload")
+        load_pem_public_key(public_path.read_bytes()).verify(signature, b"payload")
+
+    def test_public_key_path_is_optional(self, tmp_path) -> None:
+        private_path = tmp_path / "private_key.pem"
+        # Must not raise just because no public_key_path was given.
+        ensure_keypair(private_path)
+        assert private_path.exists()
+
+    def test_loads_and_returns_an_existing_key_unchanged(self, tmp_path) -> None:
+        private_path = tmp_path / "private_key.pem"
+        original_key, _ = generate_keypair()
+        save_private_key(original_key, private_path)
+        original_bytes = private_path.read_bytes()
+        original_mtime_ns = private_path.stat().st_mtime_ns
+
+        returned_key = ensure_keypair(private_path)
+
+        assert private_path.read_bytes() == original_bytes
+        assert private_path.stat().st_mtime_ns == original_mtime_ns
+        signature = sign_bytes(returned_key, b"same key")
+        original_key.public_key().verify(signature, b"same key")
+
+    def test_never_overwrites_an_existing_key_even_with_a_public_key_path_given(
+        self, tmp_path
+    ) -> None:
+        private_path = tmp_path / "private_key.pem"
+        public_path = tmp_path / "public_key.pem"
+        original_key, _ = generate_keypair()
+        save_private_key(original_key, private_path)
+        original_bytes = private_path.read_bytes()
+
+        ensure_keypair(private_path, public_key_path=public_path)
+
+        assert private_path.read_bytes() == original_bytes
+        # No public key file existed for this (pre-existing) private
+        # key, and ensure_keypair must not invent one retroactively --
+        # only a freshly *generated* key writes its public half.
+        assert not public_path.exists()
+
+    def test_does_not_regenerate_when_the_public_key_already_exists_too(self, tmp_path) -> None:
+        private_path = tmp_path / "private_key.pem"
+        public_path = tmp_path / "public_key.pem"
+        original_private, original_public = generate_keypair()
+        save_private_key(original_private, private_path)
+        save_public_key(original_public, public_path)
+        original_public_bytes = public_path.read_bytes()
+
+        ensure_keypair(private_path, public_key_path=public_path)
+
+        assert public_path.read_bytes() == original_public_bytes
+
+    def test_raises_rather_than_replacing_a_corrupt_existing_key(self, tmp_path) -> None:
+        private_path = tmp_path / "private_key.pem"
+        _, public_key = generate_keypair()
+        # A public key file at the private-key path is "present but
+        # invalid" -- must surface as an error, never be silently
+        # treated as "missing" and overwritten.
+        save_public_key(public_key, private_path)
+        corrupt_bytes = private_path.read_bytes()
+
+        with pytest.raises(InvalidPrivateKeyError):
+            ensure_keypair(private_path)
+
+        assert private_path.read_bytes() == corrupt_bytes
+
+    def test_concurrent_first_calls_converge_on_the_same_generated_key(self, tmp_path) -> None:
+        """Two callers racing to bootstrap a missing key must never disagree.
+
+        Real threads, real filesystem, no mocks -- the same "actually
+        run it under contention" standard this project's other race
+        tests (e.g. the first-admin-setup bootstrap) already use.
+        """
+        private_path = tmp_path / "private_key.pem"
+        results: list[Ed25519PrivateKey] = []
+        barrier = threading.Barrier(8)
+
+        def _worker() -> None:
+            barrier.wait()
+            results.append(ensure_keypair(private_path))
+
+        threads = [threading.Thread(target=_worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 8
+        signature = results[0].sign(b"race")
+        for key in results:
+            # Every caller must have ended up with a key that verifies
+            # against the *same* signature -- i.e. every one returned
+            # the one keypair that actually landed on disk, not each
+            # its own independently generated one.
+            key.public_key().verify(signature, b"race")
+
+
+class TestOnlyTheDeveloperSuiteCanIssueLicenses:
+    """The Attendance Client must never load, need, or be able to reach private-key code.
+
+    Structural verification, not just convention: a customer's
+    Attendance Client installation holds only ``licensing/keys.py``'s
+    embedded *public* key (see :class:`licensing.license_service.LocalLicenseBackend`)
+    and can therefore only ever *verify* a license someone else signed
+    — it has no code path, direct or transitive, that could produce a
+    valid signature. License issuance lives entirely in
+    :mod:`developer_suite.services.license_service`, which the
+    Attendance Client's build never even imports.
+    """
+
+    def test_main_py_only_imports_the_license_verification_module(self) -> None:
+        """Static check: main.py's own source never references issuance/signing code."""
+        main_py = Path(__file__).resolve().parent.parent / "main.py"
+        source = main_py.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(main_py))
+        licensing_imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("licensing"):
+                licensing_imports.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("licensing"):
+                        licensing_imports.add(alias.name)
+        assert licensing_imports == {"licensing.license_service"}
+
+    def test_attendance_clients_license_verification_module_never_loads_private_key_code(self) -> None:
+        """Dynamic check: importing licensing.license_service must never pull in signing code.
+
+        Runs in a fresh subprocess so ``sys.modules`` reflects only
+        what this one import chain actually touches -- not whatever
+        this test file itself happened to import earlier (this same
+        file's ``TestSigning``/``TestEnsureKeypair`` classes do import
+        ``licensing.crypto.signing`` directly, which would otherwise
+        contaminate an in-process check).
+        """
+        script = (
+            "import sys\n"
+            "import licensing.license_service\n"
+            "forbidden = {\n"
+            "    name for name in sys.modules\n"
+            "    if name == 'licensing.crypto.signing'\n"
+            "    or name == 'licensing.crypto'\n"
+            "    or name == 'licensing.license_generator'\n"
+            "}\n"
+            "print(','.join(sorted(forbidden)))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        loaded_forbidden_modules = [m for m in result.stdout.strip().split(",") if m]
+        assert loaded_forbidden_modules == []
+
+    def test_licensing_keys_module_contains_no_private_key_material(self) -> None:
+        """The embedded constant the Attendance Client ships must be public-only."""
+        from licensing.keys import PUBLIC_KEY_PEM
+
+        assert b"PRIVATE KEY" not in PUBLIC_KEY_PEM
+        assert b"PUBLIC KEY" in PUBLIC_KEY_PEM
 
 
 class TestVersionCheck:

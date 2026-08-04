@@ -206,6 +206,50 @@ def update_manager_service(admin_client: AdminApiClient, signing_keypair: Signin
     return UpdateManagerService(admin_client, private_key_path=signing_keypair.private_key_path)
 
 
+class TestUpdateSigningKeyBootstrap:
+    """The update-signing key's own auto-bootstrap wiring (see licensing.crypto.signing.ensure_keypair).
+
+    Deliberately standalone, with no real Attendance Server involved
+    (``admin_client=None`` is fine — key bootstrap never touches it) —
+    mirrors ``tests/test_developer_suite_phase4.py``'s equivalent
+    coverage for the license-signing key one-for-one.
+    """
+
+    def test_load_private_key_auto_creates_a_missing_key(self, tmp_path) -> None:
+        key_path = tmp_path / "keys" / "update_signing_private_key.pem"
+        assert not key_path.exists()
+        service = UpdateManagerService(None, private_key_path=key_path)  # type: ignore[arg-type]
+
+        private_key = service._load_private_key()
+
+        assert key_path.exists()
+        signature = private_key.sign(b"payload")
+        private_key.public_key().verify(signature, b"payload")
+
+    def test_load_private_key_also_writes_the_public_key(self, tmp_path) -> None:
+        key_path = tmp_path / "update_signing_private_key.pem"
+        public_key_path = tmp_path / "update_signing_public_key.pem"
+        service = UpdateManagerService(  # type: ignore[arg-type]
+            None, private_key_path=key_path, public_key_path=public_key_path
+        )
+
+        service._load_private_key()
+
+        assert public_key_path.exists()
+        assert b"BEGIN PUBLIC KEY" in public_key_path.read_bytes()
+
+    def test_load_private_key_never_overwrites_an_existing_key(self, tmp_path) -> None:
+        key_path = tmp_path / "update_signing_private_key.pem"
+        private_key, _ = generate_keypair()
+        save_private_key(private_key, key_path)
+        original_bytes = key_path.read_bytes()
+        service = UpdateManagerService(None, private_key_path=key_path)  # type: ignore[arg-type]
+
+        service._load_private_key()
+
+        assert key_path.read_bytes() == original_bytes
+
+
 # ---------------------------------------------------------------------------
 # Attendance Client fixtures.
 # ---------------------------------------------------------------------------

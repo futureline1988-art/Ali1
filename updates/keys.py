@@ -9,10 +9,19 @@ and an update package answer completely different questions (see
 :mod:`developer_suite.services.update_manager_service`'s own
 docstring), so they must never share a keypair. Only the *public* key
 ships here — it can verify a signature but cannot produce one. The
-matching private key is held solely by the vendor, configured as
-:attr:`~developer_suite.config.DeveloperSuiteConfig.update_signing_private_key_path`,
-and used by :class:`~developer_suite.services.update_manager_service.UpdateManagerService`
+matching private key is held solely by the vendor: auto-created on
+first use by the Developer Suite (see
+:attr:`~developer_suite.config.DeveloperSuiteConfig.update_signing_private_key_path`
+and :func:`licensing.crypto.signing.ensure_keypair`) and used by
+:class:`~developer_suite.services.update_manager_service.UpdateManagerService`
 to sign every uploaded package.
+
+Re-keyed once, alongside ``licensing/keys.py``'s own re-key — same
+reasoning: the previous private key was never persisted anywhere
+retrievable and no update package was ever actually signed and
+distributed under it (every existing test uses its own throwaway
+keypair, never this committed one), so there is nothing this re-key
+invalidates.
 """
 
 from __future__ import annotations
@@ -21,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 PUBLIC_KEY_PEM: bytes = b"""-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEA68tZXt6yQRyAfiAeFiQLN6rsL5wNibMck2pVOZ2Mmhw=
+MCowBQYDK2VwAyEApA74neB5jQmprE6IjkMkG8fL31tNTZOoF773/5bwMcY=
 -----END PUBLIC KEY-----
 """
 """PEM-encoded Ed25519 public key, generated once for this application.

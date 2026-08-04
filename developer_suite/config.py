@@ -159,10 +159,19 @@ class DeveloperSuiteConfig:
             format :mod:`licensing.license_generator` and
             :mod:`licensing.crypto.signing` use, held only by this
             application, never the Attendance Client. A missing file
-            at this path simply means license issuance isn't available
-            yet (see
-            :class:`~developer_suite.services.license_service.LicenseSigningKeyError`);
-            nothing else in the Developer Suite depends on it.
+            at this path is auto-created, once, the first time
+            :class:`~developer_suite.services.license_service.LicenseService`
+            actually needs to sign something (see
+            :func:`~licensing.crypto.signing.ensure_keypair`) — this
+            machine running the Developer Suite at all is what makes
+            it "the developer machine"; nothing else in the Developer
+            Suite depends on this path.
+        licensing_public_key_path: Where the matching public key is
+            also written if a new license-signing keypair is ever
+            generated at :attr:`licensing_private_key_path` — a
+            convenience for retrieving it afterwards to embed in the
+            next Attendance Client build's ``licensing/keys.py``, not
+            read by anything at runtime.
         attendance_server_url: Base URL of the Attendance Server this
             installation synchronizes against (see
             :mod:`developer_suite.sync.client`). Purely configuration
@@ -183,13 +192,18 @@ class DeveloperSuiteConfig:
             separate keypair from :attr:`licensing_private_key_path`
             (see :mod:`developer_suite.services.update_manager_service`'s
             own docstring for why licenses and update packages are
-            never signed with the same key). A missing file at this
-            path simply means package upload isn't available yet;
-            nothing else in the Developer Suite depends on it.
+            never signed with the same key). Auto-created the same way
+            as :attr:`licensing_private_key_path` if missing the first
+            time it's needed.
+        update_signing_public_key_path: Where the matching public key
+            is also written if a new update-signing keypair is ever
+            generated — the convenience counterpart to
+            :attr:`licensing_public_key_path`, for embedding in the
+            next Attendance Client build's ``updates/keys.py``.
     """
 
     app_name: str = "Developer Suite"
-    app_version: str = "1.0.1"
+    app_version: str = "1.0.2"
     environment: Environment = Environment.PRODUCTION
 
     paths: DeveloperSuitePaths = field(default_factory=DeveloperSuitePaths.default)
@@ -201,6 +215,11 @@ class DeveloperSuiteConfig:
         / "keys"
         / "license_private_key.pem"
     )
+    licensing_public_key_path: Path = field(
+        default_factory=lambda: DeveloperSuitePaths.default().data_dir
+        / "keys"
+        / "license_public_key.pem"
+    )
     attendance_server_url: str = "http://127.0.0.1:8000"
     sync_enabled: bool = True
     sync_interval_seconds: int = 60
@@ -208,6 +227,11 @@ class DeveloperSuiteConfig:
         default_factory=lambda: DeveloperSuitePaths.default().data_dir
         / "keys"
         / "update_signing_private_key.pem"
+    )
+    update_signing_public_key_path: Path = field(
+        default_factory=lambda: DeveloperSuitePaths.default().data_dir
+        / "keys"
+        / "update_signing_public_key.pem"
     )
 
     @classmethod
@@ -247,10 +271,22 @@ class DeveloperSuiteConfig:
                 str(paths.data_dir / "keys" / "license_private_key.pem"),
             )
         )
+        licensing_public_key_path = Path(
+            os.getenv(
+                "DEV_SUITE_LICENSE_PUBLIC_KEY_PATH",
+                str(paths.data_dir / "keys" / "license_public_key.pem"),
+            )
+        )
         update_signing_private_key_path = Path(
             os.getenv(
                 "DEV_SUITE_UPDATE_SIGNING_PRIVATE_KEY_PATH",
                 str(paths.data_dir / "keys" / "update_signing_private_key.pem"),
+            )
+        )
+        update_signing_public_key_path = Path(
+            os.getenv(
+                "DEV_SUITE_UPDATE_SIGNING_PUBLIC_KEY_PATH",
+                str(paths.data_dir / "keys" / "update_signing_public_key.pem"),
             )
         )
 
@@ -263,6 +299,7 @@ class DeveloperSuiteConfig:
             security=SecurityConfig.from_env(),
             logging=logging_config,
             licensing_private_key_path=licensing_private_key_path,
+            licensing_public_key_path=licensing_public_key_path,
             attendance_server_url=os.getenv(
                 "DEV_SUITE_ATTENDANCE_SERVER_URL", cls.attendance_server_url
             ),
@@ -271,6 +308,7 @@ class DeveloperSuiteConfig:
                 "DEV_SUITE_SYNC_INTERVAL_SECONDS", cls.sync_interval_seconds
             ),
             update_signing_private_key_path=update_signing_private_key_path,
+            update_signing_public_key_path=update_signing_public_key_path,
         )
 
 
