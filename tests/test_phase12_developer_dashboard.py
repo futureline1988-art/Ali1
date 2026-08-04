@@ -87,8 +87,6 @@ def _reset_developer_suite_config_singleton():
 def server_config(tmp_path, monkeypatch) -> ServerConfig:
     monkeypatch.setenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(tmp_path / "attendance_server_test.db"))
     monkeypatch.setenv("ATTENDANCE_SERVER_SECRET_KEY", "test-secret-key")
-    monkeypatch.delenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME", raising=False)
-    monkeypatch.delenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
     server_config_module._config_instance = None
     yield get_server_config()
     server_config_module._config_instance = None

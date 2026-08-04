@@ -189,7 +189,7 @@ class DeveloperSuiteConfig:
     """
 
     app_name: str = "Developer Suite"
-    app_version: str = "1.0.0"
+    app_version: str = "1.0.1"
     environment: Environment = Environment.PRODUCTION
 
     paths: DeveloperSuitePaths = field(default_factory=DeveloperSuitePaths.default)

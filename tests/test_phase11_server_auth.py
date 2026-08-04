@@ -12,7 +12,9 @@ manager, login window — has its own test file). Three groups:
   the three Phase 10 read-only endpoints, against a real running
   Attendance Server (mirrors :mod:`tests.test_phase10_dashboard`'s own
   ``running_server_url`` fixture).
-* Bootstrap admin seeding (:func:`server.database.bootstrap.build_database`)
+* First-run admin setup (:meth:`~server.services.admin_auth_service.AdminAuthService.needs_initial_setup`/
+  :meth:`~server.services.admin_auth_service.AdminAuthService.bootstrap_first_admin`
+  and the ``/api/v1/auth/setup-status``/``/api/v1/auth/setup`` routes)
   and schema isolation (the four new tables live only in
   :class:`server.database.base.Base`, never in the Attendance Client's
   or Developer Suite's own metadata).
@@ -49,6 +51,7 @@ from server.services.admin_auth_service import (
     InvalidResetTokenError,
     PasswordPolicyError,
     ROLE_SCOPES,
+    SetupAlreadyCompletedError,
 )
 
 _STRONG_PASSWORD = "CorrectHorseBattery9!"
@@ -64,8 +67,6 @@ _OTHER_STRONG_PASSWORD = "TrebuchetIguana4?"
 def server_config(tmp_path, monkeypatch) -> ServerConfig:
     monkeypatch.setenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(tmp_path / "attendance_server_test.db"))
     monkeypatch.setenv("ATTENDANCE_SERVER_SECRET_KEY", "test-secret-key")
-    monkeypatch.delenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME", raising=False)
-    monkeypatch.delenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
     server_config_module._config_instance = None
     yield get_server_config()
     server_config_module._config_instance = None
@@ -512,38 +513,105 @@ class TestSyncReadScope:
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap seeding.
+# First-run admin setup.
 # ---------------------------------------------------------------------------
 
 
-class TestBootstrapSeeding:
-    def test_no_account_created_without_env_vars(self, server_database: Database) -> None:
+class TestFirstRunSetup:
+    def test_build_database_never_creates_an_account(self, server_database: Database) -> None:
+        """build_database() itself is not the account-provisioning path any more.
+
+        Regression coverage for the removed environment-variable
+        bootstrap seeding (``ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME``/
+        ``_PASSWORD``) — see ``server/database/bootstrap.py``'s module
+        docstring for why that was replaced with this interactive flow.
+        """
         with server_database.session_scope() as session:
             assert session.query(AdminAccount).count() == 0
 
-    def test_account_created_when_env_vars_present(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.setenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(tmp_path / "bootstrap_test.db"))
-        monkeypatch.setenv("ATTENDANCE_SERVER_SECRET_KEY", "test-secret-key")
-        monkeypatch.setenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME", "bootstrap-admin")
-        monkeypatch.setenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD", _STRONG_PASSWORD)
-        server_config_module._config_instance = None
-        config = get_server_config()
+    def test_needs_initial_setup_true_on_empty_database(self, auth_service: AdminAuthService) -> None:
+        assert auth_service.needs_initial_setup() is True
 
-        database = build_database(config)
-        try:
-            with database.session_scope() as session:
-                accounts = session.query(AdminAccount).all()
-                assert len(accounts) == 1
-                assert accounts[0].username == "bootstrap-admin"
-                assert accounts[0].role == AdminRole.SUPER_ADMIN
+    def test_needs_initial_setup_false_once_an_account_exists(self, auth_service: AdminAuthService) -> None:
+        auth_service.create_account(username="anyone", password=_STRONG_PASSWORD)
+        assert auth_service.needs_initial_setup() is False
 
-            # Calling build_database again must not create a second account.
-            build_database(config)
-            with database.session_scope() as session:
-                assert session.query(AdminAccount).count() == 1
-        finally:
-            database.dispose()
-            server_config_module._config_instance = None
+    def test_bootstrap_first_admin_creates_super_admin_and_working_session(
+        self, auth_service: AdminAuthService, server_database: Database
+    ) -> None:
+        result = auth_service.bootstrap_first_admin(
+            username="owner", password=_STRONG_PASSWORD, full_name="System Owner"
+        )
+        assert result.account.username == "owner"
+        assert result.account.role == AdminRole.SUPER_ADMIN
+        assert result.account.full_name == "System Owner"
+        assert "." in result.refresh_token
+
+        with server_database.session_scope() as session:
+            assert session.query(AdminAccount).count() == 1
+
+        # The returned session is immediately usable, exactly like login().
+        refreshed = auth_service.refresh(result.refresh_token)
+        assert refreshed.account.username == "owner"
+
+    def test_bootstrap_first_admin_refuses_once_an_account_exists(
+        self, auth_service: AdminAuthService, server_database: Database
+    ) -> None:
+        auth_service.create_account(username="first", password=_STRONG_PASSWORD)
+        with pytest.raises(SetupAlreadyCompletedError):
+            auth_service.bootstrap_first_admin(username="second", password=_OTHER_STRONG_PASSWORD)
+
+        # The rejected attempt must not have created a second account.
+        with server_database.session_scope() as session:
+            assert session.query(AdminAccount).count() == 1
+
+    def test_bootstrap_first_admin_weak_password_raises_and_creates_nothing(
+        self, auth_service: AdminAuthService, server_database: Database
+    ) -> None:
+        with pytest.raises(PasswordPolicyError):
+            auth_service.bootstrap_first_admin(username="owner", password="abc")
+        with server_database.session_scope() as session:
+            assert session.query(AdminAccount).count() == 0
+
+    def test_setup_status_endpoint_reflects_account_existence(
+        self, running_server_url, auth_service: AdminAuthService
+    ) -> None:
+        before = httpx.get(f"{running_server_url}/api/v1/auth/setup-status")
+        assert before.status_code == 200
+        assert before.json() == {"setup_required": True}
+
+        auth_service.create_account(username="someone", password=_STRONG_PASSWORD)
+
+        after = httpx.get(f"{running_server_url}/api/v1/auth/setup-status")
+        assert after.json() == {"setup_required": False}
+
+    def test_setup_endpoint_creates_account_and_returns_a_session(self, running_server_url) -> None:
+        response = httpx.post(
+            f"{running_server_url}/api/v1/auth/setup",
+            json={"username": "owner", "password": _STRONG_PASSWORD, "full_name": "System Owner"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["token_type"] == "bearer"
+        assert body["account"]["username"] == "owner"
+        assert body["account"]["role"] == "super_admin"
+        assert "password_hash" not in body["account"]
+
+    def test_setup_endpoint_is_409_once_an_account_exists(
+        self, running_server_url, auth_service: AdminAuthService
+    ) -> None:
+        auth_service.create_account(username="first", password=_STRONG_PASSWORD)
+        response = httpx.post(
+            f"{running_server_url}/api/v1/auth/setup",
+            json={"username": "second", "password": _OTHER_STRONG_PASSWORD},
+        )
+        assert response.status_code == 409
+
+    def test_setup_endpoint_weak_password_is_422(self, running_server_url) -> None:
+        response = httpx.post(
+            f"{running_server_url}/api/v1/auth/setup", json={"username": "owner", "password": "abc"}
+        )
+        assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------

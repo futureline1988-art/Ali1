@@ -32,6 +32,7 @@ class AdminAuditAction(str, Enum):
     PASSWORD_RESET_COMPLETED = "password_reset_completed"
     ACCOUNT_LOCKED = "account_locked"
     SESSION_REVOKED = "session_revoked"
+    ACCOUNT_CREATED_VIA_SETUP = "account_created_via_setup"
 
 
 class AdminAuditLog(ServerBaseModel):

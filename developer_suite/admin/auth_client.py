@@ -51,6 +51,10 @@ class AdminAuthPasswordPolicyError(AdminAuthClientError):
     """The new password was rejected by the server's strength policy (422)."""
 
 
+class AdminAuthSetupAlreadyCompletedError(AdminAuthClientError):
+    """First-run setup was attempted, but an admin account already exists (409)."""
+
+
 class AdminAuthServerError(AdminAuthClientError):
     """The server reached the request but returned an unexpected error status."""
 
@@ -134,6 +138,50 @@ class AdminAuthClient:
         self._transport = transport
         self._timeout = timeout
 
+    def get_setup_status(self) -> bool:
+        """Whether the Attendance Server has no admin account yet.
+
+        Raises:
+            AdminAuthConnectionError: The server could not be reached.
+            AdminAuthServerError: Any other non-2xx response.
+        """
+        response = self._get("/api/v1/auth/setup-status")
+        self._raise_for_unexpected_status(response)
+        return bool(response.json()["setup_required"])
+
+    def setup_first_admin(
+        self, username: str, password: str, *, full_name: str | None = None
+    ) -> AdminAuthResult:
+        """Create the very first admin account and start a session for it.
+
+        Args:
+            username: The new account's unique login name.
+            password: The new account's initial plaintext password.
+            full_name: Optional display name.
+
+        Raises:
+            AdminAuthConnectionError: The server could not be reached.
+            AdminAuthSetupAlreadyCompletedError: An admin account
+                already exists (409) — the caller raced another
+                client's setup and should fall back to the ordinary
+                login screen.
+            AdminAuthPasswordPolicyError: The password fails the
+                server's strength policy (422).
+            AdminAuthServerError: Any other non-2xx response.
+        """
+        response = self._post(
+            "/api/v1/auth/setup",
+            json={"username": username, "password": password, "full_name": full_name},
+        )
+        if response.status_code == 409:
+            raise AdminAuthSetupAlreadyCompletedError(
+                "An administrator account already exists; first-run setup is no longer available."
+            )
+        if response.status_code == 422:
+            raise AdminAuthPasswordPolicyError("The password does not meet the required policy.")
+        self._raise_for_unexpected_status(response)
+        return AdminAuthResult.from_json(response.json(), received_at=datetime.now())
+
     def login(self, username: str, password: str) -> AdminAuthResult:
         """Authenticate and start a new session.
 
@@ -203,6 +251,16 @@ class AdminAuthClient:
         if response.status_code == 422:
             raise AdminAuthPasswordPolicyError("The new password does not meet the required policy.")
         self._raise_for_unexpected_status(response)
+
+    def _get(self, path: str) -> httpx.Response:
+        client = httpx.Client(base_url=self._base_url, transport=self._transport, timeout=self._timeout)
+        try:
+            try:
+                return client.get(path)
+            except httpx.TransportError as exc:
+                raise AdminAuthConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
+        finally:
+            client.close()
 
     def _post(self, path: str, *, json: dict, headers: dict | None = None) -> httpx.Response:
         client = httpx.Client(base_url=self._base_url, transport=self._transport, timeout=self._timeout)

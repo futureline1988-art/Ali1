@@ -1,6 +1,6 @@
 """Tests for Phase 11: Developer Suite admin authentication.
 
-Four groups, mirroring :mod:`tests.test_phase11_server_auth`'s own
+Five groups, mirroring :mod:`tests.test_phase11_server_auth`'s own
 structure:
 
 * :class:`~developer_suite.models.admin_session.AdminSessionRecord` +
@@ -8,14 +8,20 @@ structure:
   — encrypted persistence of the singleton "remembered session" row.
 * :class:`~developer_suite.admin.auth_client.AdminAuthClient` against a
   real running Attendance Server (mirrors
-  :mod:`tests.test_phase10_dashboard`'s ``running_server_url`` fixture).
+  :mod:`tests.test_phase10_dashboard`'s ``running_server_url`` fixture),
+  including its first-run setup calls (``get_setup_status``/
+  ``setup_first_admin``).
 * :class:`~developer_suite.admin.session_manager.AdminSessionManager`
   — login/remember-me, automatic refresh, auto-login, logout, session
-  expiration handling — the real
+  expiration handling, and first-run setup
+  (``needs_initial_setup``/``complete_first_run_setup``) — the real
   :class:`~developer_suite.admin.token_provider.AdminTokenProvider`
   implementation that replaces Phase 10's temporary bootstrap token.
 * Light-touch :class:`~developer_suite.ui.login_window.LoginWindow`
   construction/interaction tests (``qapp`` from ``pytest-qt``).
+* Light-touch :class:`~developer_suite.ui.first_run_setup_window.FirstRunSetupWindow`
+  construction/interaction tests, same shape as the ``LoginWindow``
+  ones above.
 """
 
 from __future__ import annotations
@@ -47,12 +53,15 @@ from developer_suite.admin.auth_client import (
     AdminAuthConnectionError,
     AdminAuthInvalidCredentialsError,
     AdminAuthInvalidTokenError,
+    AdminAuthPasswordPolicyError,
+    AdminAuthSetupAlreadyCompletedError,
 )
 from developer_suite.admin.session_manager import AdminSessionManager
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.database.bootstrap import build_database as build_dev_suite_database
 from developer_suite.models.admin_session import AdminSessionRecord
 from developer_suite.repositories.admin_session_repository import AdminSessionRecordRepository
+from developer_suite.ui.first_run_setup_window import FirstRunSetupWindow
 from developer_suite.ui.login_window import LoginWindow
 
 _STRONG_PASSWORD = "CorrectHorseBattery9!"
@@ -74,8 +83,6 @@ def _reset_developer_suite_config_singleton():
 def server_config(tmp_path, monkeypatch) -> ServerConfig:
     monkeypatch.setenv("ATTENDANCE_SERVER_DB_SQLITE_PATH", str(tmp_path / "attendance_server_test.db"))
     monkeypatch.setenv("ATTENDANCE_SERVER_SECRET_KEY", "test-secret-key")
-    monkeypatch.delenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME", raising=False)
-    monkeypatch.delenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
     server_config_module._config_instance = None
     yield get_server_config()
     server_config_module._config_instance = None
@@ -279,6 +286,41 @@ class TestAdminAuthClient:
         auth_client.login("frank", "AnotherStrongPass1?")
 
 
+class TestAdminAuthClientSetup:
+    def test_get_setup_status_true_on_fresh_server(self, auth_client: AdminAuthClient) -> None:
+        assert auth_client.get_setup_status() is True
+
+    def test_get_setup_status_false_once_an_account_exists(
+        self, auth_client: AdminAuthClient, auth_service: AdminAuthService
+    ) -> None:
+        auth_service.create_account(username="someone", password=_STRONG_PASSWORD)
+        assert auth_client.get_setup_status() is False
+
+    def test_get_setup_status_connection_error_when_unreachable(self) -> None:
+        client = AdminAuthClient("http://127.0.0.1:1", timeout=1.0)
+        with pytest.raises(AdminAuthConnectionError):
+            client.get_setup_status()
+
+    def test_setup_first_admin_creates_account_and_returns_working_session(
+        self, auth_client: AdminAuthClient
+    ) -> None:
+        result = auth_client.setup_first_admin("owner", _STRONG_PASSWORD, full_name="System Owner")
+        assert result.account.username == "owner"
+        assert result.account.role == "super_admin"
+        assert "." in result.refresh_token
+
+    def test_setup_first_admin_raises_once_an_account_exists(
+        self, auth_client: AdminAuthClient, auth_service: AdminAuthService
+    ) -> None:
+        auth_service.create_account(username="first", password=_STRONG_PASSWORD)
+        with pytest.raises(AdminAuthSetupAlreadyCompletedError):
+            auth_client.setup_first_admin("second", _STRONG_PASSWORD)
+
+    def test_setup_first_admin_weak_password_raises(self, auth_client: AdminAuthClient) -> None:
+        with pytest.raises(AdminAuthPasswordPolicyError):
+            auth_client.setup_first_admin("owner", "abc")
+
+
 # ---------------------------------------------------------------------------
 # AdminSessionManager: the real AdminTokenProvider.
 # ---------------------------------------------------------------------------
@@ -420,6 +462,51 @@ class TestAdminSessionManager:
             assert AdminSessionRecordRepository(session).get() is None
 
 
+class TestAdminSessionManagerFirstRunSetup:
+    def test_needs_initial_setup_true_on_fresh_server(self, session_manager: AdminSessionManager) -> None:
+        assert session_manager.needs_initial_setup() is True
+
+    def test_needs_initial_setup_false_once_an_account_exists(
+        self, session_manager: AdminSessionManager, auth_service: AdminAuthService
+    ) -> None:
+        auth_service.create_account(username="someone", password=_STRONG_PASSWORD)
+        assert session_manager.needs_initial_setup() is False
+
+    def test_needs_initial_setup_fails_open_when_server_unreachable(
+        self, dev_suite_database: Database
+    ) -> None:
+        unreachable_client = AdminAuthClient("http://127.0.0.1:1", timeout=1.0)
+        manager = AdminSessionManager(dev_suite_database, unreachable_client)
+        assert manager.needs_initial_setup() is False
+
+    def test_complete_first_run_setup_populates_in_memory_session(
+        self, session_manager: AdminSessionManager
+    ) -> None:
+        account = session_manager.complete_first_run_setup("owner", _STRONG_PASSWORD, full_name="System Owner")
+        assert account.username == "owner"
+        assert account.role == "super_admin"
+        assert session_manager.is_authenticated
+        assert session_manager.current_account.username == "owner"
+        assert session_manager.get_token() is not None
+
+    def test_complete_first_run_setup_with_remember_me_persists_encrypted_record(
+        self, session_manager: AdminSessionManager, dev_suite_database: Database
+    ) -> None:
+        session_manager.complete_first_run_setup("owner", _STRONG_PASSWORD, remember_me=True)
+        with dev_suite_database.session_scope() as session:
+            record = AdminSessionRecordRepository(session).get()
+            assert record is not None
+            assert record.username == "owner"
+
+    def test_complete_first_run_setup_raises_once_an_account_exists(
+        self, session_manager: AdminSessionManager, auth_service: AdminAuthService
+    ) -> None:
+        auth_service.create_account(username="first", password=_STRONG_PASSWORD)
+        with pytest.raises(AdminAuthSetupAlreadyCompletedError):
+            session_manager.complete_first_run_setup("second", _STRONG_PASSWORD)
+        assert not session_manager.is_authenticated
+
+
 # ---------------------------------------------------------------------------
 # LoginWindow construction/interaction.
 # ---------------------------------------------------------------------------
@@ -481,3 +568,86 @@ class TestLoginWindow:
         assert window.password_edit.echoMode() == QLineEdit.Password
         window._toggle_password_visibility()
         assert window.password_edit.echoMode() == QLineEdit.Normal
+
+
+# ---------------------------------------------------------------------------
+# FirstRunSetupWindow construction/interaction.
+# ---------------------------------------------------------------------------
+
+
+class TestFirstRunSetupWindow:
+    def test_construction_shows_no_error(self, qapp, session_manager: AdminSessionManager) -> None:
+        window = FirstRunSetupWindow(session_manager)
+        assert not window.error_label.isVisible()
+
+    def test_empty_fields_show_inline_error(self, qapp, session_manager: AdminSessionManager) -> None:
+        window = FirstRunSetupWindow(session_manager)
+        window.show()
+        window._attempt_setup()
+        assert window.error_label.isVisible()
+
+    def test_mismatched_passwords_show_inline_error_and_do_not_call_setup(
+        self, qapp, session_manager: AdminSessionManager
+    ) -> None:
+        window = FirstRunSetupWindow(session_manager)
+        window.show()
+        window.username_edit.setText("owner")
+        window.password_edit.setText(_STRONG_PASSWORD)
+        window.confirm_password_edit.setText("something-else")
+        window._attempt_setup()
+        assert window.error_label.isVisible()
+        assert not session_manager.is_authenticated
+
+    def test_successful_setup_emits_signal_and_clears_passwords(
+        self, qapp, session_manager: AdminSessionManager
+    ) -> None:
+        window = FirstRunSetupWindow(session_manager)
+        window.username_edit.setText("owner")
+        window.full_name_edit.setText("System Owner")
+        window.password_edit.setText(_STRONG_PASSWORD)
+        window.confirm_password_edit.setText(_STRONG_PASSWORD)
+
+        received = []
+        window.setup_successful.connect(lambda: received.append(True))
+        window._attempt_setup()
+
+        assert received == [True]
+        assert window.password_edit.text() == ""
+        assert window.confirm_password_edit.text() == ""
+        assert not window.error_label.isVisible()
+        assert session_manager.is_authenticated
+        assert session_manager.current_account.username == "owner"
+
+    def test_setup_already_completed_shows_inline_error_and_does_not_emit(
+        self, qapp, session_manager: AdminSessionManager, auth_service: AdminAuthService
+    ) -> None:
+        auth_service.create_account(username="existing", password=_STRONG_PASSWORD)
+        window = FirstRunSetupWindow(session_manager)
+        window.show()
+        window.username_edit.setText("owner")
+        window.password_edit.setText(_STRONG_PASSWORD)
+        window.confirm_password_edit.setText(_STRONG_PASSWORD)
+
+        received = []
+        window.setup_successful.connect(lambda: received.append(True))
+        window._attempt_setup()
+
+        assert received == []
+        assert window.error_label.isVisible()
+        assert not session_manager.is_authenticated
+
+    def test_remember_me_checkbox_defaults_unchecked(self, qapp, session_manager: AdminSessionManager) -> None:
+        window = FirstRunSetupWindow(session_manager)
+        assert window.remember_me_checkbox.isChecked() is False
+
+    def test_toggle_password_visibility_affects_both_fields(
+        self, qapp, session_manager: AdminSessionManager
+    ) -> None:
+        from PySide6.QtWidgets import QLineEdit
+
+        window = FirstRunSetupWindow(session_manager)
+        assert window.password_edit.echoMode() == QLineEdit.Password
+        assert window.confirm_password_edit.echoMode() == QLineEdit.Password
+        window._toggle_password_visibility()
+        assert window.password_edit.echoMode() == QLineEdit.Normal
+        assert window.confirm_password_edit.echoMode() == QLineEdit.Normal

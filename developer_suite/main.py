@@ -14,6 +14,17 @@ succeeds — mirroring exactly how the Attendance Client's own
 ``main.py`` gates ``ui.main_window.MainWindow`` behind
 ``ui.login_window.LoginWindow``.
 
+A later addition puts one more check ahead of both:
+:meth:`~developer_suite.admin.session_manager.AdminSessionManager.needs_initial_setup`
+asks the Attendance Server whether any admin account exists at all. On
+a brand-new server with none yet, :class:`~developer_suite.ui.first_run_setup_window.FirstRunSetupWindow`
+is shown instead — the interactive way to create the first
+administrator, replacing an earlier environment-variable bootstrap
+mechanism that amounted to a hidden default credential (see
+``server/database/bootstrap.py``'s module docstring). Once that
+account exists, every later launch skips straight past this check to
+the ordinary auto-login/login-window flow above.
+
 Phase 12 adds :attr:`~developer_suite.container.ServiceContainer.dashboard_refresh_service`,
 a second background worker the composition root owns the lifetime of
 — but unlike :attr:`~developer_suite.container.ServiceContainer.sync_scheduler`
@@ -36,6 +47,7 @@ from PySide6.QtWidgets import QApplication
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.container import ServiceContainer
 from developer_suite.database.bootstrap import build_database
+from developer_suite.ui.first_run_setup_window import FirstRunSetupWindow
 from developer_suite.ui.login_window import LoginWindow
 from developer_suite.ui.main_window import MainWindow
 
@@ -65,7 +77,17 @@ def main() -> int:
         window.show()
         windows["main"] = window  # keep a reference alive past this function's return
 
-    if container.admin_session_manager.try_auto_login():
+    if container.admin_session_manager.needs_initial_setup():
+        setup_window = FirstRunSetupWindow(container.admin_session_manager)
+
+        def _on_setup_successful() -> None:
+            setup_window.close()
+            _show_main_window()
+
+        setup_window.setup_successful.connect(_on_setup_successful)
+        setup_window.show()
+        windows["setup"] = setup_window
+    elif container.admin_session_manager.try_auto_login():
         _show_main_window()
     else:
         login_window = LoginWindow(container.admin_session_manager)

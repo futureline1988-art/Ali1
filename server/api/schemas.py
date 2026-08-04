@@ -49,6 +49,14 @@ class ResolveConflictRequest(BaseModel):
     apply_incoming: bool
 
 
+class AdminSetupRequest(BaseModel):
+    """POST /api/v1/auth/setup request body."""
+
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1)
+    full_name: str | None = Field(default=None, max_length=200)
+
+
 class AdminLoginRequest(BaseModel):
     """POST /api/v1/auth/login request body."""
 

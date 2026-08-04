@@ -6,21 +6,27 @@ exposes a public ``.engine`` — so a second, fully independent database
 instance needs no change to that shared class, exactly as
 :func:`developer_suite.database.bootstrap.build_database` already
 established.
+
+This module does *not* seed an initial admin account. An earlier
+version of this file did, via
+``ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME``/``ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD``
+environment variables — removed deliberately: an env-var-driven
+default credential is still a hidden username/password living in the
+project's configuration surface, just one step removed from being
+hardcoded in source. The very first admin account is now created
+interactively, through the same UI everyone else logs in through — see
+:meth:`~server.services.admin_auth_service.AdminAuthService.bootstrap_first_admin`
+and ``developer_suite/ui/first_run_setup_window.py``.
 """
 
 from __future__ import annotations
-
-import os
 
 from sqlalchemy import func, select
 
 from database.database import Database
 from server.config import ServerConfig
 from server.database.base import Base
-from server.models.admin_account import AdminAccount, AdminRole
 from server.models.sync import SyncSequence
-from server.services.admin_auth_service import AdminAuthService, PasswordPolicyError
-from utils.logger import logger
 
 
 def build_database(config: ServerConfig) -> Database:
@@ -32,17 +38,17 @@ def build_database(config: ServerConfig) -> Database:
     Returns:
         A connected :class:`~database.database.Database`, with every
         registered :class:`~server.database.base.ServerBaseModel`
-        subclass's table created, the
-        :class:`~server.models.sync.SyncSequence` lock row seeded, and
-        (Phase 11) an initial :class:`~server.models.admin_account.AdminAccount`
-        seeded if none exist yet and bootstrap credentials were
-        supplied — see :func:`_ensure_bootstrap_admin_seeded`.
+        subclass's table created and the
+        :class:`~server.models.sync.SyncSequence` lock row seeded.
+        Whether any :class:`~server.models.admin_account.AdminAccount`
+        exists yet is left entirely to
+        :meth:`~server.services.admin_auth_service.AdminAuthService.needs_initial_setup` —
+        this function does not create or check for one.
     """
     database = Database(database_config=config.database)
     database.check_connection()
     Base.metadata.create_all(bind=database.engine)
     _ensure_sync_sequence_seeded(database)
-    _ensure_bootstrap_admin_seeded(database, config)
     return database
 
 
@@ -58,39 +64,3 @@ def _ensure_sync_sequence_seeded(database: Database) -> None:
         row_count = session.execute(select(func.count()).select_from(SyncSequence)).scalar_one()
         if row_count == 0:
             session.add(SyncSequence())
-
-
-def _ensure_bootstrap_admin_seeded(database: Database, config: ServerConfig) -> None:
-    """Create one initial super-admin account, if this is a brand-new deployment.
-
-    Idempotent and safe to call on every process startup: it only ever
-    acts when the ``admin_accounts`` table is completely empty *and*
-    ``ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME``/``ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD``
-    are both set — a real deployment sets them once to provision the
-    first login, then normal admin account management (out of scope
-    for Phase 11 — see :mod:`server.services.admin_auth_service`'s
-    module docstring) takes over. There is no API endpoint that creates
-    accounts; this is the only account-provisioning path today.
-    """
-    username = os.getenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME")
-    password = os.getenv("ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD")
-    if not username or not password:
-        return
-
-    with database.session_scope() as session:
-        existing_count = session.execute(select(func.count()).select_from(AdminAccount)).scalar_one()
-    if existing_count > 0:
-        return
-
-    try:
-        AdminAuthService(database, config=config).create_account(
-            username=username, password=password, role=AdminRole.SUPER_ADMIN
-        )
-    except PasswordPolicyError as exc:
-        logger.error(
-            "Bootstrap admin account was not created: password fails the configured policy ({error}).",
-            error=str(exc),
-        )
-        return
-
-    logger.info("Bootstrap admin account {username!r} created.", username=username)

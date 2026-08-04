@@ -73,6 +73,79 @@ class AdminSessionManager:
         """The currently authenticated account, or ``None`` if not signed in."""
         return self._account
 
+    def needs_initial_setup(self) -> bool:
+        """Whether the Attendance Server has no admin account yet.
+
+        Meant to be called once at application startup, before
+        :meth:`try_auto_login` — if this returns ``True``, the caller
+        should show :class:`~developer_suite.ui.first_run_setup_window.FirstRunSetupWindow`
+        instead of the ordinary login window.
+
+        Fails open to ``False`` (never blocks startup behind a check
+        that itself depends on connectivity): if the server cannot be
+        reached, this looks exactly like "no setup needed" and the
+        application falls through to its ordinary
+        :meth:`try_auto_login`/login-window flow — the same
+        offline-tolerant behavior every other startup path in this
+        application already has. A genuinely fresh deployment that
+        happens to be unreachable at this exact moment simply shows a
+        connection error on the login screen instead of the setup
+        wizard, which is corrected the next time the app is launched
+        with the server reachable.
+
+        Returns:
+            ``True`` only if the server was reachable and confirmed no
+            admin account exists yet.
+        """
+        try:
+            return self._auth_client.get_setup_status()
+        except AdminAuthClientError:
+            return False
+
+    def complete_first_run_setup(
+        self,
+        username: str,
+        password: str,
+        *,
+        full_name: str | None = None,
+        remember_me: bool = False,
+    ) -> AdminAccountInfo:
+        """Create the very first admin account and start a session for it.
+
+        Mirrors :meth:`login`'s shape exactly — the returned session is
+        immediately active, so the caller (the setup wizard) can go
+        straight into the application rather than showing a second,
+        separate login prompt right after setup.
+
+        Args:
+            username: The new account's unique login name.
+            password: The new account's initial plaintext password.
+            full_name: Optional display name.
+            remember_me: Whether this session should survive an
+                application restart (see :meth:`try_auto_login`).
+
+        Returns:
+            The newly created account.
+
+        Raises:
+            developer_suite.admin.auth_client.AdminAuthClientError: Any
+                setup or connection failure — the caller (the setup
+                window) is expected to catch this and display it. In
+                particular,
+                :class:`~developer_suite.admin.auth_client.AdminAuthSetupAlreadyCompletedError`
+                means another client already completed setup first
+                (the caller should direct the user to the ordinary
+                login screen instead).
+        """
+        result = self._auth_client.setup_first_admin(username, password, full_name=full_name)
+        self._apply_result(result)
+        self._remember_me = remember_me
+        if remember_me:
+            self._persist(result)
+        else:
+            self._clear_persisted()
+        return result.account
+
     def login(self, username: str, password: str, *, remember_me: bool = False) -> AdminAccountInfo:
         """Authenticate and start a new session.
 

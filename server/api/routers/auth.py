@@ -10,13 +10,17 @@ to :class:`~server.services.admin_auth_service.AdminAuthService`
 — no auth/session/password logic is duplicated here, only HTTP
 request/response shaping and exception-to-status-code translation.
 
-``/login``, ``/refresh``, and the two ``/password-reset`` routes are
-unauthenticated by design (that is the point of a login/refresh/reset
-flow — proving identity *is* the request). ``/logout`` only requires
-possessing the refresh token being revoked, the same "possession is
-the credential" model :mod:`server.auth.device_auth` already uses for
-device credentials. ``/change-password`` and ``/sessions`` require a
-valid access token, verified through the existing, unmodified
+``/setup-status``, ``/login``, ``/refresh``, and the two
+``/password-reset`` routes are unauthenticated by design (that is the
+point of a setup/login/refresh/reset flow — proving identity, or
+proving there is no identity to prove yet, *is* the request; see
+:meth:`~server.services.admin_auth_service.AdminAuthService.bootstrap_first_admin`'s
+docstring for why ``/setup`` is safe to leave open the same way).
+``/logout`` only requires possessing the refresh token being revoked,
+the same "possession is the credential" model
+:mod:`server.auth.device_auth` already uses for device credentials.
+``/change-password`` and ``/sessions`` require a valid access token,
+verified through the existing, unmodified
 :func:`~server.auth.dependencies.get_current_principal`.
 """
 
@@ -33,6 +37,7 @@ from server.api.schemas import (
     AdminPasswordResetCompleteRequest,
     AdminPasswordResetRequestBody,
     AdminRefreshRequest,
+    AdminSetupRequest,
 )
 from server.auth.dependencies import AuthenticatedPrincipal, get_current_principal, require_scope
 from server.services.admin_auth_service import (
@@ -44,6 +49,7 @@ from server.services.admin_auth_service import (
     InvalidResetTokenError,
     InvalidRefreshTokenError,
     PasswordPolicyError,
+    SetupAlreadyCompletedError,
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -57,6 +63,44 @@ def _auth_result_response(result: AuthResult) -> dict:
         "expires_in_minutes": result.expires_in_minutes,
         "account": result.account.to_dict(exclude={"password_hash"}),
     }
+
+
+@router.get("/setup-status")
+def setup_status(request: Request) -> dict:
+    """Whether this server has no admin account yet (first-run setup required).
+
+    Returns:
+        ``{"setup_required": bool}``.
+    """
+    service: AdminAuthService = request.app.state.container.admin_auth_service
+    return {"setup_required": service.needs_initial_setup()}
+
+
+@router.post("/setup")
+def setup(body: AdminSetupRequest, request: Request) -> dict:
+    """Create the very first admin account and start a session for it.
+
+    Only ever succeeds once per deployment — see
+    :meth:`~server.services.admin_auth_service.AdminAuthService.bootstrap_first_admin`'s
+    docstring.
+
+    Returns:
+        The same shape as a successful ``/login`` response.
+
+    Raises:
+        HTTPException: 409 if an admin account already exists, 422 if
+            the password fails the configured strength policy.
+    """
+    service: AdminAuthService = request.app.state.container.admin_auth_service
+    try:
+        result = service.bootstrap_first_admin(
+            username=body.username, password=body.password, full_name=body.full_name
+        )
+    except SetupAlreadyCompletedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except PasswordPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return _auth_result_response(result)
 
 
 @router.post("/login")

@@ -51,6 +51,28 @@ Windows build for the first time:
   version number, even though both now ship from the same GitHub
   Release.
 
+### Security
+
+- **Removed the Developer Suite's hidden bootstrap-admin credential
+  mechanism** (`ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME`/
+  `ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_PASSWORD` environment variables) and
+  replaced it with a proper **First Run Setup** flow: on first launch
+  against a brand-new Attendance Server (one with no admin account yet),
+  the Developer Suite now shows a setup wizard prompting the operator to
+  create the first administrator account themselves — the exact same
+  screen everyone else logs in through, just for the one-time case where
+  there is no account to log into yet. Once that account exists, every
+  later launch goes straight to the ordinary login screen; the wizard
+  never reappears. New server endpoints `GET /api/v1/auth/setup-status`
+  and `POST /api/v1/auth/setup` back this (self-limiting: the account
+  count is re-verified inside the same transaction that creates the
+  first one, so `/setup` can only ever succeed once per deployment — a
+  second attempt is rejected with 409, even under a race between two
+  people opening the wizard at once). `developer_suite/config.py`'s
+  `DeveloperSuiteConfig.app_version` is bumped to `1.0.1` for this fix,
+  published as an updated `DeveloperSuite-Setup.exe` asset on this same
+  `v1.1.0` release (no new tag).
+
 ### Fixed
 
 - **Windows build (this release)**: `requirements-runtime.txt` was

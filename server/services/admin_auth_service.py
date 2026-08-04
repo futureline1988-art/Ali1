@@ -94,6 +94,10 @@ class AccountNotFoundError(AdminAuthServiceError):
     """No admin account exists with the given id."""
 
 
+class SetupAlreadyCompletedError(AdminAuthServiceError):
+    """First-run setup was attempted, but an admin account already exists."""
+
+
 @dataclass(frozen=True)
 class AuthResult:
     """The outcome of a successful login or token refresh.
@@ -149,9 +153,92 @@ class AdminAuthService(BaseService):
         self._config = config
 
     # ------------------------------------------------------------------
-    # Account provisioning (bootstrap-only in Phase 11 — see
-    # server/database/bootstrap.py; no API endpoint creates accounts).
+    # Account provisioning.
     # ------------------------------------------------------------------
+
+    def needs_initial_setup(self) -> bool:
+        """Whether no admin account exists yet — first-run setup should run.
+
+        Safe to expose unauthenticated (see the ``/setup-status`` route
+        in ``server/api/routers/auth.py``): the answer reveals nothing
+        more sensitive than whether a login page would currently
+        accept anyone at all, and a client needs exactly this to
+        decide whether to show the setup wizard or the ordinary login
+        screen (see ``developer_suite/ui/first_run_setup_window.py``).
+        """
+        with self._session_scope() as session:
+            return AdminAccountRepository(session).count() == 0
+
+    def bootstrap_first_admin(
+        self, *, username: str, password: str, full_name: str | None = None
+    ) -> AuthResult:
+        """Create the very first admin account and start a session for it.
+
+        The interactive replacement for the environment-variable
+        bootstrap seeding this phase originally shipped with
+        (``ATTENDANCE_SERVER_BOOTSTRAP_ADMIN_USERNAME``/``_PASSWORD``,
+        since removed — see ``server/database/bootstrap.py``'s
+        history): rather than a hidden default credential a deployment
+        script might set (and a developer might reasonably not want
+        living anywhere in the project, even as an env var convention),
+        the very first person to launch the Developer Suite against a
+        brand-new server is prompted to create this account themselves,
+        through the same UI everyone else logs in through.
+
+        Self-limiting rather than needing a separate authorization
+        check: the account count is re-verified inside the same
+        transaction that creates the new one, so this can only ever
+        succeed once per deployment — including against a race between
+        two people opening the wizard against the same fresh server at
+        once, the loser of which gets :exc:`SetupAlreadyCompletedError`
+        instead of a second super-admin account.
+
+        Args:
+            username: The new account's unique login name.
+            password: The new account's initial plaintext password.
+            full_name: Optional display name.
+
+        Returns:
+            A session for the new account, exactly like a successful
+            :meth:`login` — the caller can go straight into the
+            application rather than showing a second, separate login
+            prompt right after setup.
+
+        Raises:
+            SetupAlreadyCompletedError: An admin account already
+                exists; the caller should fall back to the ordinary
+                login screen.
+            PasswordPolicyError: ``password`` fails the configured
+                strength policy.
+        """
+        self._validate_password_or_raise(password)
+        with self._session_scope() as session:
+            if AdminAccountRepository(session).count() > 0:
+                raise SetupAlreadyCompletedError(
+                    "An administrator account already exists; first-run setup is no longer available."
+                )
+
+            account = AdminAccount(
+                username=username,
+                password_hash=hash_password(password, rounds=self._config.security.bcrypt_rounds),
+                full_name=full_name,
+                role=AdminRole.SUPER_ADMIN,
+            )
+            AdminAccountRepository(session).add(account)
+
+            refresh_token, _session_row = self._start_session(session, account, user_agent=None)
+            self._audit(
+                session,
+                account.id,
+                AdminAuditAction.ACCOUNT_CREATED_VIA_SETUP,
+                "Initial administrator account created via first-run setup.",
+            )
+            return AuthResult(
+                account=account,
+                access_token=self._issue_access_token(account),
+                refresh_token=refresh_token,
+                expires_in_minutes=self._config.api.token_expires_minutes,
+            )
 
     def create_account(
         self,
