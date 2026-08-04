@@ -79,6 +79,24 @@ Windows build for the first time:
   from the placeholder `0.1.0` to `1.0.0` for this first installable
   build.
 
+- **Fixed a default-port mismatch between the three applications**:
+  `server/config.py`'s `ApiConfig.port` default was `9000`, while both
+  `developer_suite.config.DeveloperSuiteConfig.attendance_server_url`
+  and this repo's own `config.SyncConfig.server_url` had always
+  defaulted independently to `http://127.0.0.1:8000` — meaning a fresh,
+  all-defaults install of all three applications side by side could
+  never actually talk to each other without someone manually overriding
+  one of them. The Attendance Server's own default is now `8000`,
+  matching what both clients already expected, so a brand-new
+  installation works out of the box with zero manual configuration.
+  `.github/workflows/windows-release.yml`'s `build-attendance-server`
+  job's `GET /health` smoke tests were updated to poll the corrected
+  port `8000` instead of the old `9000`. Verified end to end: the real
+  Attendance Server, Developer Suite, and Attendance Client — each
+  started with none of their own port/URL environment variables set —
+  now reach each other, complete First Run Setup, log in, and enroll a
+  device entirely on their own defaults.
+
 ### Security
 
 - **Removed the Developer Suite's hidden bootstrap-admin credential

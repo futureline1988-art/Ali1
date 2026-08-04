@@ -234,7 +234,18 @@ class ServerConfig:
         api = ApiConfig(
             enabled=True,
             host=os.getenv("ATTENDANCE_SERVER_API_HOST", "0.0.0.0"),
-            port=_env_int("ATTENDANCE_SERVER_API_PORT", 9000),
+            # 8000, not config.ApiConfig's own port field's value read some
+            # other way -- deliberately the same literal default both
+            # clients already carry independently: developer_suite.config's
+            # DeveloperSuiteConfig.attendance_server_url and this repo's own
+            # config.SyncConfig.server_url both default to
+            # "http://127.0.0.1:8000". A fresh install of all three
+            # applications must work with zero manual configuration, so
+            # this server's own default has to be the one two independent
+            # client defaults already agree on, not a separately-chosen
+            # value (9000, before this fix) that quietly required everyone
+            # to override something by hand.
+            port=_env_int("ATTENDANCE_SERVER_API_PORT", 8000),
             token_expires_minutes=_env_int("ATTENDANCE_SERVER_API_TOKEN_EXPIRES_MINUTES", 480),
         )
 

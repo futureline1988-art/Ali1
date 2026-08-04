@@ -54,7 +54,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 ; Standard-user install by default; the server itself never needs
 ; elevation since it only ever writes to %LOCALAPPDATA% and binds to
-; an unprivileged port (9000 by default). Installing to Program Files
+; an unprivileged port (8000 by default). Installing to Program Files
 ; still needs admin once, at install time, which Inno Setup requests
 ; automatically because DefaultDirName resolves under {autopf}.
 PrivilegesRequired=admin
