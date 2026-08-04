@@ -3,6 +3,49 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [1.1.0] - 2026-08-04
+
+### Added
+
+Fifteen phases of commercial-platform work (Developer Suite + Attendance
+Server, alongside the existing Attendance Client), all now included in a
+Windows build for the first time:
+
+- **Developer Suite**: a new, separately-versioned desktop application for
+  the vendor — customer registry, license issuance/renewal/revocation,
+  a real-time dashboard with charts, remote configuration publishing,
+  remote software update management (sign/upload/target/schedule/publish/
+  rollback), and a Reporting & Analytics module (executive, customer,
+  license, synchronization, update deployment, audit log, device, and
+  configuration-publication-history reports, with filtering/search/sort/
+  date-range/grouping and PDF/Excel/CSV export).
+- **Attendance Server**: a new platform server providing device
+  registration, a generic synchronization ledger (push/pull/conflict
+  resolution), administrator authentication (RBAC, sessions, audit
+  logging, password reset), and read/write REST APIs backing every
+  Developer Suite feature above.
+- **Attendance Client**: gained remote-configuration synchronization
+  (pull-and-apply, with rollback support), a background software-update
+  checker (checksum- and signature-verified downloads, resumable,
+  mandatory-update handling), and a status bar reflecting synchronization
+  state — all opt-in and fully functional offline when no Attendance
+  Server is configured or reachable.
+
+### Fixed
+
+- **Windows build (this release)**: `requirements-runtime.txt` was
+  missing `httpx`, a hard dependency of the new remote-configuration-sync
+  and software-update client code `main.py` imports unconditionally —
+  the frozen `.exe` would have failed at import time. Added.
+- **Windows build (this release)**: the frozen `.exe` crashed at startup
+  with `ModuleNotFoundError: No module named 'backports'`, from
+  PyInstaller's automatically-bundled `pkg_resources` runtime hook
+  needing `backports.tarfile` (a transitive dependency modern
+  `setuptools` pulls in under Python < 3.12) that was not installed in
+  the build environment. Added `backports.tarfile` to
+  `requirements-runtime.txt` — confirmed fixed by reproducing the exact
+  crash in a local PyInstaller build and rebuilding clean after the fix.
+
 ## [1.0.2] - 2026-08-03
 
 ### Fixed

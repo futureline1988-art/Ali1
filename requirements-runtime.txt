@@ -13,10 +13,16 @@
 # excluded here to keep the frozen build smaller, faster to build, and free
 # of unrelated failure modes. APScheduler *is* included below -
 # services/scheduler_service.py uses it for scheduled device sync and
-# automatic backups. fastapi and uvicorn are also genuinely used now (see
-# api/ and run_api.py) but stay excluded here too: that REST API is a
-# separate optional process (`python run_api.py`), never imported by
-# main.py, so the frozen desktop .exe has no need for it.
+# automatic backups. httpx *is* included below too - sync/client.py and
+# updates/client.py (imported unconditionally by main.py, via
+# sync/scheduler.py and updates/checker.py) both use it for the
+# Attendance Server's remote-configuration-sync and software-update HTTP
+# calls; omitting it here left the frozen build missing a hard runtime
+# dependency of code main.py always imports. fastapi and uvicorn are
+# also genuinely used now (see api/ and run_api.py) but stay excluded
+# here too: that REST API is a separate optional process (`python
+# run_api.py`), never imported by main.py, so the frozen desktop .exe
+# has no need for it.
 #
 # Install with: pip install -r requirements-runtime.txt
 # Target interpreter: Python 3.11-3.13 (match the interpreter used to run
@@ -50,6 +56,9 @@ pyzk==0.9
 # ---- HTTP (Hikvision ISAPI) ------------------------------------------------
 requests==2.32.3
 
+# ---- HTTP (Attendance Server: remote configuration sync + software updates) --
+httpx==0.28.1
+
 # ---- Configuration / Environment --------------------------------------------
 python-dotenv==1.0.1
 
@@ -61,3 +70,15 @@ APScheduler==3.10.4
 
 # ---- Build tooling -----------------------------------------------------------
 pyinstaller==6.11.1
+
+# ---- PyInstaller/setuptools packaging fix (not imported by app code) --------
+# Modern setuptools vendors pkg_resources, whose bundled jaraco.context
+# imports `backports.tarfile` under Python < 3.12. PyInstaller always
+# bundles pkg_resources's pyi_rth_pkgres runtime hook once pkg_resources
+# is present in the build venv at all (regardless of whether the app
+# itself ever calls it), so the frozen .exe crashes at startup with
+# "ModuleNotFoundError: No module named 'backports'" unless this is
+# installed too. Confirmed by reproducing and fixing the crash directly:
+# a Linux PyInstaller build of this exact spec failed identically until
+# this package was added.
+backports.tarfile==1.2.0
