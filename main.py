@@ -19,8 +19,12 @@ from config import get_config
 from database.database import DatabaseConnectionError, get_database, session_scope
 from licensing.license_service import LicenseService
 from models.permission import Permission
+from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.permission_repository import PermissionRepository
 from services.scheduler_service import SchedulerService
+from sync.client import SyncClientError
+from sync.coordinator import ClientSyncCoordinator
+from sync.scheduler import ClientSyncSchedulerService
 from ui.attendance import AttendancePage
 from ui.branches import BranchesPage
 from ui.dashboard_page import DashboardPage
@@ -122,6 +126,33 @@ def _seed_default_permissions() -> None:
     logger.info("Seeded {count} default permissions", count=len(_DEFAULT_PERMISSIONS))
 
 
+def _bootstrap_remote_configuration_sync(coordinator: ClientSyncCoordinator, config) -> None:
+    """Enroll this installation with the Attendance Server, if configured to.
+
+    A one-time action: a no-op once already enrolled, and a no-op if
+    no bootstrap token is configured at all (an installation that has
+    never been given one simply never enrolls, and keeps working fully
+    offline forever — see :mod:`sync` package docstring). Mirrors
+    Phase 10's now-retired ``ConfiguredAdminTokenProvider`` env-var
+    -bootstrap shape (see :class:`~config.SyncConfig`'s docstring).
+
+    Failures (server unreachable, token rejected) are logged, never
+    raised — enrollment is best-effort background setup, not something
+    that should ever block or fail application startup.
+    """
+    if not config.sync.bootstrap_admin_token:
+        return
+    if coordinator.is_enrolled():
+        return
+    try:
+        coordinator.enroll(
+            admin_bearer_token=config.sync.bootstrap_admin_token, name=config.sync.device_name
+        )
+        logger.info("Enrolled this installation for remote configuration sync.")
+    except SyncClientError as exc:
+        logger.warning("Could not enroll for remote configuration sync yet: {error}", error=str(exc))
+
+
 def _install_exception_hook() -> None:
     """Log uncaught exceptions instead of letting Qt silently swallow them.
 
@@ -144,6 +175,29 @@ def _install_exception_hook() -> None:
         )
 
     sys.excepthook = _log_uncaught
+
+
+def _show_remote_configuration_restart_notice(parent, company_id: int) -> None:
+    """Show and clear a pending "restart required" notice for this company, if any.
+
+    Checked once per login (rather than at raw startup) so it is
+    always shown against the company the user actually just logged
+    into, matching :mod:`sync.configuration_apply`'s own "first active
+    company" application scoping. A no-op for the common case where no
+    remote configuration was ever applied, or the last one applied
+    needed no restart.
+    """
+    with session_scope() as session:
+        settings = CompanySettingsRepository(session, company_id=company_id).get_for_company()
+        if settings is None or not settings.remote_config_restart_required:
+            return
+        settings.remote_config_restart_required = False
+
+    QMessageBox.information(
+        parent,
+        "مطلوب إعادة التشغيل",
+        "تم تطبيق إعدادات جديدة من الخادم. يرجى إعادة تشغيل التطبيق لإتمام التفعيل الكامل.",
+    )
 
 
 class ApplicationController:
@@ -217,6 +271,7 @@ class ApplicationController:
 
         self._main_window = window
         window.show()
+        _show_remote_configuration_restart_notice(window, company_id)
 
     def _on_logout(self) -> None:
         """Handle an explicit logout click: end the session and return to login."""
@@ -288,6 +343,7 @@ def main() -> int:
     # own local scope for the rest of the process's lifetime.
     run_state: dict[str, object] = {}
     scheduler = SchedulerService()
+    sync_scheduler_holder: dict[str, ClientSyncSchedulerService] = {}
 
     def _launch_app() -> None:
         """Run the rest of startup: database, permissions, splash, main app.
@@ -309,6 +365,17 @@ def main() -> int:
 
         _seed_default_permissions()
         scheduler.start()
+
+        sync_coordinator = ClientSyncCoordinator(database, config.sync.server_url)
+        _bootstrap_remote_configuration_sync(sync_coordinator, config)
+        sync_scheduler = ClientSyncSchedulerService(
+            sync_coordinator,
+            database,
+            sync_enabled=config.sync.enabled,
+            sync_interval_seconds=config.sync.interval_seconds,
+        )
+        sync_scheduler.start()
+        sync_scheduler_holder["scheduler"] = sync_scheduler
 
         splash = build_splash_screen(app_name=config.app_name_ar)
         splash.show()
@@ -334,6 +401,8 @@ def main() -> int:
     exit_code = app.exec()
 
     scheduler.shutdown()
+    if "scheduler" in sync_scheduler_holder:
+        sync_scheduler_holder["scheduler"].shutdown()
     get_database().dispose()
     final_code = run_state.get("exit_code", exit_code)
     logger.info("{app_name} exited with code {code}", app_name=config.app_name, code=final_code)

@@ -1,27 +1,35 @@
-"""Remote Configuration editor page: one tab per profile type, plus bundles.
+"""Remote Configuration editor page: one tab per profile type, plus bundles and publishing.
 
-Every tab is a :class:`~developer_suite.ui._profile_list_panel.ProfileListPanel`
-wired to one group of :class:`~developer_suite.services.configuration_service.ConfigurationService`
-methods — no synchronization, network code, or customer communication
-exists here or anywhere else in this phase (see this package's parent
-``__init__.py`` and ``developer_suite/modules/remote_configuration.py``).
+Every profile/bundle tab is a
+:class:`~developer_suite.ui._profile_list_panel.ProfileListPanel` wired
+to one group of :class:`~developer_suite.services.configuration_service.ConfigurationService`
+methods — unchanged since Phase 5. Phase 13 adds one more tab,
+:class:`~developer_suite.ui.configuration_publish_panel.ConfigurationPublishPanel`,
+for publishing a bundle to a customer's installation, viewing its
+version history, comparing pending changes, and rolling back — see
+that module's own docstring for its dependencies.
 """
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMessageBox, QTabWidget, QVBoxLayout, QWidget
 
+from developer_suite.admin.client import AdminApiClient
+from developer_suite.admin.session_manager import AdminSessionManager
 from developer_suite.models.attendance_policy_profile import AttendancePolicyProfile
 from developer_suite.models.backup_profile import BackupProfile
 from developer_suite.models.device_profile import DeviceProfile
 from developer_suite.models.print_profile import PrintProfile
 from developer_suite.models.remote_configuration import RemoteConfiguration
 from developer_suite.models.theme_profile import ThemeProfile
+from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.configuration_service import (
     ConfigurationService,
     ConfigurationServiceError,
 )
+from developer_suite.services.customer_service import CustomerService
 from developer_suite.ui._profile_list_panel import ProfileListPanel
+from developer_suite.ui.configuration_publish_panel import ConfigurationPublishPanel
 from developer_suite.ui.profile_dialogs import (
     AttendancePolicyProfileDialog,
     BackupProfileDialog,
@@ -39,15 +47,36 @@ class ConfigurationEditorPage(QWidget):
     :class:`~developer_suite.services.configuration_service.ConfigurationService`
     — never to :class:`~developer_suite.repositories.configuration_repository.ConfigurationRepository`
     directly, matching every other module's established service/UI
-    boundary.
+    boundary. The publishing tab additionally talks to
+    :class:`~developer_suite.services.configuration_publish_service.ConfigurationPublishService`,
+    :class:`~developer_suite.services.customer_service.CustomerService`,
+    and :class:`~developer_suite.admin.client.AdminApiClient` — see
+    :class:`~developer_suite.ui.configuration_publish_panel.ConfigurationPublishPanel`'s
+    own docstring.
     """
 
-    def __init__(self, configuration_service: ConfigurationService, *, parent: QWidget | None = None) -> None:
-        """Build the page with one tab per profile type plus a bundles tab.
+    def __init__(
+        self,
+        configuration_service: ConfigurationService,
+        publish_service: ConfigurationPublishService,
+        customer_service: CustomerService,
+        admin_client: AdminApiClient,
+        admin_session_manager: AdminSessionManager,
+        *,
+        parent: QWidget | None = None,
+    ) -> None:
+        """Build the page with one tab per profile type, plus bundles and publishing.
 
         Args:
-            configuration_service: The service every tab performs its
-                operations through.
+            configuration_service: The service every profile/bundle tab
+                performs its operations through.
+            publish_service: Backs the publishing tab.
+            customer_service: Populates the publishing tab's customer
+                picker.
+            admin_client: Populates the publishing tab's target
+                -installation picker.
+            admin_session_manager: Supplies the current administrator's
+                identity to the publishing tab.
             parent: Optional parent widget.
         """
         super().__init__(parent)
@@ -76,6 +105,16 @@ class ConfigurationEditorPage(QWidget):
 
         self.configuration_panel = self._build_configuration_tab()
         self.tabs.addTab(self.configuration_panel, "حزم الإعدادات")
+
+        self.publish_panel = ConfigurationPublishPanel(
+            configuration_service,
+            publish_service,
+            customer_service,
+            admin_client,
+            admin_session_manager,
+            parent=self,
+        )
+        self.tabs.addTab(self.publish_panel, "النشر")
 
     # -- Theme tab ----------------------------------------------------------
 

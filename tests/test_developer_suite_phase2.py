@@ -21,7 +21,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import config as attendance_config_module
 import developer_suite.config as developer_suite_config_module
 from database.database import Database
+from developer_suite.admin.auth_client import AdminAuthClient
 from developer_suite.admin.client import AdminApiClient
+from developer_suite.admin.session_manager import AdminSessionManager
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.container import ServiceContainer
 from developer_suite.database.base import Base as DeveloperSuiteBase
@@ -36,6 +38,7 @@ from developer_suite.modules import (
     ServerStatusModule,
 )
 from developer_suite.modules.base import PlatformModule
+from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
@@ -93,7 +96,18 @@ def _construct_module(
         license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
         return LicenseManagerModule(license_service, customer_service)
     if module_cls is RemoteConfigurationModule:
-        return RemoteConfigurationModule(ConfigurationService(database))
+        customer_service = CustomerService(database)
+        admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
+        admin_session_manager = AdminSessionManager(
+            database, AdminAuthClient(config.attendance_server_url)
+        )
+        return RemoteConfigurationModule(
+            ConfigurationService(database),
+            ConfigurationPublishService(database),
+            customer_service,
+            admin_client,
+            admin_session_manager,
+        )
     if module_cls is MonitoringModule:
         admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
         return MonitoringModule(admin_client)

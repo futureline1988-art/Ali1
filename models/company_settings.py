@@ -11,14 +11,26 @@ Kept deliberately decoupled from ``config.py``: this table stores
 per-company *overrides* of the application's global defaults, not a
 duplicate of the config module's enums, so no model in this package
 needs to import from ``config``.
+
+Phase 13 adds the columns a Remote Configuration publish actually
+writes into (see ``sync/configuration_apply.py``) — branding
+colors/font and two small JSON groups for print/attendance-policy
+overrides, plus bookkeeping for what was last applied. Every added
+column is nullable with no server-side behavioral default, so a row
+written by a version of this application that predates Phase 13 (or a
+company that has never received a remote publish) behaves exactly as
+before: these columns are simply ``NULL``/``False`` until the first
+configuration is applied.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, CheckConstraint, Integer, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, CheckConstraint, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 
-from models.base import BaseModel, CompanyScopedMixin
+from models.base import BaseModel, CompanyScopedMixin, UTCDateTime
 
 
 class CompanySettings(CompanyScopedMixin, BaseModel):
@@ -46,6 +58,37 @@ class CompanySettings(CompanyScopedMixin, BaseModel):
             own override.
         default_sync_interval_minutes: Fallback interval between
             automatic device sync runs.
+        theme_primary_color: Hex primary UI accent color, set by a
+            published Remote Configuration (Phase 13); ``None`` until
+            the first one is applied.
+        theme_secondary_color: Hex secondary UI accent color.
+        theme_accent_color: Optional hex tertiary highlight color.
+        theme_font_family: The UI font family.
+        print_settings: Print/report layout overrides (paper size,
+            header/footer text, logo/QR toggles, margin) as a JSON
+            dict, shaped exactly like
+            :func:`~developer_suite.sync.configuration_sync.build_payload`'s
+            ``"print"`` group — kept as one JSON column rather than
+            five flat ones since nothing in this application queries,
+            sorts, or filters by an individual print setting.
+        attendance_policy_settings: Attendance/shift/overtime rule
+            overrides (grace periods, overtime threshold, half-day
+            threshold, working days) as a JSON dict, shaped exactly
+            like ``build_payload``'s ``"attendance_policy"`` group, for
+            the same reason.
+        remote_config_version: The
+            :attr:`~developer_suite.models.configuration_publication.ConfigurationPublication.version`
+            currently applied; ``None`` if none ever has.
+        remote_config_checksum: That publication's checksum — compared
+            against a newly pulled payload's own checksum so an
+            unchanged republish is never needlessly reapplied (see
+            ``sync/coordinator.py``'s own docstring).
+        remote_config_applied_at: When :meth:`remote_config_version`
+            was last applied.
+        remote_config_restart_required: Whether the most recently
+            applied configuration changed a setting (language or UI
+            font) that only takes full effect after this application
+            restarts. Cleared once the one-time notice has been shown.
         company: The related :class:`~models.company.Company`.
     """
 
@@ -91,6 +134,20 @@ class CompanySettings(CompanyScopedMixin, BaseModel):
     )
     default_sync_interval_minutes: Mapped[int] = mapped_column(
         Integer, default=15, nullable=False
+    )
+
+    theme_primary_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    theme_secondary_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    theme_accent_color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    theme_font_family: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    print_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    attendance_policy_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    remote_config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remote_config_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    remote_config_applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    remote_config_restart_required: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
     )
 
     company: Mapped["Company"] = relationship(  # noqa: F821

@@ -14,6 +14,7 @@ from __future__ import annotations
 from developer_suite.models.admin_session import AdminSessionRecord
 from developer_suite.models.attendance_policy_profile import AttendancePolicyProfile
 from developer_suite.models.backup_profile import BackupLocationType, BackupProfile
+from developer_suite.models.configuration_publication import ConfigurationPublication
 from developer_suite.models.customer import Customer, CustomerStatus
 from developer_suite.models.device_profile import DeviceProfile
 from developer_suite.models.license import IssuedLicense, IssuedLicenseStatus
@@ -50,4 +51,5 @@ __all__ = [
     "SyncOperation",
     "OutboxStatus",
     "AdminSessionRecord",
+    "ConfigurationPublication",
 ]

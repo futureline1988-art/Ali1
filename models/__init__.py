@@ -26,6 +26,7 @@ from models.license import License
 from models.permission import Permission
 from models.role import Role
 from models.shift import EmployeeShiftAssignment, Shift
+from models.sync_state import ClientSyncCredential, ClientSyncCursor
 from models.user import User
 
 __all__ = [
@@ -33,6 +34,8 @@ __all__ = [
     "AttendanceRecord",
     "AuditLog",
     "Branch",
+    "ClientSyncCredential",
+    "ClientSyncCursor",
     "Company",
     "CompanySettings",
     "Department",

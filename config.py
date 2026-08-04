@@ -418,6 +418,47 @@ class DeviceConfig:
 
 
 @dataclass(frozen=True)
+class SyncConfig:
+    """Remote configuration synchronization settings (Phase 13).
+
+    Governs this installation's connection to the Attendance Server
+    for pulling published configuration — entirely separate from, and
+    optional relative to, this application's normal offline operation
+    (see :mod:`sync` package docstring). Mirrors
+    :class:`~developer_suite.config.DeveloperSuiteConfig`'s equivalent
+    fields, since both applications talk to the same server through
+    the same generic sync API.
+    """
+
+    enabled: bool = True
+    server_url: str = "http://127.0.0.1:8000"
+    interval_seconds: int = 300
+    device_name: str = "Attendance Client"
+    bootstrap_admin_token: str = ""
+
+    @classmethod
+    def from_env(cls) -> "SyncConfig":
+        """Build a :class:`SyncConfig` from environment variables.
+
+        ``bootstrap_admin_token``, if set, is used exactly once: at
+        startup, if this installation has not enrolled yet, ``main.py``
+        uses it to call
+        :meth:`~sync.coordinator.ClientSyncCoordinator.enroll` — the
+        same "read a token from the environment to perform a one-time
+        bootstrap action" shape Phase 10's now-retired
+        ``ConfiguredAdminTokenProvider`` established, here scoped to a
+        single enrollment call rather than an ongoing token source.
+        """
+        return cls(
+            enabled=_env_bool("SYNC_ENABLED", True),
+            server_url=os.getenv("SYNC_ATTENDANCE_SERVER_URL", cls.server_url),
+            interval_seconds=_env_int("SYNC_INTERVAL_SECONDS", 300),
+            device_name=os.getenv("SYNC_DEVICE_NAME", cls.device_name),
+            bootstrap_admin_token=os.getenv("SYNC_BOOTSTRAP_ADMIN_TOKEN", ""),
+        )
+
+
+@dataclass(frozen=True)
 class ApiConfig:
     """Optional REST API layer settings (see ``api/app.py``).
 
@@ -482,6 +523,7 @@ class AppConfig:
     device: DeviceConfig = field(default_factory=DeviceConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    sync: SyncConfig = field(default_factory=SyncConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -519,6 +561,7 @@ class AppConfig:
             device=DeviceConfig.from_env(),
             api=ApiConfig.from_env(),
             logging=LoggingConfig.from_env(),
+            sync=SyncConfig.from_env(),
         )
 
 

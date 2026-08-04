@@ -78,6 +78,7 @@ class ConfigurationService(BaseService):
         accent_color: str | None = None,
         logo_path: str | None = None,
         font_family: str = "Cairo",
+        language: str = "ar",
     ) -> ThemeProfile:
         """Create a new theme profile.
 
@@ -94,6 +95,7 @@ class ConfigurationService(BaseService):
                 accent_color=accent_color,
                 logo_path=logo_path,
                 font_family=font_family,
+                language=language,
             )
             return ConfigurationRepository(session).theme_profiles.add(profile)
 
@@ -108,6 +110,7 @@ class ConfigurationService(BaseService):
         accent_color: str | None = None,
         logo_path: str | None = None,
         font_family: str = "Cairo",
+        language: str = "ar",
     ) -> ThemeProfile:
         """Update an existing theme profile.
 
@@ -127,6 +130,7 @@ class ConfigurationService(BaseService):
             profile.accent_color = accent_color
             profile.logo_path = logo_path
             profile.font_family = font_family
+            profile.language = language
             session.flush()
             return profile
 

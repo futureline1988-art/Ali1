@@ -65,6 +65,39 @@ def configuration_service(dev_suite_database) -> ConfigurationService:
 
 
 @pytest.fixture
+def publish_service(dev_suite_database):
+    from developer_suite.services.configuration_publish_service import ConfigurationPublishService
+
+    return ConfigurationPublishService(dev_suite_database)
+
+
+@pytest.fixture
+def customer_service(dev_suite_database):
+    from developer_suite.services.customer_service import CustomerService
+
+    return CustomerService(dev_suite_database)
+
+
+@pytest.fixture
+def admin_client(dev_suite_config):
+    from developer_suite.admin.client import AdminApiClient
+
+    class _NullAdminTokenProvider:
+        def get_token(self):
+            return None
+
+    return AdminApiClient(dev_suite_config.attendance_server_url, _NullAdminTokenProvider())
+
+
+@pytest.fixture
+def admin_session_manager(dev_suite_database, dev_suite_config):
+    from developer_suite.admin.auth_client import AdminAuthClient
+    from developer_suite.admin.session_manager import AdminSessionManager
+
+    return AdminSessionManager(dev_suite_database, AdminAuthClient(dev_suite_config.attendance_server_url))
+
+
+@pytest.fixture
 def bundle_profiles(configuration_service: ConfigurationService):
     """One of each profile type, ready to compose into a bundle."""
     return {
@@ -467,20 +500,33 @@ class TestProfileDialogs:
 
 
 class TestConfigurationEditorPage:
-    def test_has_six_tabs(self, qapp, configuration_service: ConfigurationService) -> None:
-        page = ConfigurationEditorPage(configuration_service)
-        assert page.tabs.count() == 6
+    def test_has_seven_tabs(
+        self, qapp, configuration_service, publish_service, customer_service, admin_client, admin_session_manager
+    ) -> None:
+        page = ConfigurationEditorPage(
+            configuration_service, publish_service, customer_service, admin_client, admin_session_manager
+        )
+        assert page.tabs.count() == 7
 
     def test_theme_tab_loads_existing_profiles(
-        self, qapp, configuration_service: ConfigurationService
+        self, qapp, configuration_service, publish_service, customer_service, admin_client, admin_session_manager
     ) -> None:
         configuration_service.create_theme_profile(name="Theme A")
         configuration_service.create_theme_profile(name="Theme B")
-        page = ConfigurationEditorPage(configuration_service)
+        page = ConfigurationEditorPage(
+            configuration_service, publish_service, customer_service, admin_client, admin_session_manager
+        )
         assert page.theme_panel.table.rowCount() == 2
 
     def test_configuration_tab_loads_existing_bundles(
-        self, qapp, configuration_service: ConfigurationService, bundle_profiles
+        self,
+        qapp,
+        configuration_service: ConfigurationService,
+        publish_service,
+        customer_service,
+        admin_client,
+        admin_session_manager,
+        bundle_profiles,
     ) -> None:
         configuration_service.create_configuration(
             name="Default Bundle",
@@ -490,7 +536,9 @@ class TestConfigurationEditorPage:
             device_profile_id=bundle_profiles["device"].id,
             backup_profile_id=bundle_profiles["backup"].id,
         )
-        page = ConfigurationEditorPage(configuration_service)
+        page = ConfigurationEditorPage(
+            configuration_service, publish_service, customer_service, admin_client, admin_session_manager
+        )
         assert page.configuration_panel.table.rowCount() == 1
         assert page.configuration_panel.table.item(0, 0).text() == "Default Bundle"
 

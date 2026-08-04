@@ -28,6 +28,7 @@ from developer_suite.modules import (
     RemoteConfigurationModule,
     ServerStatusModule,
 )
+from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
@@ -69,6 +70,10 @@ class ServiceContainer:
         admin_client: Read-only client for the Attendance Server's
             administration endpoints (registered devices, recent sync
             activity, server status) — see :mod:`developer_suite.admin.client`.
+        configuration_publish_service: Publishes/compares/rolls back
+            configuration bundles toward a customer's Attendance
+            Client installation (Phase 13 — see
+            :mod:`developer_suite.services.configuration_publish_service`).
         dashboard_service: Aggregates :attr:`customer_service`,
             :attr:`license_service`, :attr:`sync_scheduler`, and
             :attr:`admin_client` into one dashboard snapshot — see
@@ -101,6 +106,7 @@ class ServiceContainer:
             database, private_key_path=config.licensing_private_key_path
         )
         self.configuration_service = ConfigurationService(database)
+        self.configuration_publish_service = ConfigurationPublishService(database)
         self.sync_coordinator = SyncCoordinator(database, config)
         register_customer_sync(self.sync_coordinator)
         self.sync_scheduler = SyncSchedulerService(self.sync_coordinator, config)
@@ -138,7 +144,13 @@ class ServiceContainer:
             LicenseManagerModule: lambda: LicenseManagerModule(
                 self.license_service, self.customer_service
             ),
-            RemoteConfigurationModule: lambda: RemoteConfigurationModule(self.configuration_service),
+            RemoteConfigurationModule: lambda: RemoteConfigurationModule(
+                self.configuration_service,
+                self.configuration_publish_service,
+                self.customer_service,
+                self.admin_client,
+                self.admin_session_manager,
+            ),
             MonitoringModule: lambda: MonitoringModule(self.admin_client),
             ServerStatusModule: lambda: ServerStatusModule(self.admin_client, self.config),
         }

@@ -42,6 +42,10 @@ _THEME_MODE_LABELS_AR = {
     ThemeMode.LIGHT: "فاتح",
     ThemeMode.DARK: "داكن",
 }
+_LANGUAGE_LABELS_AR = {
+    "ar": "العربية",
+    "en": "الإنجليزية",
+}
 
 
 class ThemeProfileDialog(QDialog):
@@ -81,6 +85,11 @@ class ThemeProfileDialog(QDialog):
         self.font_family_edit = QLineEdit(self)
         form.addRow("الخط", self.font_family_edit)
 
+        self.language_combo = QComboBox(self)
+        for code, label in _LANGUAGE_LABELS_AR.items():
+            self.language_combo.addItem(label, userData=code)
+        form.addRow("اللغة", self.language_combo)
+
         if existing is not None:
             self.name_edit.setText(existing.name)
             self.mode_combo.setCurrentIndex(list(ThemeMode).index(existing.mode))
@@ -89,6 +98,7 @@ class ThemeProfileDialog(QDialog):
             self.accent_color_edit.setText(existing.accent_color or "")
             self.logo_path_edit.setText(existing.logo_path or "")
             self.font_family_edit.setText(existing.font_family)
+            self.language_combo.setCurrentIndex(list(_LANGUAGE_LABELS_AR).index(existing.language))
         else:
             self.primary_color_edit.setText("#1976D2")
             self.secondary_color_edit.setText("#424242")
@@ -111,6 +121,7 @@ class ThemeProfileDialog(QDialog):
             "accent_color": self.accent_color_edit.text().strip() or None,
             "logo_path": self.logo_path_edit.text().strip() or None,
             "font_family": self.font_family_edit.text().strip() or "Cairo",
+            "language": self.language_combo.currentData(),
         }
 
 
