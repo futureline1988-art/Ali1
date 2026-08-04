@@ -1,0 +1,65 @@
+# ==============================================================================
+# Developer Suite - Frozen Build Dependencies
+# ==============================================================================
+# Used ONLY to build the Developer Suite's Windows PyInstaller executable
+# (see packaging/pyinstaller/developer_suite.spec and
+# packaging/installer/setup_developer_suite.iss). This is this
+# application's own trimmed dependency list, independent of
+# requirements-runtime.txt (the Attendance Client's own frozen-build
+# list) -- the two applications are built, versioned, and distributed
+# separately, and this file contains only packages actually imported by
+# developer_suite/ and the shared modules it reuses (config.py,
+# database/, licensing/, utils/).
+#
+# Notably absent versus requirements-runtime.txt: bcrypt, pyzk,
+# python-barcode, qrcode, requests. The Developer Suite never imports
+# any of them -- its admin authentication is a pure HTTP client against
+# the Attendance Server's own bcrypt-hashed accounts (see
+# developer_suite/admin/), and it has no biometric-device or
+# QR/barcode code of its own.
+#
+# Install with: pip install -r requirements-developer-suite-runtime.txt
+# Target interpreter: Python 3.11-3.13 (match the interpreter used to run
+# PyInstaller on the Windows build machine).
+# ==============================================================================
+
+# ---- GUI Framework ----------------------------------------------------------
+PySide6==6.7.2
+
+# ---- Database / ORM ----------------------------------------------------------
+SQLAlchemy==2.0.32
+
+# ---- Security (Ed25519 license/update signing, local encrypted fields) ------
+cryptography==43.0.0
+
+# ---- Reporting: Excel / PDF (Phase 15 Reporting & Analytics module) --------
+openpyxl==3.1.5
+reportlab==4.2.2
+arabic-reshaper==3.0.1
+python-bidi==0.6.11
+
+# ---- HTTP (Attendance Server: admin auth, sync, remote-config, updates) -----
+httpx==0.28.1
+
+# ---- Configuration / Environment --------------------------------------------
+python-dotenv==1.0.1
+
+# ---- Logging ---------------------------------------------------------------
+loguru==0.7.2
+
+# ---- Scheduling (background device-credential sync + dashboard refresh) -----
+APScheduler==3.10.4
+
+# ---- Build tooling -----------------------------------------------------------
+pyinstaller==6.11.1
+
+# ---- PyInstaller/setuptools packaging fix (not imported by app code) --------
+# Same fix requirements-runtime.txt documents in detail: modern
+# setuptools vendors pkg_resources, whose bundled jaraco.context imports
+# backports.tarfile under Python < 3.12, and PyInstaller always bundles
+# pkg_resources's runtime hook once pkg_resources is present in the
+# build venv at all -- so the frozen .exe crashes at startup with
+# "ModuleNotFoundError: No module named 'backports'" unless this is
+# installed too. This is a build-tool-level issue, not specific to
+# either application's own code.
+backports.tarfile==1.2.0

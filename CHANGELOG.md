@@ -3,6 +3,35 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## Developer Suite [1.0.0] - 2026-08-04
+
+### Added
+
+- First standalone Windows build of the Developer Suite, the vendor-side
+  desktop application for managing customers, issuing and activating
+  licenses, publishing remote configuration, and managing software
+  updates and deployment dashboards/reporting against the Attendance
+  Server (Phases 2-15 of the platform work summarized in the Attendance
+  Management System's own `[1.1.0]` entry below, packaged for
+  distribution for the first time).
+- New `packaging/pyinstaller/developer_suite.spec` (onedir PyInstaller
+  build), `packaging/installer/setup_developer_suite.iss` (Inno Setup
+  installer producing `Setup.exe`), `developer_suite_bootstrap.py`
+  (the same stdlib-only startup crash guard `bootstrap.py` provides for
+  the Attendance Client, applied to this application), and
+  `requirements-developer-suite-runtime.txt` (this application's own
+  trimmed frozen-build dependency list -- notably without `bcrypt`,
+  `pyzk`, `python-barcode`, `qrcode`, or `requests`, none of which the
+  Developer Suite imports).
+- New `.github/workflows/developer-suite-release.yml`, triggered on
+  `devsuite-v*.*.*` tags (a prefix that can never collide with
+  `windows-release.yml`'s own `v*.*.*` trigger), building and
+  Windows-runner-smoke-testing the installer before attaching it to a
+  GitHub Release.
+- `developer_suite/config.py`'s `DeveloperSuiteConfig.app_version`
+  default bumped from the placeholder `0.1.0` to `1.0.0` for this first
+  release, independent of the Attendance Client's own version.
+
 ## [1.1.0] - 2026-08-04
 
 ### Added
