@@ -15,6 +15,19 @@ sequence given. Two extra steps make Arabic render correctly:
 
 Shares the ``rows`` / ``(field_key, header_label)`` column-spec shape
 used by :mod:`utils.csv_export` and :mod:`utils.excel`.
+
+Deliberately takes ``fonts_dir`` as an explicit parameter rather than
+resolving it internally via ``config.get_config()`` — this module is
+shared infrastructure (the Developer Suite's own Reporting & Analytics
+module, Phase 15, calls :func:`export_to_pdf` directly, exactly like
+it already imports :mod:`utils.validators`/:mod:`utils.csv_export`/
+:mod:`utils.excel`), and resolving fonts through the Attendance
+Client's own frozen-aware config singleton would make this function's
+behavior depend on the *other* application's configuration/environment
+variables, violating the platform's "keep the three applications
+completely isolated" rule. The Attendance Client's own caller
+(``services/report_service.py``) passes
+``get_config().paths.assets_dir / "fonts"`` explicitly instead.
 """
 
 from __future__ import annotations
@@ -34,24 +47,26 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from config import get_config
-
 FONT_NAME = "DejaVuSans"
 FONT_NAME_BOLD = "DejaVuSans-Bold"
 
 _fonts_registered = False
 
 
-def _ensure_fonts_registered() -> None:
+def _ensure_fonts_registered(fonts_dir: Path) -> None:
     """Register the bundled Arabic-capable font with reportlab.
 
     Idempotent: reportlab raises if the same font name is registered
-    twice, so this only performs the registration once per process.
+    twice, so this only performs the registration once per process
+    (against whichever ``fonts_dir`` the first caller supplied).
+
+    Args:
+        fonts_dir: Directory containing ``DejaVuSans.ttf`` and
+            ``DejaVuSans-Bold.ttf``.
     """
     global _fonts_registered
     if _fonts_registered:
         return
-    fonts_dir = get_config().paths.assets_dir / "fonts"
     pdfmetrics.registerFont(TTFont(FONT_NAME, str(fonts_dir / "DejaVuSans.ttf")))
     pdfmetrics.registerFont(TTFont(FONT_NAME_BOLD, str(fonts_dir / "DejaVuSans-Bold.ttf")))
     _fonts_registered = True
@@ -86,6 +101,7 @@ def export_to_pdf(
     output_path: Path,
     *,
     title: str,
+    fonts_dir: Path,
     subtitle: str | None = None,
     rtl: bool = True,
     landscape_orientation: bool = True,
@@ -100,6 +116,9 @@ def export_to_pdf(
         output_path: Destination file path; parent directories are
             created if needed.
         title: Report title, printed centered at the top of the page.
+        fonts_dir: Directory containing the bundled ``DejaVuSans``
+            font files (see this module's own docstring for why this
+            is a caller-supplied path rather than resolved internally).
         subtitle: Optional secondary line under the title (e.g. a date
             range or company name).
         rtl: Whether to lay the table out right-to-left (the first
@@ -115,7 +134,7 @@ def export_to_pdf(
     Returns:
         ``output_path``, for chaining.
     """
-    _ensure_fonts_registered()
+    _ensure_fonts_registered(fonts_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     page_size = landscape(A4) if landscape_orientation else A4

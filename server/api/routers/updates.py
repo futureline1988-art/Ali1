@@ -292,6 +292,29 @@ def rollback_version(
     return version.to_dict()
 
 
+@router.get("/device-status")
+def list_device_statuses(
+    request: Request,
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin", "sync:read")),
+) -> dict:
+    """List every device's reported status for every version it has ever reported on.
+
+    Read-only, like every other ``sync:read``-widened endpoint on this
+    router. Complements ``GET /stats`` (Phase 14, pre-aggregated
+    counts only): this returns the raw per-device rows a deployment
+    report (Phase 15 — see :mod:`developer_suite.services.reporting_service`)
+    needs to show "which device is on which version, and its current
+    status." Device names and version strings are deliberately left
+    unresolved here (just ``device_public_id``/``update_version_id``)
+    — the same "resolve raw ids client-side" convention
+    ``SyncActivityEntry.device_id`` already established, since this
+    server has no reason to join across those tables just for display.
+    """
+    update_service: UpdateService = request.app.state.container.update_service
+    statuses = update_service.list_all_device_statuses()
+    return {"statuses": [status.to_dict() for status in statuses]}
+
+
 @router.get("/stats")
 def get_stats(
     request: Request,

@@ -892,6 +892,7 @@ class TestNavigationAndModules:
             "RemoteConfigurationModule",
             "MonitoringModule",
             "UpdateManagerModule",
+            "ReportingModule",
             "ServerStatusModule",
             "SettingsModule",
         ]

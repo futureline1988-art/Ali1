@@ -508,6 +508,21 @@ class UpdateService(BaseService):
                 reported_at=datetime.now(timezone.utc),
             )
 
+    def list_all_device_statuses(self) -> list[DeviceUpdateStatus]:
+        """List every device's reported status for every version it has ever reported on.
+
+        A thin wrapper over the already-generic
+        :meth:`~server.repositories.base_repository.BaseRepository.list_all`
+        (the same call :meth:`get_dashboard_stats` already makes
+        internally to compute its aggregates) — this method exists so
+        the Developer Suite's Reporting & Analytics module (Phase 15)
+        can build a per-device deployment report, which needs the raw
+        rows rather than :meth:`get_dashboard_stats`'s pre-aggregated
+        counts. No new data, no new write path.
+        """
+        with self._session_scope() as session:
+            return DeviceUpdateStatusRepository(session).list_all()
+
     # -- Dashboard aggregation --------------------------------------------------
 
     def get_dashboard_stats(self) -> UpdateDashboardStats:

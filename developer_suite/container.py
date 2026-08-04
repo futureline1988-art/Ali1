@@ -26,6 +26,7 @@ from developer_suite.modules import (
     MonitoringModule,
     PlatformModule,
     RemoteConfigurationModule,
+    ReportingModule,
     ServerStatusModule,
     UpdateManagerModule,
 )
@@ -36,6 +37,7 @@ from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
+from developer_suite.services.reporting_service import ReportingService
 from developer_suite.services.update_manager_service import UpdateManagerService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
@@ -100,6 +102,12 @@ class ServiceContainer:
             schedule, disable, and roll back software updates (Phase
             14 — see
             :mod:`developer_suite.services.update_manager_service`).
+        reporting_service: Assembles, filters, sorts, and groups every
+            report category (Phase 15 — see
+            :mod:`developer_suite.services.reporting_service`), over
+            :attr:`customer_service`/:attr:`license_service`/
+            :attr:`configuration_publish_service`/:attr:`dashboard_service`/
+            :attr:`admin_client` — introduces no dependency of its own.
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
@@ -137,6 +145,13 @@ class ServiceContainer:
             config,
         )
         self.dashboard_refresh_service = DashboardRefreshService(self.dashboard_service)
+        self.reporting_service = ReportingService(
+            self.customer_service,
+            self.license_service,
+            self.configuration_publish_service,
+            self.dashboard_service,
+            self.admin_client,
+        )
         self._modules: dict[str, PlatformModule] = self._build_modules()
 
     def _module_factories(self) -> dict[type[PlatformModule], Callable[[], PlatformModule]]:
@@ -175,6 +190,7 @@ class ServiceContainer:
                 self.customer_group_service,
                 self.admin_client,
             ),
+            ReportingModule: lambda: ReportingModule(self.reporting_service, self.config),
         }
 
     def _build_modules(self) -> dict[str, PlatformModule]:

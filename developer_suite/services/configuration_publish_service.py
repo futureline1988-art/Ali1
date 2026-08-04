@@ -300,6 +300,16 @@ class ConfigurationPublishService(BaseService):
                 target_device_public_id
             )
 
+    def list_all_publications(self, *, limit: int | None = None) -> list[ConfigurationPublication]:
+        """Every configuration ever published, across every installation, most recent first.
+
+        Used only by the Reporting & Analytics module (Phase 15) for
+        the Configuration Publication History report; the publish/
+        rollback UI keeps using :meth:`list_publication_history`.
+        """
+        with self._session_scope() as session:
+            return ConfigurationPublicationRepository(session).list_all_history(limit=limit)
+
     def _enqueue_delivery(
         self,
         session: Session,

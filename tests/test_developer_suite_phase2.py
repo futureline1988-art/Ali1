@@ -35,6 +35,7 @@ from developer_suite.modules import (
     LicenseManagerModule,
     MonitoringModule,
     RemoteConfigurationModule,
+    ReportingModule,
     ServerStatusModule,
     UpdateManagerModule,
 )
@@ -46,6 +47,7 @@ from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
+from developer_suite.services.reporting_service import ReportingService
 from developer_suite.services.update_manager_service import UpdateManagerService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
@@ -125,6 +127,19 @@ def _construct_module(
             admin_client, private_key_path=config.update_signing_private_key_path
         )
         return UpdateManagerModule(update_manager_service, customer_service, customer_group_service, admin_client)
+    if module_cls is ReportingModule:
+        customer_service = CustomerService(database)
+        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
+        configuration_publish_service = ConfigurationPublishService(database)
+        coordinator = SyncCoordinator(database, config)
+        register_customer_sync(coordinator)
+        scheduler = SyncSchedulerService(coordinator, config)
+        admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
+        dashboard_service = DashboardService(customer_service, license_service, scheduler, admin_client, config)
+        reporting_service = ReportingService(
+            customer_service, license_service, configuration_publish_service, dashboard_service, admin_client
+        )
+        return ReportingModule(reporting_service, config)
     return module_cls()
 
 
@@ -217,6 +232,7 @@ class TestModuleInterface:
             "monitoring",
             "server_status",
             "update_manager",
+            "reporting",
             "settings",
         }
 

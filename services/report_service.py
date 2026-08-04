@@ -15,6 +15,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from config import get_config
 from models.attendance import AttendanceRecord
 from models.enums import AttendanceDayStatus, ReportFormat
 from repositories.attendance_repository import AttendanceRecordRepository
@@ -261,7 +262,8 @@ class ReportService:
         if output_format is ReportFormat.EXCEL:
             return export_to_excel(rows, columns, output_path)
         if output_format is ReportFormat.PDF:
-            return export_to_pdf(rows, columns, output_path, title=title)
+            fonts_dir = get_config().paths.assets_dir / "fonts"
+            return export_to_pdf(rows, columns, output_path, title=title, fonts_dir=fonts_dir)
         if output_format is ReportFormat.CSV:
             return export_to_csv(rows, columns, output_path)
         raise ValueError(f"Unsupported report format: {output_format!r}")

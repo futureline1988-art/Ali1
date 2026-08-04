@@ -225,6 +225,38 @@ class UpdateVersionInfo:
 
 
 @dataclass(frozen=True)
+class UpdateDeviceStatusInfo:
+    """One device's reported status for one software update version.
+
+    As returned by ``GET /api/v1/updates/device-status`` (Phase 15) —
+    ``device_public_id``/``update_version_id`` are left as raw ids,
+    resolved against :meth:`~AdminApiClient.list_devices`/
+    :meth:`~AdminApiClient.list_update_versions` by whoever wants a
+    friendly name, the same convention
+    :class:`SyncActivityEntry.device_id` already established.
+    """
+
+    device_public_id: str
+    update_version_id: int
+    status: str
+    progress_percent: int
+    error_message: str | None
+    reported_at: datetime
+
+    @classmethod
+    def from_json(cls, data: dict) -> "UpdateDeviceStatusInfo":
+        """Parse one item of a ``GET /api/v1/updates/device-status`` response's ``statuses`` list."""
+        return cls(
+            device_public_id=data["device_public_id"],
+            update_version_id=data["update_version_id"],
+            status=data["status"],
+            progress_percent=data["progress_percent"],
+            error_message=data.get("error_message"),
+            reported_at=_parse_datetime(data["reported_at"]),
+        )
+
+
+@dataclass(frozen=True)
 class UpdateStatsInfo:
     """Update-distribution dashboard statistics, as returned by ``/api/v1/updates/stats``."""
 
@@ -551,6 +583,18 @@ class AdminApiClient:
         """
         response = self._authenticated_get("/api/v1/updates/stats")
         return UpdateStatsInfo.from_json(response.json())
+
+    def list_update_device_statuses(self) -> list[UpdateDeviceStatusInfo]:
+        """Fetch ``GET /api/v1/updates/device-status`` (admin-scoped) for the Update Deployment report.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response.
+        """
+        response = self._authenticated_get("/api/v1/updates/device-status")
+        return [UpdateDeviceStatusInfo.from_json(item) for item in response.json()["statuses"]]
 
     def _unauthenticated_client(self) -> httpx.Client:
         return httpx.Client(base_url=self._base_url, transport=self._transport, timeout=self._timeout)

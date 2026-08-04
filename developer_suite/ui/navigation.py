@@ -9,7 +9,8 @@ signal on selection. Has no knowledge of the content area it controls
 the displayed page.
 
 Phase 12 groups the entries visually into "platform" (Dashboard,
-Customers, Licenses, Remote Configuration, Monitoring, Updates) and
+Customers, Licenses, Remote Configuration, Monitoring, Updates,
+Reporting — Phase 15's own module joins this group unmodified) and
 "administration" (Server, Settings) with a thin divider — the same
 :data:`~developer_suite.modules.ALL_MODULES` order, styled rather than
 restructured: still one flat, single-level list, since every "group"

@@ -75,6 +75,23 @@ def _resolve_data_root() -> Path:
     return Path(__file__).resolve().parent.parent / "developer_suite_data"
 
 
+def _resolve_assets_dir() -> Path:
+    """Where bundled, read-only static assets (currently: report fonts) live.
+
+    Mirrors ``config._resolve_bundle_dir``'s frozen-vs-development
+    logic exactly (see :func:`_resolve_data_root`'s own docstring for
+    why this application duplicates rather than imports that logic).
+    In development this resolves to the repository's shared top-level
+    ``assets/`` directory — the *same* physical files the Attendance
+    Client's own ``utils/pdf.py`` reads its ``DejaVuSans`` font from —
+    so Phase 15's Reporting module can produce Arabic PDF reports
+    without duplicating the font files anywhere.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent)) / "assets"
+    return Path(__file__).resolve().parent.parent / "assets"
+
+
 @dataclass(frozen=True)
 class DeveloperSuitePaths:
     """The small filesystem layout this application actually needs.
@@ -83,11 +100,14 @@ class DeveloperSuitePaths:
         data_dir: Where the local database file lives.
         logs_dir: Where log files are written.
         backups_dir: Where local database backups are written.
+        assets_dir: Where bundled, read-only static assets (currently:
+            report fonts, see :func:`_resolve_assets_dir`) live.
     """
 
     data_dir: Path
     logs_dir: Path
     backups_dir: Path
+    assets_dir: Path
 
     @classmethod
     def default(cls) -> "DeveloperSuitePaths":
@@ -97,10 +117,17 @@ class DeveloperSuitePaths:
             data_dir=root / "data",
             logs_dir=root / "logs",
             backups_dir=root / "data" / "backups",
+            assets_dir=_resolve_assets_dir(),
         )
 
     def ensure_created(self) -> None:
-        """Create every directory declared above if it does not exist."""
+        """Create every writable directory declared above if it does not exist.
+
+        Deliberately excludes :attr:`assets_dir`: it is a read-only,
+        bundled directory (like :attr:`~config.PathsConfig.assets_dir`
+        on the Attendance Client's side) — creating it here would mask
+        a genuinely missing asset bundle instead of surfacing it.
+        """
         for directory in (self.data_dir, self.logs_dir, self.backups_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
