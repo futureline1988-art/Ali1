@@ -16,6 +16,7 @@ from developer_suite.models.attendance_policy_profile import AttendancePolicyPro
 from developer_suite.models.backup_profile import BackupLocationType, BackupProfile
 from developer_suite.models.configuration_publication import ConfigurationPublication
 from developer_suite.models.customer import Customer, CustomerStatus
+from developer_suite.models.customer_group import CustomerGroup, customer_group_members
 from developer_suite.models.device_profile import DeviceProfile
 from developer_suite.models.license import IssuedLicense, IssuedLicenseStatus
 from developer_suite.models.print_profile import PaperSize, PrintProfile
@@ -52,4 +53,6 @@ __all__ = [
     "OutboxStatus",
     "AdminSessionRecord",
     "ConfigurationPublication",
+    "CustomerGroup",
+    "customer_group_members",
 ]

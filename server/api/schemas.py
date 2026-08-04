@@ -10,10 +10,13 @@ that module's docstring), the same ORM-to-dict path
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from server.models.device import DeviceType
 from server.models.sync import SyncOperation
+from server.models.update import DeviceUpdateStatusValue, TargetScope, UpdateType
 
 
 class DeviceRegisterRequest(BaseModel):
@@ -84,3 +87,40 @@ class AdminPasswordResetCompleteRequest(BaseModel):
 
     reset_token: str = Field(min_length=1)
     new_password: str = Field(min_length=1)
+
+
+class CreateUpdateVersionRequest(BaseModel):
+    """POST /api/v1/updates/versions request body."""
+
+    version: str = Field(min_length=1, max_length=50)
+    release_notes: str | None = None
+    min_supported_version: str | None = Field(default=None, max_length=50)
+    update_type: UpdateType = UpdateType.OPTIONAL
+
+
+class SetUpdateTargetsRequest(BaseModel):
+    """PUT /api/v1/updates/versions/{id}/targets request body."""
+
+    scope: TargetScope
+    device_public_ids: list[str] = Field(default_factory=list)
+
+
+class ScheduleUpdateRequest(BaseModel):
+    """POST /api/v1/updates/versions/{id}/schedule request body."""
+
+    scheduled_at: datetime
+
+
+class RollbackUpdateRequest(BaseModel):
+    """POST /api/v1/updates/versions/{id}/rollback request body."""
+
+    reason: str | None = None
+
+
+class ReportUpdateStatusRequest(BaseModel):
+    """POST /api/v1/updates/status request body."""
+
+    update_version_id: int
+    status: DeviceUpdateStatusValue
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    error_message: str | None = None

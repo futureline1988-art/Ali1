@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from database.database import Database
-from server.api.routers import auth, devices, health, status, sync, version
+from server.api.routers import auth, devices, health, status, sync, updates, version
 from server.config import ServerConfig
 from server.container import ServiceContainer
 from utils.logger import logger
@@ -62,6 +62,7 @@ def create_app(config: ServerConfig, database: Database) -> FastAPI:
     app.include_router(sync.router)
     app.include_router(status.router)
     app.include_router(auth.router)
+    app.include_router(updates.router)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

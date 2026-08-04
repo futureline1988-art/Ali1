@@ -36,14 +36,17 @@ from developer_suite.modules import (
     MonitoringModule,
     RemoteConfigurationModule,
     ServerStatusModule,
+    UpdateManagerModule,
 )
 from developer_suite.modules.base import PlatformModule
 from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.configuration_service import ConfigurationService
+from developer_suite.services.customer_group_service import CustomerGroupService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
+from developer_suite.services.update_manager_service import UpdateManagerService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
 from developer_suite.sync.scheduler import SyncSchedulerService
@@ -114,6 +117,14 @@ def _construct_module(
     if module_cls is ServerStatusModule:
         admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
         return ServerStatusModule(admin_client, config)
+    if module_cls is UpdateManagerModule:
+        customer_service = CustomerService(database)
+        customer_group_service = CustomerGroupService(database)
+        admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
+        update_manager_service = UpdateManagerService(
+            admin_client, private_key_path=config.update_signing_private_key_path
+        )
+        return UpdateManagerModule(update_manager_service, customer_service, customer_group_service, admin_client)
     return module_cls()
 
 

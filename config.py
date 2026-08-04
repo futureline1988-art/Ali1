@@ -459,6 +459,33 @@ class SyncConfig:
 
 
 @dataclass(frozen=True)
+class UpdateConfig:
+    """Software update checking settings (Phase 14).
+
+    Governs whether/how this installation checks for updates — piggy
+    -backed entirely on :class:`SyncConfig`'s own background
+    scheduler (see :mod:`sync.scheduler`'s docstring), so there is no
+    separate interval here: an update check runs on the same cadence
+    as :attr:`SyncConfig.interval_seconds` already configures.
+    """
+
+    enabled: bool = True
+    package_type: str = "setup"
+    downloads_dir: Path = DATA_ROOT / "data" / "updates"
+
+    @classmethod
+    def from_env(cls) -> "UpdateConfig":
+        """Build an :class:`UpdateConfig` from environment variables."""
+        return cls(
+            enabled=_env_bool("UPDATES_ENABLED", True),
+            package_type=os.getenv("UPDATES_PACKAGE_TYPE", cls.package_type),
+            downloads_dir=Path(
+                os.getenv("UPDATES_DOWNLOADS_DIR", str(DATA_ROOT / "data" / "updates"))
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class ApiConfig:
     """Optional REST API layer settings (see ``api/app.py``).
 
@@ -524,6 +551,7 @@ class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
+    updates: UpdateConfig = field(default_factory=UpdateConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -562,6 +590,7 @@ class AppConfig:
             api=ApiConfig.from_env(),
             logging=LoggingConfig.from_env(),
             sync=SyncConfig.from_env(),
+            updates=UpdateConfig.from_env(),
         )
 
 

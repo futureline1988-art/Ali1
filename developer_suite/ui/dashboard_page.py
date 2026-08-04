@@ -90,6 +90,10 @@ def _format_datetime(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
+def _update_progress_label(value: float | None) -> str:
+    return f"{value:.0f}%" if value is not None else "لا يوجد تنزيل حالياً"
+
+
 def _server_status_label(snapshot: DashboardSnapshot) -> str:
     if snapshot.server_reachable is None:
         return "غير معروف"
@@ -319,6 +323,11 @@ class DashboardPage(QWidget):
             ("مهام المزامنة المعلّقة", str(snapshot.pending_sync_count)),
             ("حالة خادم الحضور", _server_status_label(snapshot)),
             ("حالة قاعدة البيانات", _database_status_label(snapshot)),
+            ("آخر إصدار منشور بنجاح", snapshot.latest_deployed_version or "لا يوجد"),
+            ("تحديثات معلّقة", str(snapshot.pending_updates_count)),
+            ("تحديثات فاشلة", str(snapshot.failed_updates_count)),
+            ("تحديثات ناجحة", str(snapshot.successful_updates_count)),
+            ("متوسط تقدّم التنزيل", _update_progress_label(snapshot.average_update_download_progress_percent)),
         )
         for index, (title, value) in enumerate(cards):
             row, column = divmod(index, _CARD_COLUMNS)

@@ -16,6 +16,16 @@ unreachable Attendance Server never blocks or crashes anything —
 and the *next* scheduled tick, on its own normal cadence, is what
 resumes synchronization once connectivity returns; no part of the rest
 of the application ever waits on this scheduler.
+
+Phase 14 adds one more thing this same scheduled cycle does: a
+best-effort software-update check (:attr:`_update_check_service`,
+optional — ``None`` when update checking is disabled), reusing this
+exact job rather than registering a second ``BackgroundScheduler``
+job for it (see :mod:`updates` package docstring). A discovered
+critical or mandatory update starts its (potentially large, multi
+-minute) download on its own daemon thread rather than inside this
+method, so one slow download can never delay the next scheduled sync
+tick.
 """
 
 from __future__ import annotations
@@ -33,6 +43,8 @@ from sync.configuration_apply import ENTITY_TYPE
 from sync.coordinator import ClientSyncCoordinator
 from sync.status import SyncState, SyncStatus
 from utils.logger import logger
+
+_AUTO_DOWNLOAD_UPDATE_TYPES = frozenset({"critical", "mandatory"})
 
 _SYNC_JOB_ID = "attendance_client_remote_configuration_sync"
 _DEFAULT_MAX_RETRIES_PER_CYCLE = 3
@@ -58,6 +70,7 @@ class ClientSyncSchedulerService:
         sync_interval_seconds: int,
         max_retries_per_cycle: int = _DEFAULT_MAX_RETRIES_PER_CYCLE,
         retry_backoff_seconds: float = _DEFAULT_RETRY_BACKOFF_SECONDS,
+        update_check_service=None,
     ) -> None:
         """Create a scheduler service (does not start any job yet).
 
@@ -77,6 +90,11 @@ class ClientSyncSchedulerService:
                 :attr:`~sync.status.SyncState.OFFLINE`.
             retry_backoff_seconds: Base delay between retries within
                 one cycle, multiplied by the attempt number.
+            update_check_service: Optional :class:`~updates.checker.UpdateCheckService`
+                (Phase 14); when given, every sync cycle also performs
+                a best-effort update check (see this module's own
+                docstring). ``None`` disables update checking entirely
+                without affecting synchronization at all.
         """
         self._coordinator = coordinator
         self._database = database
@@ -84,6 +102,7 @@ class ClientSyncSchedulerService:
         self._sync_interval_seconds = sync_interval_seconds
         self._max_retries_per_cycle = max_retries_per_cycle
         self._retry_backoff_seconds = retry_backoff_seconds
+        self._update_check_service = update_check_service
         self._scheduler = BackgroundScheduler(daemon=True)
         self._status_lock = threading.Lock()
         self._cycle_lock = threading.Lock()
@@ -157,6 +176,34 @@ class ClientSyncSchedulerService:
             return
 
         self._record_success()
+        self._check_for_updates_best_effort()
+
+    def _check_for_updates_best_effort(self) -> None:
+        """Ask :attr:`_update_check_service` for a new update, never failing the sync cycle over it.
+
+        A critical or mandatory update starts downloading immediately,
+        on its own daemon thread — see this module's own docstring for
+        why that must not run inline here.
+        """
+        if self._update_check_service is None:
+            return
+        try:
+            state = self._update_check_service.check_for_update()
+        except Exception as exc:  # noqa: BLE001 - an update-check failure must never affect sync status
+            logger.warning("Update check failed: {error}", error=exc)
+            return
+        if state is None:
+            return
+        if state.status != "discovered":
+            # Already downloading/downloaded/verified/failed/postponed
+            # from a previous cycle - nothing new to do here.
+            return
+        if state.update_type in _AUTO_DOWNLOAD_UPDATE_TYPES:
+            threading.Thread(
+                target=self._update_check_service.download_and_verify,
+                args=(state.update_version_id,),
+                daemon=True,
+            ).start()
 
     def _with_retries(self, operation) -> None:
         """Call ``operation``, retrying only on a transient connection failure."""

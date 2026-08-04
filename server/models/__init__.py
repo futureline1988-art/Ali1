@@ -25,6 +25,19 @@ from server.models.admin_password_reset import AdminPasswordResetToken
 from server.models.admin_session import AdminSession
 from server.models.device import SyncDevice, DeviceType
 from server.models.sync import ChangeRecord, ChangeStatus, EntityVersion, SyncOperation, SyncSequence
+from server.models.update import (
+    DeviceUpdateStatus,
+    DeviceUpdateStatusValue,
+    PackageType,
+    PublishStatus,
+    TargetScope,
+    UpdateAuditEvent,
+    UpdatePackage,
+    UpdateRollback,
+    UpdateTarget,
+    UpdateType,
+    UpdateVersion,
+)
 
 __all__ = [
     "SyncDevice",
@@ -40,4 +53,15 @@ __all__ = [
     "AdminPasswordResetToken",
     "AdminAuditLog",
     "AdminAuditAction",
+    "UpdateVersion",
+    "UpdatePackage",
+    "UpdateTarget",
+    "UpdateRollback",
+    "DeviceUpdateStatus",
+    "UpdateAuditEvent",
+    "UpdateType",
+    "PackageType",
+    "PublishStatus",
+    "TargetScope",
+    "DeviceUpdateStatusValue",
 ]

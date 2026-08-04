@@ -27,13 +27,16 @@ from developer_suite.modules import (
     PlatformModule,
     RemoteConfigurationModule,
     ServerStatusModule,
+    UpdateManagerModule,
 )
 from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.configuration_service import ConfigurationService
+from developer_suite.services.customer_group_service import CustomerGroupService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
 from developer_suite.services.license_service import LicenseService
+from developer_suite.services.update_manager_service import UpdateManagerService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
 from developer_suite.sync.scheduler import SyncSchedulerService
@@ -88,6 +91,15 @@ class ServiceContainer:
             :class:`~developer_suite.ui.main_window.MainWindow`'s
             status bar, so both render from the same background
             refresh instead of each polling the server independently.
+        customer_group_service: Create/rename/delete customer groups
+            and manage their membership (Phase 14 — see
+            :mod:`developer_suite.services.customer_group_service`),
+            used only to populate the Update Manager's "customer
+            group" targeting picker.
+        update_manager_service: Create, sign/upload, target, publish,
+            schedule, disable, and roll back software updates (Phase
+            14 — see
+            :mod:`developer_suite.services.update_manager_service`).
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
@@ -102,6 +114,7 @@ class ServiceContainer:
         self.config = config
         self.database = database
         self.customer_service = CustomerService(database)
+        self.customer_group_service = CustomerGroupService(database)
         self.license_service = LicenseService(
             database, private_key_path=config.licensing_private_key_path
         )
@@ -113,6 +126,9 @@ class ServiceContainer:
         self.admin_auth_client = AdminAuthClient(config.attendance_server_url)
         self.admin_session_manager = AdminSessionManager(database, self.admin_auth_client)
         self.admin_client = AdminApiClient(config.attendance_server_url, self.admin_session_manager)
+        self.update_manager_service = UpdateManagerService(
+            self.admin_client, private_key_path=config.update_signing_private_key_path
+        )
         self.dashboard_service = DashboardService(
             self.customer_service,
             self.license_service,
@@ -153,6 +169,12 @@ class ServiceContainer:
             ),
             MonitoringModule: lambda: MonitoringModule(self.admin_client),
             ServerStatusModule: lambda: ServerStatusModule(self.admin_client, self.config),
+            UpdateManagerModule: lambda: UpdateManagerModule(
+                self.update_manager_service,
+                self.customer_service,
+                self.customer_group_service,
+                self.admin_client,
+            ),
         }
 
     def _build_modules(self) -> dict[str, PlatformModule]:

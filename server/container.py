@@ -18,6 +18,7 @@ from server.config import ServerConfig
 from server.services.admin_auth_service import AdminAuthService
 from server.services.device_service import DeviceService
 from server.services.sync_service import SyncService
+from server.services.update_service import UpdateService
 
 
 class ServiceContainer:
@@ -34,6 +35,9 @@ class ServiceContainer:
             to :attr:`device_service`/:attr:`sync_service`'s device
             -credential auth, see
             :mod:`server.services.admin_auth_service`'s own docstring.
+        update_service: Software update version/package/targeting/
+            rollback management and device status reporting (Phase
+            14) — see :mod:`server.services.update_service`.
     """
 
     def __init__(self, config: ServerConfig, database: Database) -> None:
@@ -49,3 +53,4 @@ class ServiceContainer:
         self.device_service = DeviceService(database, config=config)
         self.sync_service = SyncService(database)
         self.admin_auth_service = AdminAuthService(database, config=config)
+        self.update_service = UpdateService(database, config=config)

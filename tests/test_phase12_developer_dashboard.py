@@ -228,6 +228,18 @@ class _FakeAdminClient:
     def list_audit_log(self, *, limit: int = 50) -> list[AuditLogEntry]:
         return self.audit_log
 
+    def get_update_stats(self):
+        from developer_suite.admin.client import UpdateStatsInfo
+
+        return UpdateStatsInfo(
+            latest_deployed_version=None,
+            companies_per_version={},
+            pending_count=0,
+            failed_count=0,
+            successful_count=0,
+            average_download_progress_percent=None,
+        )
+
 
 def _build_service(
     customer_service: CustomerService,
@@ -830,7 +842,7 @@ class TestDashboardPage:
         page = DashboardPage(refresh_service, customer_service, license_service)
         page._populate(service.get_snapshot())
 
-        assert page._grid.count() == 14
+        assert page._grid.count() == 19
         assert page.registrations_list.count() == 1
 
     def test_quick_action_navigate_requested_forwards_from_the_page(

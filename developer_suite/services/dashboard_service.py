@@ -214,6 +214,26 @@ class DashboardSnapshot:
             outcome status, for the synchronization-activity chart.
         expiration_timeline: Active-license expiration count per
             month, for the license-expiration-timeline chart.
+        latest_deployed_version: The highest software update version
+            with at least one company reporting a successful install
+            (Phase 14 — see
+            :class:`~server.services.update_service.UpdateDashboardStats`);
+            ``None`` if no company has installed one yet, or this
+            could not be determined (no admin token configured, or
+            the server is unreachable).
+        companies_per_version: ``{version: installed_company_count}``
+            for every software update version with at least one
+            installed company.
+        pending_updates_count: Companies currently anywhere between
+            "pending" and "verified" for any software update version.
+        failed_updates_count: Companies whose most recent software
+            update report is a failure.
+        successful_updates_count: Companies whose most recent software
+            update report is a successful install.
+        average_update_download_progress_percent: Mean download
+            progress among companies currently downloading a software
+            update; ``None`` if none are, or this could not be
+            determined.
     """
 
     total_customers: int = 0
@@ -246,6 +266,12 @@ class DashboardSnapshot:
     license_distribution: list[LicenseDistributionEntry] = field(default_factory=list)
     sync_activity_by_status: list[SyncActivityBucket] = field(default_factory=list)
     expiration_timeline: list[ExpirationTimelineBucket] = field(default_factory=list)
+    latest_deployed_version: str | None = None
+    companies_per_version: dict[str, int] = field(default_factory=dict)
+    pending_updates_count: int = 0
+    failed_updates_count: int = 0
+    successful_updates_count: int = 0
+    average_update_download_progress_percent: float | None = None
 
 
 class DashboardService:
@@ -319,6 +345,7 @@ class DashboardService:
         recent_synchronization = self._recent_synchronization()
         recent_server_events = self._recent_server_events()
         recent_authentication_events, recent_audit_log = self._recent_audit_events()
+        update_stats = self._update_stats()
 
         return DashboardSnapshot(
             total_customers=total_customers,
@@ -353,6 +380,14 @@ class DashboardService:
             license_distribution=_license_distribution(license_counts),
             sync_activity_by_status=_sync_activity_by_status(recent_synchronization),
             expiration_timeline=_expiration_timeline(licenses, months_window=self._chart_months_window),
+            latest_deployed_version=update_stats.latest_deployed_version if update_stats else None,
+            companies_per_version=update_stats.companies_per_version if update_stats else {},
+            pending_updates_count=update_stats.pending_count if update_stats else 0,
+            failed_updates_count=update_stats.failed_count if update_stats else 0,
+            successful_updates_count=update_stats.successful_count if update_stats else 0,
+            average_update_download_progress_percent=(
+                update_stats.average_download_progress_percent if update_stats else None
+            ),
         )
 
     def _count_devices_by_connectivity(self) -> tuple[int | None, int | None, int | None]:
@@ -405,6 +440,12 @@ class DashboardService:
             entry for entry in entries if entry.action in _AUTHENTICATION_EVENT_ACTIONS
         ]
         return authentication_events, entries
+
+    def _update_stats(self):
+        try:
+            return self._admin_client.get_update_stats()
+        except AdminApiError:
+            return None
 
 
 def _upcoming_expirations(

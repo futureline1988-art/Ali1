@@ -19,12 +19,16 @@ from config import get_config
 from database.database import DatabaseConnectionError, get_database, session_scope
 from licensing.license_service import LicenseService
 from models.permission import Permission
+from models.update_state import ClientUpdateStatus
 from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.permission_repository import PermissionRepository
+from repositories.update_state_repository import ClientUpdateStateRepository
 from services.scheduler_service import SchedulerService
 from sync.client import SyncClientError
 from sync.coordinator import ClientSyncCoordinator
 from sync.scheduler import ClientSyncSchedulerService
+from updates.checker import UpdateCheckService
+from updates.keys import load_public_key
 from ui.attendance import AttendancePage
 from ui.branches import BranchesPage
 from ui.dashboard_page import DashboardPage
@@ -200,6 +204,70 @@ def _show_remote_configuration_restart_notice(parent, company_id: int) -> None:
     )
 
 
+def _show_update_notice_if_needed(parent) -> None:
+    """Show a software-update notice once per login, if one is pending.
+
+    Only ever informs or offers a postponement - this function never
+    installs anything itself (Phase 14 covers download and
+    verification, not unattended installation). A mandatory update
+    gets an information-only dialog with no postpone option, matching
+    :meth:`updates.checker.UpdateCheckService.is_postponable`; every
+    other update type gets a Yes/No dialog that postpones for 24 hours
+    on "No".
+    """
+    with session_scope() as session:
+        state = ClientUpdateStateRepository(session).get_latest()
+        if state is None or state.status not in (
+            ClientUpdateStatus.DISCOVERED.value,
+            ClientUpdateStatus.VERIFIED.value,
+        ):
+            return
+        update_version_id = state.update_version_id
+        version = state.version
+        update_type = state.update_type
+        release_notes = state.release_notes or ""
+        is_verified = state.status == ClientUpdateStatus.VERIFIED.value
+
+    ready_note = (
+        "تم تنزيل التحديث والتحقق منه وهو جاهز للتثبيت."
+        if is_verified
+        else "سيتم تنزيل التحديث في الخلفية."
+    )
+
+    if update_type == "mandatory":
+        QMessageBox.information(
+            parent,
+            "تحديث إلزامي متوفر",
+            f"يتوجد تحديث إلزامي إلى الإصدار {version}.\n\n{release_notes}\n\n{ready_note}\n"
+            "يجب تثبيت هذا التحديث لمتابعة استخدام النظام.",
+        )
+        return
+
+    answer = QMessageBox.question(
+        parent,
+        "تحديث متوفر",
+        f"يتوجد تحديث جديد إلى الإصدار {version}.\n\n{release_notes}\n\n{ready_note}\n"
+        "هل ترغب بتأجيل هذا التحديث ليوم واحد؟",
+        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.No,
+    )
+    if answer == QMessageBox.Yes:
+        from datetime import datetime, timedelta, timezone
+
+        checker = UpdateCheckService(
+            get_database(),
+            get_config().sync.server_url,
+            current_version=get_config().app_version,
+            package_type=get_config().updates.package_type,
+            downloads_dir=get_config().updates.downloads_dir,
+            public_key=load_public_key(),
+        )
+        try:
+            checker.postpone(update_version_id, until=datetime.now(timezone.utc) + timedelta(hours=24))
+        except Exception:  # noqa: BLE001 - postponing is a courtesy, never a hard requirement
+            pass
+
+
 class ApplicationController:
     """Owns the login <-> main-window lifecycle for one running process.
 
@@ -272,6 +340,7 @@ class ApplicationController:
         self._main_window = window
         window.show()
         _show_remote_configuration_restart_notice(window, company_id)
+        _show_update_notice_if_needed(window)
 
     def _on_logout(self) -> None:
         """Handle an explicit logout click: end the session and return to login."""
@@ -368,11 +437,25 @@ def main() -> int:
 
         sync_coordinator = ClientSyncCoordinator(database, config.sync.server_url)
         _bootstrap_remote_configuration_sync(sync_coordinator, config)
+
+        update_checker = (
+            UpdateCheckService(
+                database,
+                config.sync.server_url,
+                current_version=config.app_version,
+                package_type=config.updates.package_type,
+                downloads_dir=config.updates.downloads_dir,
+                public_key=load_public_key(),
+            )
+            if config.updates.enabled
+            else None
+        )
         sync_scheduler = ClientSyncSchedulerService(
             sync_coordinator,
             database,
             sync_enabled=config.sync.enabled,
             sync_interval_seconds=config.sync.interval_seconds,
+            update_check_service=update_checker,
         )
         sync_scheduler.start()
         sync_scheduler_holder["scheduler"] = sync_scheduler

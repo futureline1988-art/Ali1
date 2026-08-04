@@ -149,6 +149,16 @@ class DeveloperSuiteConfig:
             same reason :class:`config.DeviceConfig.auto_sync_enabled`
             exists for the Attendance Client's own scheduled job.
         sync_interval_seconds: How often the background sync job runs.
+        update_signing_private_key_path: Where this application looks
+            for the vendor's Ed25519 *update-signing* private key —
+            the same key format
+            :mod:`licensing.crypto.signing` uses, but a deliberately
+            separate keypair from :attr:`licensing_private_key_path`
+            (see :mod:`developer_suite.services.update_manager_service`'s
+            own docstring for why licenses and update packages are
+            never signed with the same key). A missing file at this
+            path simply means package upload isn't available yet;
+            nothing else in the Developer Suite depends on it.
     """
 
     app_name: str = "Developer Suite"
@@ -167,6 +177,11 @@ class DeveloperSuiteConfig:
     attendance_server_url: str = "http://127.0.0.1:8000"
     sync_enabled: bool = True
     sync_interval_seconds: int = 60
+    update_signing_private_key_path: Path = field(
+        default_factory=lambda: DeveloperSuitePaths.default().data_dir
+        / "keys"
+        / "update_signing_private_key.pem"
+    )
 
     @classmethod
     def load(cls) -> "DeveloperSuiteConfig":
@@ -205,6 +220,12 @@ class DeveloperSuiteConfig:
                 str(paths.data_dir / "keys" / "license_private_key.pem"),
             )
         )
+        update_signing_private_key_path = Path(
+            os.getenv(
+                "DEV_SUITE_UPDATE_SIGNING_PRIVATE_KEY_PATH",
+                str(paths.data_dir / "keys" / "update_signing_private_key.pem"),
+            )
+        )
 
         return cls(
             app_name=os.getenv("DEV_SUITE_APP_NAME", cls.app_name),
@@ -222,6 +243,7 @@ class DeveloperSuiteConfig:
             sync_interval_seconds=_env_int(
                 "DEV_SUITE_SYNC_INTERVAL_SECONDS", cls.sync_interval_seconds
             ),
+            update_signing_private_key_path=update_signing_private_key_path,
         )
 
 
