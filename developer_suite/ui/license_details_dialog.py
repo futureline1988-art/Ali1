@@ -20,11 +20,15 @@ existing services, no duplicated business logic" scope.
 
 from __future__ import annotations
 
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPlainTextEdit,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -82,7 +86,9 @@ class LicenseDetailsDialog(QDialog):
 
     def _build_current_tab(self, license_record: IssuedLicense) -> QWidget:
         page = QWidget(self)
-        form = QFormLayout(page)
+        layout = QVBoxLayout(page)
+
+        form = QFormLayout()
         form.addRow("العميل", QLabel(license_record.customer.company_name, page))
         form.addRow("نوع الترخيص", QLabel(license_record.license_type.label_ar, page))
         form.addRow("الحالة الحالية", QLabel(_status_label(license_record), page))
@@ -93,7 +99,28 @@ class LicenseDetailsDialog(QDialog):
         )
         form.addRow("الإصدار المرخّص", QLabel(license_record.licensed_version or "غير مقيّد", page))
         form.addRow("معرّف الجهاز", QLabel(license_record.machine_id or "—", page))
+        layout.addLayout(form)
+
+        layout.addWidget(QLabel("مفتاح الترخيص:", page))
+        key_edit = QPlainTextEdit(license_record.license_key, page)
+        key_edit.setReadOnly(True)
+        key_edit.setFixedHeight(110)
+        layout.addWidget(key_edit)
+
+        copy_button = QPushButton("نسخ مفتاح الترخيص", page)
+        copy_button.clicked.connect(
+            lambda: self._copy_to_clipboard(license_record.license_key, copy_button)
+        )
+        layout.addWidget(copy_button)
+
         return page
+
+    def _copy_to_clipboard(self, text: str, button: QPushButton) -> None:
+        """Copy ``text`` to the system clipboard and briefly confirm on ``button``."""
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        button.setText("تم النسخ ✓")
 
     def _build_history_tab(self, history: list[IssuedLicense]) -> QWidget:
         page = QWidget(self)

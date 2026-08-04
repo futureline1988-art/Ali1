@@ -24,6 +24,7 @@ from developer_suite.services.license_service import (
 )
 from developer_suite.ui.license_details_dialog import LicenseDetailsDialog
 from developer_suite.ui.license_form_dialog import LicenseFormDialog
+from developer_suite.ui.license_key_dialog import LicenseKeyDialog
 
 _COLUMN_LABELS = ("الشركة", "نوع الترخيص", "تاريخ الإصدار", "تاريخ الانتهاء", "الأيام المتبقية", "الحالة")
 
@@ -163,11 +164,12 @@ class LicenseManagementPage(QWidget):
         if dialog.exec() != LicenseFormDialog.DialogCode.Accepted:
             return
         try:
-            self._license_service.issue_license(**dialog.field_values())
+            issued_license = self._license_service.issue_license(**dialog.field_values())
         except LicenseServiceError as exc:
             QMessageBox.warning(self, "تعذّر إصدار الترخيص", str(exc))
             return
         self.reload()
+        LicenseKeyDialog(issued_license, parent=self).exec()
 
     def _on_renew_clicked(self) -> None:
         license_record = self._selected_license()
@@ -186,11 +188,12 @@ class LicenseManagementPage(QWidget):
             return
 
         try:
-            self._license_service.renew_license(license_record.id)
+            renewed_license = self._license_service.renew_license(license_record.id)
         except LicenseServiceError as exc:
             QMessageBox.warning(self, "تعذّر التجديد", str(exc))
             return
         self.reload()
+        LicenseKeyDialog(renewed_license, parent=self).exec()
 
     def _on_revoke_clicked(self) -> None:
         license_record = self._selected_license()

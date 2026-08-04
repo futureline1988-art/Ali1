@@ -162,6 +162,27 @@ Windows build for the first time:
   public keys), published as updated `DeveloperSuite-Setup.exe` /
   `Setup.exe` / `Portable.exe` assets on this same `v1.1.0` release
   train (no new major/minor tag).
+- **Issued license key was never shown or exported** (this release): the
+  License Manager's "Issue New License" and "Renew" actions called
+  `LicenseService.issue_license()` / `.renew_license()`, discarded the
+  returned, signed `IssuedLicense.license_key`, and just reloaded the
+  table — the license was created and marked active in the database,
+  but there was no way to actually hand the key to the customer, which
+  blocked activation in the Attendance Client entirely (its activation
+  dialog only ever accepts a pasted key). Added a new
+  `developer_suite/ui/license_key_dialog.py` (`LicenseKeyDialog`) that
+  now pops up automatically right after a successful issue or renew,
+  showing the full signed key in a read-only field with a one-click
+  "نسخ مفتاح الترخيص" (Copy to clipboard) button and a "تصدير إلى
+  ملف..." (Export to `.lic` file) button. The same key is also now
+  retrievable later, without re-issuing anything, from "عرض التفاصيل"
+  (View Details) on any existing license row —
+  `developer_suite/ui/license_details_dialog.py`'s "الترخيص الحالي" tab
+  gained the same read-only key field and Copy button. No change to the
+  license algorithm, signing, or verification code — this only surfaces
+  a value the service layer was already computing and returning.
+  `developer_suite/config.py`'s `DeveloperSuiteConfig.app_version`
+  bumped to `1.0.3` for this fix.
 - **Windows build (this release)**: `requirements-runtime.txt` was
   missing `httpx`, a hard dependency of the new remote-configuration-sync
   and software-update client code `main.py` imports unconditionally —

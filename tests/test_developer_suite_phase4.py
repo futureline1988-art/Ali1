@@ -21,6 +21,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QPlainTextEdit, QPushButton
+
 import developer_suite.config as developer_suite_config_module
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.database.bootstrap import build_database
@@ -33,7 +36,9 @@ from developer_suite.services.license_service import (
     LicenseService,
     LicenseSigningKeyError,
 )
+from developer_suite.ui.license_details_dialog import LicenseDetailsDialog
 from developer_suite.ui.license_form_dialog import LicenseFormDialog
+from developer_suite.ui.license_key_dialog import LicenseKeyDialog
 from developer_suite.ui.license_management_page import LicenseManagementPage
 from licensing.crypto.signing import generate_keypair, load_private_key, save_private_key
 from licensing.enums import LicenseType
@@ -494,3 +499,82 @@ class TestZeroImpactOnAttendanceClient:
 
         assert "issued_licenses" in DeveloperSuiteBase.metadata.tables
         assert "issued_licenses" not in AttendanceBase.metadata.tables
+
+
+class TestLicenseKeyDialog:
+    """Covers the display/export gap: issuing a license used to just reload
+    the table and discard the signed key, leaving no way to hand it to a
+    customer. This dialog is what :meth:`LicenseManagementPage._on_add_clicked`
+    and ``._on_renew_clicked`` now show right after a successful call.
+    """
+
+    def test_shows_customer_license_type_and_the_full_signed_key(
+        self, qapp, license_service: LicenseService, customer: Customer
+    ) -> None:
+        issued = license_service.issue_license(
+            customer_id=customer.id, license_type=LicenseType.YEARLY, machine_id="MACHINE-42"
+        )
+        dialog = LicenseKeyDialog(issued)
+        assert dialog.key_edit.toPlainText() == issued.license_key
+        assert "Acme Co" in dialog.windowTitle()
+
+    def test_shows_placeholder_when_license_is_not_machine_locked(
+        self, qapp, license_service: LicenseService, customer: Customer
+    ) -> None:
+        issued = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
+        assert issued.machine_id is None
+        dialog = LicenseKeyDialog(issued)
+        assert dialog.key_edit.toPlainText() == issued.license_key
+
+    def test_copy_button_copies_the_exact_key_to_the_clipboard(
+        self, qapp, license_service: LicenseService, customer: Customer
+    ) -> None:
+        issued = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY)
+        dialog = LicenseKeyDialog(issued)
+        dialog._on_copy_clicked()
+        clipboard = QGuiApplication.clipboard()
+        assert clipboard is not None
+        assert clipboard.text() == issued.license_key
+        assert dialog.copy_button.text() == "تم النسخ ✓"
+
+    def test_export_to_file_writes_the_key_with_a_trailing_newline(
+        self, qapp, license_service: LicenseService, customer: Customer, tmp_path
+    ) -> None:
+        issued = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.LIFETIME)
+        dialog = LicenseKeyDialog(issued)
+        output_path = tmp_path / "customer.lic"
+
+        returned = dialog.export_to_file(output_path)
+
+        assert returned == output_path
+        assert output_path.read_text(encoding="utf-8") == issued.license_key + "\n"
+
+
+class TestLicenseDetailsDialogShowsTheKey:
+    """The key is also retrievable later (without re-issuing) from "View
+    Details" — this is the second, no-time-pressure path to the same key.
+    """
+
+    def test_current_tab_shows_the_license_key(
+        self, qapp, license_service: LicenseService, customer: Customer
+    ) -> None:
+        issued = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.YEARLY)
+        dialog = LicenseDetailsDialog(issued, license_service)
+        assert dialog.findChild(QPlainTextEdit).toPlainText() == issued.license_key
+
+    def test_copy_button_copies_the_exact_key_to_the_clipboard(
+        self, qapp, license_service: LicenseService, customer: Customer
+    ) -> None:
+        issued = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY)
+        dialog = LicenseDetailsDialog(issued, license_service)
+        # Locate the specific "copy license key" button among the dialog's buttons.
+        matching_buttons = [
+            button for button in dialog.findChildren(QPushButton) if button.text() == "نسخ مفتاح الترخيص"
+        ]
+        assert len(matching_buttons) == 1
+        matching_buttons[0].click()
+
+        clipboard = QGuiApplication.clipboard()
+        assert clipboard is not None
+        assert clipboard.text() == issued.license_key
+        assert matching_buttons[0].text() == "تم النسخ ✓"
