@@ -260,9 +260,10 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           files: |
             Release/Setup.exe
             Release/Portable.exe
