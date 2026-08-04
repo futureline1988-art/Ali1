@@ -2,7 +2,8 @@
 ; Developer Suite - Inno Setup script
 ; ==============================================================================
 ; Packages the PyInstaller onedir build (dist\DeveloperSuite\, produced by
-; packaging\pyinstaller\developer_suite.spec) into a single Setup.exe.
+; packaging\pyinstaller\developer_suite.spec) into a single
+; DeveloperSuite-Setup.exe.
 ;
 ; Mirrors packaging\installer\setup.iss (the Attendance Client's own
 ; installer script) deliberately -- same structure, same rationale for
@@ -52,7 +53,13 @@ DisableProgramGroupPage=yes
 ; automatically because DefaultDirName resolves under {autopf}.
 PrivilegesRequired=admin
 OutputDir={#SourceRoot}\Release
-OutputBaseFilename=Setup
+; Not "Setup" -- this installer's output is published alongside the
+; Attendance Client's own Release\Setup.exe in the *same* GitHub
+; Release (see windows-release.yml's build-developer-suite job), so it
+; needs a distinct filename both to avoid a release-asset name
+; collision and so a user browsing the release's file list can tell
+; the two installers apart at a glance.
+OutputBaseFilename=DeveloperSuite-Setup
 SetupIconFile={#SourceRoot}\assets\icons\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max

@@ -1,16 +1,37 @@
-name: Windows Release Build (Attendance Management System)
+name: Windows Release Build (Attendance Management System + Developer Suite)
 
-# Produces the real Windows artifacts (Setup.exe, Portable.exe) that
-# cannot be built on Linux -- PyInstaller's bootloader and Inno Setup's
-# ISCC.exe both only produce Windows PE binaries. See BUILD_WINDOWS.md
-# for the equivalent manual procedure on a real Windows machine; this
-# workflow automates the same steps.
-
+# Produces the real Windows artifacts (Setup.exe, Portable.exe,
+# DeveloperSuite-Setup.exe) that cannot be built on Linux --
+# PyInstaller's bootloader and Inno Setup's ISCC.exe both only produce
+# Windows PE binaries. See BUILD_WINDOWS.md for the equivalent manual
+# procedure on a real Windows machine; this workflow automates the
+# same steps.
+#
+# Two independent jobs, one release: `build` produces the Attendance
+# Client's assets, `build-developer-suite` produces the Developer
+# Suite's -- both attach to the *same* GitHub Release (the one for the
+# pushed `v*.*.*` tag) since they are distributed together. They run
+# in parallel and never touch the same output filename (see
+# `build-developer-suite`'s own comments), so there is no race between
+# them beyond both calling the release-attach action for the same tag,
+# which softprops/action-gh-release handles fine -- each call only
+# adds/replaces the files it lists.
 on:
   push:
     tags:
       - "v*.*.*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Existing release tag to attach this run's assets to (e.g.
+          v1.1.0), without pushing a new tag. Leave empty for an
+          ordinary manual build-and-smoke-test run with nothing
+          published (the Attach-to-Release steps below are skipped
+          entirely when this is empty and the run wasn't itself
+          triggered by a tag push).
+        required: false
+        type: string
 
 # The default GITHUB_TOKEN is read-only unless a workflow explicitly
 # requests write access -- without this, the "Attach to GitHub Release"
@@ -250,3 +271,168 @@ jobs:
             Release/Administrator Manual.pdf
             Release/CHANGELOG.md
           generate_release_notes: true
+
+  # The Developer Suite's own build, entirely independent of the `build`
+  # job above (own spec, own installer script, own trimmed dependency
+  # list -- see packaging/pyinstaller/developer_suite.spec and
+  # requirements-developer-suite-runtime.txt) but publishing to the
+  # *same* release: the two applications are versioned independently
+  # internally (see developer_suite/config.py's own app_version) but
+  # distributed together from this one repository's releases page,
+  # since the Developer Suite is what a vendor operator needs to issue
+  # the licenses the Attendance Client asks for.
+  build-developer-suite:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime + build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-developer-suite-runtime.txt
+
+      - name: Build onedir app (for the installer)
+        run: pyinstaller packaging\pyinstaller\developer_suite.spec --noconfirm
+
+      # See the `build` job's identical onedir smoke test above for the
+      # full rationale (real Windows runner, offscreen Qt platform,
+      # deliberately unredirected stdout/stderr, startup_crash.log as
+      # the diagnostic channel). QT_QPA_PLATFORM=offscreen here
+      # exercises config load, database init, and the admin
+      # auto-login-then-login-window startup path without a stored
+      # session (see developer_suite/admin/session_manager.py's
+      # try_auto_login -- it returns False immediately with no network
+      # call when nothing is stored, so this is safe to run offline).
+      - name: Smoke test - onedir build starts without crashing
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $exePath = "dist\DeveloperSuite\DeveloperSuite.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Executable not found: $exePath"
+            exit 1
+          }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:DEV_SUITE_ENVIRONMENT = "testing"
+          $env:DEV_SUITE_DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_devsuite_onedir.db"
+          $crashLog = "$env:LOCALAPPDATA\DeveloperSuite\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $exePath -PassThru
+          Start-Sleep -Seconds 15
+          if ($proc.HasExited) {
+            Write-Host "##[error] Onedir executable exited early (code $($proc.ExitCode)) instead of staying running."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            exit 1
+          }
+          Write-Host "OK: onedir executable is still running after 15s (PID $($proc.Id))."
+          Stop-Process -Id $proc.Id -Force
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build DeveloperSuite-Setup.exe with Inno Setup
+        run: |
+          if not exist "Release" mkdir "Release"
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer\setup_developer_suite.iss
+
+      # Silently runs the actual installer, launches the actual
+      # installed .exe from Program Files, then uninstalls -- see the
+      # `build` job's identical installed-build smoke test above for
+      # the full rationale.
+      - name: Smoke test - installed DeveloperSuite-Setup.exe starts without crashing
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $installer = "Release\DeveloperSuite-Setup.exe"
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found: $installer"
+            exit 1
+          }
+          $installProc = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait -PassThru
+          if ($installProc.ExitCode -ne 0) {
+            Write-Error "DeveloperSuite-Setup.exe exited with code $($installProc.ExitCode) during silent install."
+            exit 1
+          }
+          $installedExe = "$env:ProgramFiles\Developer Suite\DeveloperSuite.exe"
+          if (-not (Test-Path $installedExe)) {
+            Write-Error "Installed executable not found at $installedExe"
+            exit 1
+          }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:DEV_SUITE_ENVIRONMENT = "testing"
+          $env:DEV_SUITE_DB_SQLITE_PATH = "$env:RUNNER_TEMP\smoke_devsuite_installed.db"
+          $crashLog = "$env:LOCALAPPDATA\DeveloperSuite\logs\startup_crash.log"
+          Remove-Item -Path $crashLog -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $installedExe -PassThru
+          Start-Sleep -Seconds 15
+          $failed = $false
+          if ($proc.HasExited) {
+            Write-Host "##[error] Installed executable exited early (code $($proc.ExitCode))."
+            if (Test-Path $crashLog) {
+              Write-Host "----- startup_crash.log -----"
+              Get-Content $crashLog
+            } else {
+              Write-Host "No startup_crash.log was written either."
+            }
+            $failed = $true
+          } else {
+            Write-Host "OK: installed executable is still running after 15s (PID $($proc.Id))."
+            Stop-Process -Id $proc.Id -Force
+          }
+          # Uninstall regardless of pass/fail, to leave the runner clean
+          # -- see the `build` job's identical step for why this is
+          # bounded to 60s and never allowed to fail this step.
+          $uninstaller = "$env:ProgramFiles\Developer Suite\unins000.exe"
+          if (Test-Path $uninstaller) {
+            $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -PassThru
+            $uninstallProc | Wait-Process -Timeout 60 -ErrorAction SilentlyContinue
+            if (-not $uninstallProc.HasExited) {
+              Write-Host "Uninstall did not finish within 60s - leaving it be, not treated as a smoke-test failure."
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Verify build output exists
+        run: |
+          if not exist "Release\DeveloperSuite-Setup.exe" (echo DeveloperSuite-Setup.exe missing & exit /b 1)
+
+      - name: Upload Release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeveloperSuite-Windows-Release
+          path: Release/DeveloperSuite-Setup.exe
+          if-no-files-found: error
+
+      # Deliberately no generate_release_notes here: the release's
+      # description is already generated/maintained by the `build`
+      # job above (the Attendance Client's own tag-triggered run) --
+      # this step's only job is to add one more file to that same,
+      # already-described release, never to touch its body.
+      #
+      # tag_name defaults to the pushed tag on an ordinary tag-push
+      # trigger (github.ref_name), or can be pointed at an *existing*
+      # release explicitly via the release_tag workflow_dispatch input
+      # -- e.g. to attach this asset to a release whose tag was
+      # already pushed and built before this job existed, without
+      # pushing a new tag or moving the existing one.
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            Release/DeveloperSuite-Setup.exe
