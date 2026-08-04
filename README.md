@@ -1,8 +1,8 @@
-# نظام إدارة الحضور والانصراف (Enterprise Attendance Management System)
+# نظام إدارة الحضور والانصراف
 
-نظام سطح مكتب متعدد الشركات (Multi-Company / Multi-Tenant) لإدارة حضور وانصراف الموظفين، مبني بلغة Python باستخدام PySide6 (Qt6) وSQLAlchemy، مع واجهة عربية RTL افتراضية ودعم كامل للأجهزة البيومترية (ZKTeco وHikvision).
+نظام سطح مكتب متعدد الشركات (Multi-Company / Multi-Tenant) لإدارة حضور وانصراف الموظفين
+مع واجهة عربية RTL افتراضية ودعم كامل للأجهزة البيومترية 
 
-Built for organizations that need to manage attendance across an unlimited number of independent companies from a single installation, with full data isolation between tenants, biometric device integration, and Arabic-first bilingual reporting.
 
 ---
 
