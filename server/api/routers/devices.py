@@ -18,11 +18,15 @@ unmodified; no new business logic.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from server.api.schemas import DeviceRegisterRequest
 from server.auth.dependencies import AuthenticatedPrincipal, require_scope
-from server.services.device_service import DeviceService
+from server.services.device_service import (
+    DeviceService,
+    MaxDevicesReachedError,
+    SubscriptionRequiredError,
+)
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
@@ -35,13 +39,30 @@ def register_device(
 ) -> dict:
     """Register a new device and return its one-time sync credential.
 
+    For ``device_type=attendance_client``, ``company_name`` must name
+    an existing subscription (see
+    :mod:`server.api.routers.subscriptions`) with capacity left under
+    its device cap.
+
     Returns:
         ``{"device": {...}, "api_key": "..."}`` — ``api_key`` is shown
         exactly once; only its bcrypt hash is stored (see
         :meth:`~server.services.device_service.DeviceService.register_device`).
+
+    Raises:
+        HTTPException: 422 if no subscription exists for
+            ``company_name``, 403 if that subscription has already
+            reached :attr:`~server.models.subscription.Subscription.max_devices`.
     """
     device_service: DeviceService = request.app.state.container.device_service
-    device, api_key = device_service.register_device(name=body.name, device_type=body.device_type)
+    try:
+        device, api_key = device_service.register_device(
+            name=body.name, device_type=body.device_type, company_name=body.company_name
+        )
+    except SubscriptionRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except MaxDevicesReachedError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return {"device": device.to_dict(exclude={"api_key_hash"}), "api_key": api_key}
 
 

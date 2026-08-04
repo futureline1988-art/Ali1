@@ -17,6 +17,7 @@ from database.database import Database
 from server.config import ServerConfig
 from server.services.admin_auth_service import AdminAuthService
 from server.services.device_service import DeviceService
+from server.services.subscription_service import SubscriptionService
 from server.services.sync_service import SyncService
 from server.services.update_service import UpdateService
 
@@ -38,6 +39,10 @@ class ServiceContainer:
         update_service: Software update version/package/targeting/
             rollback management and device status reporting (Phase
             14) — see :mod:`server.services.update_service`.
+        subscription_service: Company subscription create/renew/
+            suspend/reactivate and the device-facing status check —
+            the server-managed replacement for the retired file-based
+            license system, see :mod:`server.services.subscription_service`.
     """
 
     def __init__(self, config: ServerConfig, database: Database) -> None:
@@ -54,3 +59,4 @@ class ServiceContainer:
         self.sync_service = SyncService(database)
         self.admin_auth_service = AdminAuthService(database, config=config)
         self.update_service = UpdateService(database, config=config)
+        self.subscription_service = SubscriptionService(database)

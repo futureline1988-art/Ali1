@@ -10,7 +10,7 @@ that module's docstring), the same ORM-to-dict path
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,44 @@ class DeviceRegisterRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     device_type: DeviceType
+    company_name: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Required when device_type is attendance_client -- the exact "
+            "Subscription.company_name this installation belongs to. Ignored for "
+            "developer_suite devices."
+        ),
+    )
+
+
+class CreateSubscriptionRequest(BaseModel):
+    """POST /api/v1/subscriptions request body."""
+
+    company_name: str = Field(min_length=1, max_length=200)
+    subscription_start_date: date
+    subscription_end_date: date
+    max_devices: int = Field(ge=1)
+    max_users: int | None = Field(default=None, ge=1)
+
+
+class UpdateSubscriptionRequest(BaseModel):
+    """PATCH /api/v1/subscriptions/{id} request body.
+
+    Every field is optional -- only the fields present are changed.
+    ``action`` (when given) applies before the other fields: it exists
+    so a single call can e.g. reactivate a subscription and renew its
+    end date at once.
+    """
+
+    action: str | None = Field(default=None, pattern="^(suspend|reactivate)$")
+    subscription_end_date: date | None = None
+    max_devices: int | None = Field(default=None, ge=1)
+    max_users: int | None = Field(default=None, ge=1)
+    max_users_unlimited: bool = Field(
+        default=False,
+        description="Set true to explicitly clear max_users back to unlimited.",
+    )
 
 
 class ChangeItemRequest(BaseModel):

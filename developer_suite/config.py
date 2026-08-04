@@ -154,24 +154,6 @@ class DeveloperSuiteConfig:
         security: Reuses :class:`config.SecurityConfig` directly.
         logging: Reuses :class:`config.LoggingConfig` directly, with
             its own log file name.
-        licensing_private_key_path: Where this application looks for
-            the vendor's Ed25519 signing private key — the same key
-            format :mod:`licensing.license_generator` and
-            :mod:`licensing.crypto.signing` use, held only by this
-            application, never the Attendance Client. A missing file
-            at this path is auto-created, once, the first time
-            :class:`~developer_suite.services.license_service.LicenseService`
-            actually needs to sign something (see
-            :func:`~licensing.crypto.signing.ensure_keypair`) — this
-            machine running the Developer Suite at all is what makes
-            it "the developer machine"; nothing else in the Developer
-            Suite depends on this path.
-        licensing_public_key_path: Where the matching public key is
-            also written if a new license-signing keypair is ever
-            generated at :attr:`licensing_private_key_path` — a
-            convenience for retrieving it afterwards to embed in the
-            next Attendance Client build's ``licensing/keys.py``, not
-            read by anything at runtime.
         attendance_server_url: Base URL of the Attendance Server this
             installation synchronizes against (see
             :mod:`developer_suite.sync.client`). Purely configuration
@@ -203,23 +185,13 @@ class DeveloperSuiteConfig:
     """
 
     app_name: str = "Developer Suite"
-    app_version: str = "1.0.3"
+    app_version: str = "1.1.0"
     environment: Environment = Environment.PRODUCTION
 
     paths: DeveloperSuitePaths = field(default_factory=DeveloperSuitePaths.default)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
-    licensing_private_key_path: Path = field(
-        default_factory=lambda: DeveloperSuitePaths.default().data_dir
-        / "keys"
-        / "license_private_key.pem"
-    )
-    licensing_public_key_path: Path = field(
-        default_factory=lambda: DeveloperSuitePaths.default().data_dir
-        / "keys"
-        / "license_public_key.pem"
-    )
     attendance_server_url: str = "http://127.0.0.1:8000"
     sync_enabled: bool = True
     sync_interval_seconds: int = 60
@@ -265,18 +237,6 @@ class DeveloperSuiteConfig:
 
         logging_config = LoggingConfig(log_file_name="developer_suite.log")
 
-        licensing_private_key_path = Path(
-            os.getenv(
-                "DEV_SUITE_LICENSE_PRIVATE_KEY_PATH",
-                str(paths.data_dir / "keys" / "license_private_key.pem"),
-            )
-        )
-        licensing_public_key_path = Path(
-            os.getenv(
-                "DEV_SUITE_LICENSE_PUBLIC_KEY_PATH",
-                str(paths.data_dir / "keys" / "license_public_key.pem"),
-            )
-        )
         update_signing_private_key_path = Path(
             os.getenv(
                 "DEV_SUITE_UPDATE_SIGNING_PRIVATE_KEY_PATH",
@@ -298,8 +258,6 @@ class DeveloperSuiteConfig:
             database=database,
             security=SecurityConfig.from_env(),
             logging=logging_config,
-            licensing_private_key_path=licensing_private_key_path,
-            licensing_public_key_path=licensing_public_key_path,
             attendance_server_url=os.getenv(
                 "DEV_SUITE_ATTENDANCE_SERVER_URL", cls.attendance_server_url
             ),

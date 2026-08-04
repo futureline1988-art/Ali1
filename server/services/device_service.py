@@ -23,6 +23,7 @@ from database.database import Database
 from server.config import ServerConfig
 from server.models.device import SyncDevice, DeviceType
 from server.repositories.device_repository import DeviceRepository
+from server.repositories.subscription_repository import SubscriptionRepository
 from server.services.base_service import BaseService
 
 
@@ -32,6 +33,20 @@ class DeviceServiceError(Exception):
 
 class DeviceNotFoundError(DeviceServiceError):
     """No device exists with the given id."""
+
+
+class SubscriptionRequiredError(DeviceServiceError):
+    """An Attendance Client tried to register with no matching, existing subscription.
+
+    Registration for :attr:`~server.models.device.DeviceType.ATTENDANCE_CLIENT`
+    always requires the Developer Suite to have already created a
+    :class:`~server.models.subscription.Subscription` for the given
+    company name — see :meth:`DeviceService.register_device`.
+    """
+
+
+class MaxDevicesReachedError(DeviceServiceError):
+    """The company's subscription has already reached its device cap."""
 
 
 class DeviceService(BaseService):
@@ -48,27 +63,71 @@ class DeviceService(BaseService):
         super().__init__(database)
         self._config = config
 
-    def register_device(self, *, name: str, device_type: DeviceType) -> tuple[SyncDevice, str]:
+    def register_device(
+        self, *, name: str, device_type: DeviceType, company_name: str | None = None
+    ) -> tuple[SyncDevice, str]:
         """Register a new device and issue its one-time sync credential.
 
         Args:
             name: A human-readable label for this device.
             device_type: Which application this device is an
                 installation of.
+            company_name: The real Attendance Client enrollment flow
+                (:meth:`~sync.coordinator.ClientSyncCoordinator.enroll`)
+                always supplies this — the exact
+                :attr:`~server.models.subscription.Subscription.company_name`
+                this installation belongs to, resolved to a subscription
+                and linked via :attr:`~server.models.device.SyncDevice.subscription_id`,
+                with capacity enforced against
+                :attr:`~server.models.subscription.Subscription.max_devices`.
+                Left ``None``, no subscription lookup/enforcement
+                happens at all and the device registers exactly as it
+                did before subscriptions existed (used by every
+                registration that has nothing to do with subscription
+                entitlement, e.g. this server's own sync/update test
+                fixtures) — :attr:`~server.models.device.SyncDevice.subscription_id`
+                simply stays unset. Always ignored for
+                :attr:`~server.models.device.DeviceType.DEVELOPER_SUITE`
+                (a vendor machine has no subscription).
 
         Returns:
             A ``(device, api_key)`` pair. ``api_key`` is the plaintext
             credential — returned here and only here; only its bcrypt
             hash is ever stored, so a caller that loses it must
             register a new device rather than recover the old key.
+
+        Raises:
+            SubscriptionRequiredError: ``company_name`` was given but
+                no subscription exists for it.
+            MaxDevicesReachedError: The matched subscription has
+                already reached its
+                :attr:`~server.models.subscription.Subscription.max_devices`
+                cap.
         """
         api_key = generate_session_token()
         with self._session_scope() as session:
+            subscription_id: int | None = None
+            if device_type is DeviceType.ATTENDANCE_CLIENT and company_name is not None:
+                subscription_repo = SubscriptionRepository(session)
+                subscription = subscription_repo.get_by_company_name(company_name)
+                if subscription is None:
+                    raise SubscriptionRequiredError(
+                        f"No subscription exists for company {company_name!r}. "
+                        "Ask your vendor to create one before registering this installation."
+                    )
+                if subscription_repo.count_active_devices(subscription.id) >= subscription.max_devices:
+                    raise MaxDevicesReachedError(
+                        f"Company {company_name!r} has already reached its device limit "
+                        f"({subscription.max_devices})."
+                    )
+                subscription_id = subscription.id
+
             device = SyncDevice(
                 name=name,
                 device_type=device_type,
                 api_key_hash=hash_password(api_key, rounds=self._config.security.bcrypt_rounds),
                 is_active=True,
+                subscription_id=subscription_id,
             )
             DeviceRepository(session).add(device)
             return device, api_key

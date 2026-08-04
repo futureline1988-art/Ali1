@@ -3,6 +3,52 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 1.2.0 / Developer Suite 1.1.0 / Server 1.1.0] - 2026-08-04
+
+### Changed — Replaced file-based licensing with server-managed subscriptions
+
+The Ed25519-signed, machine-locked license-key system has been removed
+entirely and replaced with company subscriptions stored on the Attendance
+Server:
+
+- **Attendance Server**: new `Subscription` model (company name, start/end
+  date, Active/Suspended status, max devices, optional max users) with a
+  full admin CRUD API (`/api/v1/subscriptions`) and a device-facing status
+  check (`GET /api/v1/subscription/status`, authenticated the same way as
+  sync push/pull). Device registration now optionally enforces a
+  subscription's device cap when `company_name` is supplied.
+- **Developer Suite**: the License Manager module, its issuance/renewal/
+  revocation UI, and the local `IssuedLicense` model/repository are gone,
+  replaced by a Subscription Manager module (create/renew/suspend/
+  reactivate, all server-side). The dashboard and reporting modules'
+  license-specific charts/reports are replaced by subscription-status
+  equivalents (active/suspended/expired breakdown, upcoming expirations,
+  a subscription report).
+- **Attendance Client**: no longer holds, verifies, or activates a local
+  license file. At startup, a new `SubscriptionCheckService` asks the
+  Attendance Server for this installation's subscription status (reusing
+  its existing device sync credential) and caches the last confirmed
+  result. If the server is unreachable, the installation may keep running
+  for a 7-day grace period since the last successful check; an explicit
+  suspended/expired verdict from the server always applies immediately,
+  regardless of any remaining grace. Clear messages are shown for every
+  outcome ("Subscription expired," "Company suspended," "Maximum devices
+  reached," etc.). The old license activation window and the Settings
+  screen's License tab are replaced by a minimal blocking status screen
+  and a read-only Subscription tab, respectively.
+- Device enrollment (`ClientSyncCoordinator.enroll`/`sync.client.register_device`)
+  now carries a `company_name`, matched against the Attendance Server's
+  subscription records; `config.py` gained `SyncConfig.company_name`
+  (`SYNC_COMPANY_NAME` environment variable).
+- Removed the now-obsolete `licensing/` modules (`license_key.py`,
+  `license_service.py`, `license_store.py`, `license_generator.py`,
+  `keys.py`, `machine_id.py`, `enums.py`, `validator/`) — the shared
+  Ed25519 signing primitives (`licensing/crypto/signing.py`) remain,
+  since the Developer Suite's software-update package signing still
+  depends on them.
+- Existing customer and company management, and every other module, are
+  unaffected by this migration.
+
 ## [1.1.0] - 2026-08-04
 
 ### Added

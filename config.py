@@ -428,6 +428,12 @@ class SyncConfig:
     :class:`~developer_suite.config.DeveloperSuiteConfig`'s equivalent
     fields, since both applications talk to the same server through
     the same generic sync API.
+
+    ``company_name`` is also this installation's subscription identity
+    (see :mod:`services.subscription_check_service`): the exact
+    ``Subscription.company_name`` created for this customer in the
+    Developer Suite, sent at enrollment so the server can link this
+    device to the right subscription.
     """
 
     enabled: bool = True
@@ -435,6 +441,7 @@ class SyncConfig:
     interval_seconds: int = 300
     device_name: str = "Attendance Client"
     bootstrap_admin_token: str = ""
+    company_name: str = ""
 
     @classmethod
     def from_env(cls) -> "SyncConfig":
@@ -455,6 +462,7 @@ class SyncConfig:
             interval_seconds=_env_int("SYNC_INTERVAL_SECONDS", 300),
             device_name=os.getenv("SYNC_DEVICE_NAME", cls.device_name),
             bootstrap_admin_token=os.getenv("SYNC_BOOTSTRAP_ADMIN_TOKEN", ""),
+            company_name=os.getenv("SYNC_COMPANY_NAME", ""),
         )
 
 
@@ -537,7 +545,7 @@ class AppConfig:
 
     app_name: str = "Attendance Management System"
     app_name_ar: str = "نظام إدارة الحضور والانصراف"
-    app_version: str = "1.1.2"
+    app_version: str = "1.2.0"
     organization_name: str = "Attendance Systems"
     environment: Environment = Environment.PRODUCTION
 

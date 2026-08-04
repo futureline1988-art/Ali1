@@ -1,23 +1,17 @@
 """Ed25519 keypair generation, loading, and raw byte signing.
 
 Originally Phase 1 foundation code, written standalone before the
-Developer Suite existed to consume it. It is now the module both of
-the Developer Suite's own signing services use:
-:mod:`developer_suite.services.license_service` (holds the license
--signing key) and :mod:`developer_suite.services.update_manager_service`
+Developer Suite existed to consume it. The file-based license system
+that used to be this module's other consumer
+(``developer_suite.services.license_service``, holding a
+license-signing key) has since been retired in favor of server-managed
+subscriptions (see :mod:`server.models.subscription`); the sole
+remaining consumer is :mod:`developer_suite.services.update_manager_service`
 (holds the separate update-signing key) — see :func:`ensure_keypair`
-for the auto-bootstrap entry point both call. The Attendance Client
+for the auto-bootstrap entry point it calls. The Attendance Client
 still never imports this module: it only ever verifies signatures
-against an embedded *public* key (``licensing/keys.py``,
-``updates/keys.py``), never holds a private key at all.
-
-``licensing/license_generator.py`` (the offline, vendor-only CLI
-script this module was originally kept separate from) still has its
-own independent, equivalent logic for generating a keypair and issuing
-a key from the command line — that duplication is deliberate and
-unchanged; the two entry points serve different callers (an operator
-at a terminal vs. the running Developer Suite application) and neither
-needs to depend on the other.
+against an embedded *public* key (``updates/keys.py``), never holds a
+private key at all.
 """
 
 from __future__ import annotations
@@ -197,8 +191,6 @@ def ensure_keypair(
     The auto-bootstrap counterpart to :func:`load_private_key`: a fresh
     install of the application that holds this key (today, only the
     Developer Suite — see
-    :meth:`developer_suite.services.license_service.LicenseService._load_private_key`
-    and
     :meth:`developer_suite.services.update_manager_service.UpdateManagerService._load_private_key`)
     has nowhere to get a signing key from except generating its own the
     first time one is actually needed. Nothing here changes the key
@@ -293,8 +285,7 @@ def sign_bytes(private_key: Ed25519PrivateKey, data: bytes) -> bytes:
     """Sign ``data`` with ``private_key``.
 
     A thin wrapper over :meth:`Ed25519PrivateKey.sign` — its only
-    purpose is to be the one call site in this codebase (outside
-    ``license_generator.py``'s own independent implementation) where a
+    purpose is to be the one call site in this codebase where a
     private key actually produces a signature, so that boundary is
     trivial to audit.
 

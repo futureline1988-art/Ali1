@@ -23,7 +23,6 @@ from developer_suite.services.customer_service import (
     CustomerService,
     CustomerValidationError,
 )
-from developer_suite.services.license_service import LicenseService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
 from developer_suite.ui.customer_form_dialog import CustomerFormDialog
@@ -50,9 +49,19 @@ def customer_service(dev_suite_database) -> CustomerService:
     return CustomerService(dev_suite_database)
 
 
+class _FakeSubscriptionService:
+    """A minimal :class:`~developer_suite.services.subscription_service.SubscriptionService`
+    stand-in: no HTTP, no admin client — these tests only need the page
+    to construct and render, never actual subscription content.
+    """
+
+    def list_subscriptions(self) -> list:
+        return []
+
+
 @pytest.fixture
-def license_service(dev_suite_database, tmp_path) -> LicenseService:
-    return LicenseService(dev_suite_database, private_key_path=tmp_path / "nonexistent.pem")
+def subscription_service() -> _FakeSubscriptionService:
+    return _FakeSubscriptionService()
 
 
 @pytest.fixture
@@ -62,9 +71,9 @@ def sync_coordinator(dev_suite_database, dev_suite_config) -> SyncCoordinator:
     return coordinator
 
 
-def _build_page(customer_service, license_service, sync_coordinator) -> CustomerManagementPage:
+def _build_page(customer_service, subscription_service, sync_coordinator) -> CustomerManagementPage:
     """Construct a page with every dependency it now requires (Phase 10 added two)."""
-    return CustomerManagementPage(customer_service, license_service, sync_coordinator)
+    return CustomerManagementPage(customer_service, subscription_service, sync_coordinator)
 
 
 class TestCustomerModel:
@@ -248,46 +257,46 @@ class TestCustomerFormDialog:
 
 class TestCustomerManagementPage:
     def test_loads_existing_customers_on_construction(
-        self, qapp, customer_service: CustomerService, license_service, sync_coordinator
+        self, qapp, customer_service: CustomerService, subscription_service, sync_coordinator
     ) -> None:
         customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
         customer_service.create_customer(company_name="Widgets Inc", contact_name="John Roe")
 
-        page = _build_page(customer_service, license_service, sync_coordinator)
+        page = _build_page(customer_service, subscription_service, sync_coordinator)
         assert page.table.rowCount() == 2
 
     def test_search_filters_the_table(
-        self, qapp, customer_service: CustomerService, license_service, sync_coordinator
+        self, qapp, customer_service: CustomerService, subscription_service, sync_coordinator
     ) -> None:
         customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
         customer_service.create_customer(company_name="Widgets Inc", contact_name="John Roe")
 
-        page = _build_page(customer_service, license_service, sync_coordinator)
+        page = _build_page(customer_service, subscription_service, sync_coordinator)
         page.search_edit.setText("Acme")
         assert page.table.rowCount() == 1
         assert page.table.item(0, 0).text() == "Acme Co"
 
     def test_selected_customer_returns_none_without_selection(
-        self, qapp, customer_service: CustomerService, license_service, sync_coordinator
+        self, qapp, customer_service: CustomerService, subscription_service, sync_coordinator
     ) -> None:
-        page = _build_page(customer_service, license_service, sync_coordinator)
+        page = _build_page(customer_service, subscription_service, sync_coordinator)
         assert page._selected_customer() is None
 
     def test_selected_customer_matches_current_row(
-        self, qapp, customer_service: CustomerService, license_service, sync_coordinator
+        self, qapp, customer_service: CustomerService, subscription_service, sync_coordinator
     ) -> None:
         customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        page = _build_page(customer_service, license_service, sync_coordinator)
+        page = _build_page(customer_service, subscription_service, sync_coordinator)
         page.table.selectRow(0)
         selected = page._selected_customer()
         assert selected is not None
         assert selected.company_name == "Acme Co"
 
     def test_reload_reflects_status_change(
-        self, qapp, customer_service: CustomerService, license_service, sync_coordinator
+        self, qapp, customer_service: CustomerService, subscription_service, sync_coordinator
     ) -> None:
         customer = customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        page = _build_page(customer_service, license_service, sync_coordinator)
+        page = _build_page(customer_service, subscription_service, sync_coordinator)
         assert page.table.item(0, 4).text() == "نشط"
 
         customer_service.suspend(customer.id)

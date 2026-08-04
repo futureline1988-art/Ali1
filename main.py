@@ -17,13 +17,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from config import get_config
 from database.database import DatabaseConnectionError, get_database, session_scope
-from licensing.license_service import LicenseService
 from models.permission import Permission
 from models.update_state import ClientUpdateStatus
 from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.permission_repository import PermissionRepository
 from repositories.update_state_repository import ClientUpdateStateRepository
 from services.scheduler_service import SchedulerService
+from services.subscription_check_service import SubscriptionCheckResult, SubscriptionCheckService
 from sync.client import SyncClientError
 from sync.coordinator import ClientSyncCoordinator
 from sync.scheduler import ClientSyncSchedulerService
@@ -37,12 +37,12 @@ from ui.devices import DevicesPage
 from ui.employees import EmployeesPage
 from ui.holidays import HolidaysPage
 from ui.leave import LeavePage
-from ui.license_window import LicenseActivationWindow
 from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
 from ui.reports import ReportsPage
 from ui.settings import SettingsPage
 from ui.shifts import ShiftsPage
+from ui.subscription_blocked_window import SubscriptionBlockedWindow
 from ui.theme import get_theme_manager
 from ui.users import UsersPage
 from ui.widgets import build_splash_screen
@@ -150,7 +150,9 @@ def _bootstrap_remote_configuration_sync(coordinator: ClientSyncCoordinator, con
         return
     try:
         coordinator.enroll(
-            admin_bearer_token=config.sync.bootstrap_admin_token, name=config.sync.device_name
+            admin_bearer_token=config.sync.bootstrap_admin_token,
+            name=config.sync.device_name,
+            company_name=config.sync.company_name or None,
         )
         logger.info("Enrolled this installation for remote configuration sync.")
     except SyncClientError as exc:
@@ -387,27 +389,28 @@ def main() -> int:
     app.setApplicationName(config.app_name)
     app.setApplicationVersion(config.app_version)
     app.setOrganizationName(config.organization_name)
-    # This app manages its own window lifecycle explicitly (license window ->
-    # login window -> main window, and back again on logout/session-expiry),
-    # which always involves closing the old top-level window just before
-    # showing its replacement - a transient instant with zero visible
-    # windows. Qt's default quitOnLastWindowClosed=True queues an
-    # application-quit the moment that happens, regardless of a replacement
-    # window being shown microseconds later; every explicit exit path below
-    # already calls app.quit() itself, so this heuristic only ever causes
-    # harm here (see the regression this fixes: activating a license closed
-    # the activation window, and the very next app.processEvents() call
-    # picked up that queued quit and ended the process before the freshly
-    # constructed, visible LoginWindow ever got a chance to run).
+    # This app manages its own window lifecycle explicitly (subscription
+    # -blocked window -> login window -> main window, and back again on
+    # logout/session-expiry), which always involves closing the old
+    # top-level window just before showing its replacement - a transient
+    # instant with zero visible windows. Qt's default
+    # quitOnLastWindowClosed=True queues an application-quit the moment that
+    # happens, regardless of a replacement window being shown microseconds
+    # later; every explicit exit path below already calls app.quit() itself,
+    # so this heuristic only ever causes harm here (see the regression this
+    # originally fixed: closing a gating window closed it, and the very next
+    # app.processEvents() call picked up that queued quit and ended the
+    # process before the freshly constructed, visible replacement window
+    # ever got a chance to run).
     app.setQuitOnLastWindowClosed(False)
 
     get_locale_manager().bind_application(app)
     get_theme_manager().bind_application(app)
 
     # Shared with the nested closures below so a database failure (which can
-    # now be discovered either before app.exec() starts, if already
-    # licensed, or from inside a Qt slot after it starts, once activation
-    # succeeds) has one place to record the real exit code, and so
+    # now be discovered either before app.exec() starts, if the subscription
+    # is already valid, or from inside a Qt slot after it starts, once a
+    # retry passes) has one place to record the real exit code, and so
     # ApplicationController has a reference that outlives _launch_app()'s
     # own local scope for the rest of the process's lifetime.
     run_state: dict[str, object] = {}
@@ -415,11 +418,7 @@ def main() -> int:
     sync_scheduler_holder: dict[str, ClientSyncSchedulerService] = {}
 
     def _launch_app() -> None:
-        """Run the rest of startup: database, permissions, splash, main app.
-
-        Gated behind a valid license (see below) - never called until
-        :class:`~licensing.license_service.LicenseService` confirms one.
-        """
+        """Run the rest of startup: database, subscription check, splash, main app."""
         database = get_database()
         try:
             database.initialize()
@@ -437,49 +436,65 @@ def main() -> int:
 
         sync_coordinator = ClientSyncCoordinator(database, config.sync.server_url)
         _bootstrap_remote_configuration_sync(sync_coordinator, config)
+        subscription_check_service = SubscriptionCheckService(database, sync_coordinator)
 
-        update_checker = (
-            UpdateCheckService(
-                database,
-                config.sync.server_url,
-                current_version=config.app_version,
-                package_type=config.updates.package_type,
-                downloads_dir=config.updates.downloads_dir,
-                public_key=load_public_key(),
+        def _continue_after_subscription_check() -> None:
+            update_checker = (
+                UpdateCheckService(
+                    database,
+                    config.sync.server_url,
+                    current_version=config.app_version,
+                    package_type=config.updates.package_type,
+                    downloads_dir=config.updates.downloads_dir,
+                    public_key=load_public_key(),
+                )
+                if config.updates.enabled
+                else None
             )
-            if config.updates.enabled
-            else None
+            sync_scheduler = ClientSyncSchedulerService(
+                sync_coordinator,
+                database,
+                sync_enabled=config.sync.enabled,
+                sync_interval_seconds=config.sync.interval_seconds,
+                update_check_service=update_checker,
+            )
+            sync_scheduler.start()
+            sync_scheduler_holder["scheduler"] = sync_scheduler
+
+            splash = build_splash_screen(app_name=config.app_name_ar)
+            splash.show()
+            app.processEvents()
+
+            run_state["controller"] = ApplicationController()
+            QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
+
+        def _recheck_subscription() -> SubscriptionCheckResult:
+            """Re-attempt enrollment (in case it failed earlier) and re-check the subscription."""
+            _bootstrap_remote_configuration_sync(sync_coordinator, config)
+            return subscription_check_service.check()
+
+        result = subscription_check_service.check()
+        if result.allowed:
+            _continue_after_subscription_check()
+            return
+
+        logger.warning(
+            "Subscription check blocked startup: {outcome} - {message}",
+            outcome=result.outcome.value,
+            message=result.message_en,
         )
-        sync_scheduler = ClientSyncSchedulerService(
-            sync_coordinator,
-            database,
-            sync_enabled=config.sync.enabled,
-            sync_interval_seconds=config.sync.interval_seconds,
-            update_check_service=update_checker,
-        )
-        sync_scheduler.start()
-        sync_scheduler_holder["scheduler"] = sync_scheduler
+        blocked_window = SubscriptionBlockedWindow(recheck=_recheck_subscription)
+        blocked_window.show_result(result.message_ar)
 
-        splash = build_splash_screen(app_name=config.app_name_ar)
-        splash.show()
-        app.processEvents()
+        def _on_subscription_passed() -> None:
+            blocked_window.close()
+            _continue_after_subscription_check()
 
-        run_state["controller"] = ApplicationController()
-        QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
+        blocked_window.passed.connect(_on_subscription_passed)
+        blocked_window.show()
+        run_state["subscription_blocked_window"] = blocked_window
 
-    license_service = LicenseService()
-    if license_service.get_status().is_valid:
-        QTimer.singleShot(0, _launch_app)
-    else:
-        license_window = LicenseActivationWindow(license_service=license_service)
-
-        def _on_license_activated() -> None:
-            license_window.close()
-            _launch_app()
-
-        license_window.activated.connect(_on_license_activated)
-        license_window.show()
-        run_state["license_window"] = license_window
+    QTimer.singleShot(0, _launch_app)
 
     exit_code = app.exec()
 

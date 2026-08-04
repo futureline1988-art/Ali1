@@ -1,0 +1,261 @@
+"""Validates this installation's subscription with the Attendance Server at startup/login.
+
+The server-managed replacement for the retired file-based license
+system (see :mod:`licensing`, being removed): rather than verifying a
+locally-stored, signed license file, this service asks the Attendance
+Server directly, via :meth:`~sync.coordinator.ClientSyncCoordinator.get_subscription_status`,
+and caches the last *server-confirmed* answer locally (see
+:mod:`models.subscription_state`) purely so a temporarily unreachable
+server does not lock a paying customer out.
+
+Grace period: if the server cannot be reached, this installation is
+allowed to keep running for a bounded window (:data:`DEFAULT_GRACE_PERIOD`,
+7 days) since the last successful check. The moment the server answers
+again, its answer is authoritative immediately -- an explicit
+suspended or expired verdict always applies right away, regardless of
+any grace period remaining. Grace only ever covers "the server could
+not be reached," never "the server said no."
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+
+from database.database import Database
+from models.subscription_state import ClientSubscriptionState
+from repositories.subscription_state_repository import ClientSubscriptionStateRepository
+from sync.client import SubscriptionStatusResult, SyncClientError
+from sync.coordinator import ClientSyncCoordinator, DeviceNotEnrolledError
+
+#: How long this installation may keep running on a cached, previously
+#: server-confirmed subscription status after the server becomes
+#: unreachable, before it must block.
+DEFAULT_GRACE_PERIOD = timedelta(days=7)
+
+
+class SubscriptionCheckOutcome(str, Enum):
+    """Why :meth:`SubscriptionCheckService.check` reached its verdict."""
+
+    VALID = "valid"
+    EXPIRED = "expired"
+    SUSPENDED = "suspended"
+    NOT_REGISTERED = "not_registered"
+    UNREACHABLE_WITHIN_GRACE = "unreachable_within_grace"
+    UNREACHABLE_BLOCKED = "unreachable_blocked"
+
+
+@dataclass(frozen=True)
+class SubscriptionCheckResult:
+    """The outcome of one :meth:`SubscriptionCheckService.check` call.
+
+    Attributes:
+        outcome: The specific reason behind :attr:`allowed`.
+        allowed: Whether this installation may proceed to the rest of
+            startup.
+        message_ar: A clear, user-facing Arabic message — this
+            application's primary UI language.
+        message_en: The same message in English, for logs.
+        company_name: The subscription's company name, if known.
+        days_remaining: Days remaining until expiry, if known.
+    """
+
+    outcome: SubscriptionCheckOutcome
+    allowed: bool
+    message_ar: str
+    message_en: str
+    company_name: str | None = None
+    days_remaining: int | None = None
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    """Treat a naive timestamp (e.g. read back from SQLite) as UTC."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+class SubscriptionCheckService:
+    """Checks this installation's subscription status, with a bounded offline grace period."""
+
+    def __init__(
+        self,
+        database: Database,
+        sync_coordinator: ClientSyncCoordinator,
+        *,
+        grace_period: timedelta = DEFAULT_GRACE_PERIOD,
+    ) -> None:
+        """Create a check service bound to ``database`` and ``sync_coordinator``.
+
+        Args:
+            database: The Attendance Client's own database, where the
+                last server-confirmed status is cached.
+            sync_coordinator: Already-enrolled (or not yet) sync
+                coordinator; used only for
+                :meth:`~sync.coordinator.ClientSyncCoordinator.is_enrolled`
+                and :meth:`~sync.coordinator.ClientSyncCoordinator.get_subscription_status`.
+            grace_period: How long a cached, previously-confirmed
+                status remains valid once the server becomes
+                unreachable.
+        """
+        self._database = database
+        self._sync_coordinator = sync_coordinator
+        self._grace_period = grace_period
+
+    def get_cached(self) -> ClientSubscriptionState | None:
+        """Return the last server-confirmed subscription state, without contacting the server.
+
+        For display purposes only (e.g.
+        :class:`~ui.subscription_info_window.SubscriptionInfoWindow`'s
+        detail fields) — :meth:`check` is what actually re-verifies.
+        """
+        with self._database.session_scope() as session:
+            return ClientSubscriptionStateRepository(session).get()
+
+    def check(self) -> SubscriptionCheckResult:
+        """Check this installation's subscription status.
+
+        Always reaches out to the server first; only falls back to the
+        cached, last-confirmed status (subject to the grace period) if
+        the server cannot be reached at all.
+        """
+        if not self._sync_coordinator.is_enrolled():
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
+                allowed=False,
+                message_ar=(
+                    "هذا الجهاز غير مسجَّل لدى خادم الحضور بعد. "
+                    "يرجى التحقق من إعدادات الاتصال بالخادم."
+                ),
+                message_en=(
+                    "This installation is not registered with the Attendance Server yet. "
+                    "Please check the server connection settings."
+                ),
+            )
+
+        try:
+            status = self._sync_coordinator.get_subscription_status()
+        except (SyncClientError, DeviceNotEnrolledError):
+            return self._evaluate_grace()
+
+        with self._database.session_scope() as session:
+            ClientSubscriptionStateRepository(session).save(
+                status=status.status,
+                company_name=status.company_name,
+                subscription_end_date=status.subscription_end_date,
+                max_devices=status.max_devices,
+                days_remaining=status.days_remaining,
+            )
+
+        return self._result_from_live_status(status)
+
+    def _result_from_live_status(self, status: SubscriptionStatusResult) -> SubscriptionCheckResult:
+        if status.status == "active":
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.VALID,
+                allowed=True,
+                message_ar="الاشتراك فعّال.",
+                message_en="Subscription is active.",
+                company_name=status.company_name,
+                days_remaining=status.days_remaining,
+            )
+        if status.status == "suspended":
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.SUSPENDED,
+                allowed=False,
+                message_ar="تم إيقاف اشتراك الشركة. يرجى التواصل مع مزوّد الخدمة.",
+                message_en="Company subscription is suspended. Please contact your provider.",
+                company_name=status.company_name,
+            )
+        if status.status == "expired":
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.EXPIRED,
+                allowed=False,
+                message_ar="انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للمتابعة.",
+                message_en="Subscription has expired. Please renew to continue.",
+                company_name=status.company_name,
+            )
+        # status.status == "not_linked"
+        return SubscriptionCheckResult(
+            outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
+            allowed=False,
+            message_ar="هذا الجهاز غير مرتبط باشتراك شركة على الخادم.",
+            message_en="This installation is not linked to a company subscription on the server.",
+        )
+
+    def _evaluate_grace(self) -> SubscriptionCheckResult:
+        """Fall back to the cached, last-confirmed status while the server is unreachable."""
+        with self._database.session_scope() as session:
+            cached = ClientSubscriptionStateRepository(session).get()
+
+        if cached is None:
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.UNREACHABLE_BLOCKED,
+                allowed=False,
+                message_ar=(
+                    "تعذر الاتصال بخادم الحضور للتحقق من الاشتراك، "
+                    "ولا توجد بيانات اشتراك محفوظة من تحقق سابق."
+                ),
+                message_en=(
+                    "Could not reach the Attendance Server to verify the subscription, "
+                    "and no previously confirmed subscription is cached."
+                ),
+            )
+
+        # An explicit suspended/expired/not-linked verdict always applies
+        # immediately, cached or not -- grace only ever covers "the
+        # server could not be reached," never "the server said no."
+        if cached.status == "suspended":
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.SUSPENDED,
+                allowed=False,
+                message_ar="تم إيقاف اشتراك الشركة. يرجى التواصل مع مزوّد الخدمة.",
+                message_en="Company subscription is suspended. Please contact your provider.",
+                company_name=cached.company_name,
+            )
+        if cached.status == "expired":
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.EXPIRED,
+                allowed=False,
+                message_ar="انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للمتابعة.",
+                message_en="Subscription has expired. Please renew to continue.",
+                company_name=cached.company_name,
+            )
+        if cached.status == "not_linked":
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
+                allowed=False,
+                message_ar="هذا الجهاز غير مرتبط باشتراك شركة على الخادم.",
+                message_en="This installation is not linked to a company subscription on the server.",
+            )
+
+        elapsed = _utc_now() - _as_aware_utc(cached.checked_at)
+        if elapsed <= self._grace_period:
+            remaining_days = (self._grace_period - elapsed).days
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.UNREACHABLE_WITHIN_GRACE,
+                allowed=True,
+                message_ar=(
+                    "تعذر الاتصال بخادم الحضور للتحقق من الاشتراك. "
+                    f"تم السماح بالدخول مؤقتًا (يتبقى من فترة السماح: {remaining_days} يوم)."
+                ),
+                message_en=(
+                    "Could not reach the Attendance Server to verify the subscription. "
+                    f"Temporary access granted ({remaining_days} day(s) of grace period remaining)."
+                ),
+                company_name=cached.company_name,
+            )
+
+        return SubscriptionCheckResult(
+            outcome=SubscriptionCheckOutcome.UNREACHABLE_BLOCKED,
+            allowed=False,
+            message_ar="تعذر الاتصال بخادم الحضور للتحقق من الاشتراك، وانتهت فترة السماح المؤقتة.",
+            message_en=(
+                "Could not reach the Attendance Server to verify the subscription, "
+                "and the temporary grace period has expired."
+            ),
+            company_name=cached.company_name,
+        )

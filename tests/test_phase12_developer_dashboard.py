@@ -24,7 +24,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -52,20 +52,18 @@ from developer_suite.admin.client import (
     AuditLogEntry,
     DeviceInfo,
     ServerStatus,
+    SubscriptionInfo,
     SyncActivityEntry,
 )
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.database.bootstrap import build_database as build_dev_suite_database
 from developer_suite.models.customer import Customer
-from developer_suite.models.license import IssuedLicense
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
-from developer_suite.services.license_service import LicenseService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
 from developer_suite.sync.scheduler import SyncSchedulerService
-from licensing.enums import LicenseType
 
 _STRONG_PASSWORD = "CorrectHorseBattery9!"
 
@@ -156,19 +154,54 @@ def customer_service(dev_suite_database: Database) -> CustomerService:
     return CustomerService(dev_suite_database)
 
 
+@dataclass
+class _FakeSubscriptionService:
+    """A minimal :class:`~developer_suite.services.subscription_service.SubscriptionService`
+    stand-in — no HTTP, no admin client, matching that service's
+    ``list_subscriptions`` closely enough for :class:`~developer_suite.services.dashboard_service.DashboardService`
+    (the only thing in this file that calls it).
+    """
+
+    subscriptions: list[SubscriptionInfo] = field(default_factory=list)
+
+    def list_subscriptions(self) -> list[SubscriptionInfo]:
+        return self.subscriptions
+
+
 @pytest.fixture
-def private_key_path(tmp_path):
-    from licensing.crypto.signing import generate_keypair, save_private_key
-
-    key_path = tmp_path / "keys" / "license_private_key.pem"
-    private_key, _public_key = generate_keypair()
-    save_private_key(private_key, key_path)
-    return key_path
+def subscription_service() -> _FakeSubscriptionService:
+    return _FakeSubscriptionService()
 
 
-@pytest.fixture
-def license_service(dev_suite_database: Database, private_key_path) -> LicenseService:
-    return LicenseService(dev_suite_database, private_key_path=private_key_path)
+def _make_subscription(
+    *,
+    id: int,
+    company_name: str = "Acme Co",
+    status: str = "active",
+    is_active: bool = True,
+    is_expired: bool = False,
+    days_remaining: int = 30,
+    max_devices: int = 5,
+    max_users: int | None = None,
+    device_count: int | None = None,
+    created_at: datetime | None = None,
+) -> SubscriptionInfo:
+    """Build one :class:`~developer_suite.admin.client.SubscriptionInfo` for a test, with sensible defaults."""
+    today = date.today()
+    return SubscriptionInfo(
+        id=id,
+        company_name=company_name,
+        subscription_start_date=today - timedelta(days=30),
+        subscription_end_date=today + timedelta(days=days_remaining),
+        status=status,
+        max_devices=max_devices,
+        max_users=max_users,
+        is_active=is_active,
+        is_expired=is_expired,
+        days_remaining=days_remaining,
+        device_count=device_count,
+        created_at=created_at or datetime.now(timezone.utc),
+    )
 
 
 @pytest.fixture
@@ -241,12 +274,12 @@ class _FakeAdminClient:
 
 def _build_service(
     customer_service: CustomerService,
-    license_service: LicenseService,
+    subscription_service,
     sync_scheduler: SyncSchedulerService,
     admin_client: _FakeAdminClient,
     config: DeveloperSuiteConfig,
 ) -> DashboardService:
-    return DashboardService(customer_service, license_service, sync_scheduler, admin_client, config)
+    return DashboardService(customer_service, subscription_service, sync_scheduler, admin_client, config)
 
 
 # ---------------------------------------------------------------------------
@@ -320,26 +353,30 @@ class TestAuditLogEndpoint:
 
 
 class TestDashboardServiceCardCounts:
-    def test_license_type_breakdown(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+    def test_subscription_status_breakdown(
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
-        customer = customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.TRIAL)
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY)
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.YEARLY)
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.YEARLY)
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.LIFETIME)
+        customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
+        subscription_service.subscriptions = [
+            _make_subscription(id=1, status="active", is_active=True, is_expired=False),
+            _make_subscription(id=2, status="active", is_active=True, is_expired=False),
+            _make_subscription(id=3, status="suspended", is_active=False, is_expired=False),
+            _make_subscription(id=4, status="active", is_active=False, is_expired=True),
+        ]
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         snapshot = service.get_snapshot()
 
-        assert snapshot.trial_licenses == 1
-        assert snapshot.monthly_licenses == 1
-        assert snapshot.yearly_licenses == 2
-        assert snapshot.lifetime_licenses == 1
+        breakdown = {entry.status_label: entry.count for entry in snapshot.subscription_status_breakdown}
+        assert breakdown["نشط"] == 2
+        assert breakdown["موقوف"] == 1
+        assert breakdown["منتهي"] == 1
+        # Fixed order: active, suspended, expired (see
+        # developer_suite.services.dashboard_service._subscription_status_breakdown).
+        assert [entry.status_label for entry in snapshot.subscription_status_breakdown] == ["نشط", "موقوف", "منتهي"]
 
     def test_connected_devices_counts_every_device_type(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         now = datetime.now(timezone.utc)
         devices = [
@@ -348,7 +385,7 @@ class TestDashboardServiceCardCounts:
             DeviceInfo("p3", "Dev Suite", "developer_suite", True, now, now),
         ]
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(devices=devices), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(devices=devices), dev_suite_config
         )
         snapshot = service.get_snapshot()
 
@@ -356,21 +393,21 @@ class TestDashboardServiceCardCounts:
         assert snapshot.online_companies == 1  # only p1 counts as an online "company"
 
     def test_connected_devices_none_when_unconfigured(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(raise_on_devices=True), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(raise_on_devices=True), dev_suite_config
         )
         snapshot = service.get_snapshot()
         assert snapshot.connected_devices is None
 
     def test_database_connected_from_server_status(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         status = ServerStatus(app_name="x", app_version="1", database_connected=False, uptime_seconds=1.0)
         service = _build_service(
             customer_service,
-            license_service,
+            subscription_service,
             sync_scheduler,
             _FakeAdminClient(server_status=status),
             dev_suite_config,
@@ -379,20 +416,20 @@ class TestDashboardServiceCardCounts:
         assert snapshot.database_connected is False
 
     def test_database_connected_none_when_status_unavailable(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(raise_on_status=True), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(raise_on_status=True), dev_suite_config
         )
         snapshot = service.get_snapshot()
         assert snapshot.database_connected is None
         assert snapshot.server_reachable is True  # health/version still succeeded
 
     def test_database_connected_none_when_server_unreachable(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(healthy=False), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(healthy=False), dev_suite_config
         )
         snapshot = service.get_snapshot()
         assert snapshot.database_connected is None
@@ -406,19 +443,19 @@ class TestDashboardServiceCardCounts:
 
 class TestDashboardServiceRecentActivity:
     def test_recent_customer_registrations_most_recent_first(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         customer_service.create_customer(company_name="First Co", contact_name="Aaron")
         customer_service.create_customer(company_name="Second Co", contact_name="Bella")
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         snapshot = service.get_snapshot()
 
         names = [entry.company_name for entry in snapshot.recent_customer_registrations]
         assert names == ["Second Co", "First Co"]
 
     def test_recent_synchronization_passed_through_verbatim(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         now = datetime.now(timezone.utc)
         activity = [
@@ -426,7 +463,7 @@ class TestDashboardServiceRecentActivity:
         ]
         service = _build_service(
             customer_service,
-            license_service,
+            subscription_service,
             sync_scheduler,
             _FakeAdminClient(recent_activity=activity),
             dev_suite_config,
@@ -437,7 +474,7 @@ class TestDashboardServiceRecentActivity:
         assert snapshot.sync_activity_by_status[0].count == 1
 
     def test_recent_server_events_from_devices_sorted_by_registration(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         now = datetime.now(timezone.utc)
         devices = [
@@ -445,14 +482,14 @@ class TestDashboardServiceRecentActivity:
             DeviceInfo("p2", "Newer", "attendance_client", True, now, now - timedelta(minutes=5)),
         ]
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(devices=devices), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(devices=devices), dev_suite_config
         )
         snapshot = service.get_snapshot()
         names = [entry.device_name for entry in snapshot.recent_server_events]
         assert names == ["Newer", "Older"]
 
     def test_authentication_events_filtered_from_full_audit_log(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         now = datetime.now(timezone.utc)
         audit_log = [
@@ -460,7 +497,7 @@ class TestDashboardServiceRecentActivity:
             AuditLogEntry("a2", 1, "password_change", None, now),
         ]
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(audit_log=audit_log), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(audit_log=audit_log), dev_suite_config
         )
         snapshot = service.get_snapshot()
 
@@ -468,58 +505,45 @@ class TestDashboardServiceRecentActivity:
         assert [entry.action for entry in snapshot.recent_audit_log] == ["login", "password_change"]
 
     def test_recent_feeds_empty_when_admin_client_unconfigured(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         service = _build_service(
-            customer_service, license_service, sync_scheduler, _FakeAdminClient(raise_on_devices=True), dev_suite_config
+            customer_service, subscription_service, sync_scheduler, _FakeAdminClient(raise_on_devices=True), dev_suite_config
         )
         snapshot = service.get_snapshot()
         assert snapshot.recent_server_events == []
 
 
 # ---------------------------------------------------------------------------
-# DashboardService: issuance vs. renewal split.
+# DashboardService: recent subscription registrations.
 #
-# Real elapsed time between issuing and renewing in the same test would
-# be well under the renewal-detection threshold, so these tests set
-# ``updated_at`` directly rather than actually sleeping — see
-# developer_suite.services.dashboard_service's own module docstring for
-# why the threshold exists at all.
+# The old license system's issuance-vs-renewal split
+# (recent_license_issuances/recent_license_renewals) has no equivalent
+# for subscriptions: a SubscriptionInfo carries only created_at, not
+# the created_at/updated_at pair the old file-based license record
+# used to distinguish a renewal from a first issuance (see
+# developer_suite.services.dashboard_service's own module docstring).
+# It is replaced by a plain "most recently created" list.
 # ---------------------------------------------------------------------------
 
 
-class TestIssuanceAndRenewalSplit:
-    def test_freshly_issued_license_appears_only_in_issuances(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+class TestRecentSubscriptionRegistrations:
+    def test_most_recently_created_subscription_appears_first(
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
-        customer = customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY)
+        older = _make_subscription(
+            id=1, company_name="Older Co", created_at=datetime(2026, 1, 1, tzinfo=timezone.utc)
+        )
+        newer = _make_subscription(
+            id=2, company_name="Newer Co", created_at=datetime(2026, 2, 1, tzinfo=timezone.utc)
+        )
+        subscription_service.subscriptions = [older, newer]
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         snapshot = service.get_snapshot()
 
-        assert len(snapshot.recent_license_issuances) == 1
-        assert snapshot.recent_license_renewals == []
-
-    def test_renewed_license_moves_to_renewals(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config, dev_suite_database
-    ) -> None:
-        customer = customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        record = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY)
-        license_service.renew_license(record.id)
-
-        # Simulate a renewal that happened well after issuance (real
-        # usage never renews within the same second it was issued).
-        with dev_suite_database.session_scope() as session:
-            row = session.get(IssuedLicense, record.id)
-            row.updated_at = row.created_at + timedelta(days=10)
-
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
-        snapshot = service.get_snapshot()
-
-        assert snapshot.recent_license_issuances == []
-        assert len(snapshot.recent_license_renewals) == 1
-        assert snapshot.recent_license_renewals[0].customer_name == "Acme Co"
+        names = [entry.company_name for entry in snapshot.recent_subscription_registrations]
+        assert names == ["Newer Co", "Older Co"]
 
 
 # ---------------------------------------------------------------------------
@@ -529,12 +553,12 @@ class TestIssuanceAndRenewalSplit:
 
 class TestDashboardServiceCharts:
     def test_customer_growth_is_cumulative_and_covers_the_window(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
         customer_service.create_customer(company_name="Beta Co", contact_name="John Roe")
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         snapshot = service.get_snapshot()
 
         assert len(snapshot.customer_growth) == 6  # default months window
@@ -543,22 +567,23 @@ class TestDashboardServiceCharts:
         counts = [point.cumulative_customers for point in snapshot.customer_growth]
         assert counts == sorted(counts)
 
-    def test_license_distribution_covers_every_plan_in_fixed_order(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+    def test_subscription_status_breakdown_covers_every_status_in_fixed_order(
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         snapshot = service.get_snapshot()
-        assert [entry.count for entry in snapshot.license_distribution] == [0, 0, 0, 0]
-        assert len(snapshot.license_distribution) == 4
+        assert [entry.count for entry in snapshot.subscription_status_breakdown] == [0, 0, 0]
+        assert len(snapshot.subscription_status_breakdown) == 3
 
-    def test_expiration_timeline_counts_only_active_licenses_with_an_expiry(
-        self, customer_service, license_service, sync_scheduler, dev_suite_config
+    def test_expiration_timeline_counts_only_active_subscriptions_with_an_expiry(
+        self, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
-        customer = customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY, days=20)
-        license_service.issue_license(customer_id=customer.id, license_type=LicenseType.LIFETIME)  # never expires
+        subscription_service.subscriptions = [
+            _make_subscription(id=1, status="active", is_active=True, is_expired=False, days_remaining=20),
+            _make_subscription(id=2, status="suspended", is_active=False, is_expired=False, days_remaining=20),
+        ]
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         snapshot = service.get_snapshot()
 
         total_expiring = sum(bucket.count for bucket in snapshot.expiration_timeline)
@@ -653,12 +678,12 @@ class TestChartWidgets:
         chart.set_data([])
         chart.set_data([CustomerGrowthPoint("2026-01", 1), CustomerGrowthPoint("2026-02", 3)])
 
-    def test_license_distribution_chart_skips_zero_entries(self, qapp) -> None:
-        from developer_suite.services.dashboard_service import LicenseDistributionEntry
-        from developer_suite.ui.dashboard_charts import LicenseDistributionChart
+    def test_subscription_status_chart_skips_zero_entries(self, qapp) -> None:
+        from developer_suite.services.dashboard_service import SubscriptionStatusEntry
+        from developer_suite.ui.dashboard_charts import SubscriptionStatusChart
 
-        chart = LicenseDistributionChart()
-        chart.set_data([LicenseDistributionEntry("Trial", 0), LicenseDistributionEntry("Monthly", 2)])
+        chart = SubscriptionStatusChart()
+        chart.set_data([SubscriptionStatusEntry("نشط", 0), SubscriptionStatusEntry("موقوف", 2)])
         assert chart._series.count() == 1
 
     def test_online_companies_chart_handles_none_values(self, qapp) -> None:
@@ -685,8 +710,18 @@ class TestChartWidgets:
 
 
 class TestQuickActionsPanel:
+    """``QuickActionsPanel`` no longer takes a subscription service at all
+    (see :mod:`developer_suite.ui.dashboard_quick_actions`'s own module
+    docstring): creating/renewing a subscription needs a full form (a
+    date range plus device/user caps) that does not suit a one-click
+    quick action the way "issue license" once did, so the old
+    ``_on_issue_license``/``_on_renew_license`` quick actions were
+    retired outright in favor of the dedicated Subscription Manager
+    page — there is no direct equivalent to keep testing here.
+    """
+
     def test_new_customer_creates_via_service_and_emits_completed(
-        self, qapp, monkeypatch, customer_service, license_service
+        self, qapp, monkeypatch, customer_service
     ) -> None:
         import developer_suite.ui.dashboard_quick_actions as quick_actions_module
 
@@ -708,7 +743,7 @@ class TestQuickActionsPanel:
             },
         )
 
-        panel = quick_actions_module.QuickActionsPanel(customer_service, license_service)
+        panel = quick_actions_module.QuickActionsPanel(customer_service)
         completed = []
         panel.action_completed.connect(lambda: completed.append(True))
 
@@ -717,55 +752,7 @@ class TestQuickActionsPanel:
         assert completed == [True]
         assert len(customer_service.search_customers("New Co")) == 1
 
-    def test_issue_license_with_no_customers_shows_message_and_does_not_crash(
-        self, qapp, monkeypatch, customer_service, license_service
-    ) -> None:
-        import developer_suite.ui.dashboard_quick_actions as quick_actions_module
-
-        shown = []
-        monkeypatch.setattr(
-            quick_actions_module.QMessageBox,
-            "information",
-            staticmethod(lambda *args, **kwargs: shown.append(True)),
-        )
-
-        panel = quick_actions_module.QuickActionsPanel(customer_service, license_service)
-        completed = []
-        panel.action_completed.connect(lambda: completed.append(True))
-
-        panel._on_issue_license()  # no customers registered yet
-
-        assert completed == []
-        assert shown == [True]
-
-    def test_renew_license_via_picker(
-        self, qapp, monkeypatch, customer_service, license_service
-    ) -> None:
-        import developer_suite.ui.dashboard_quick_actions as quick_actions_module
-
-        customer = customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        record = license_service.issue_license(customer_id=customer.id, license_type=LicenseType.MONTHLY)
-        original_key = record.license_key
-
-        monkeypatch.setattr(
-            quick_actions_module.QInputDialog,
-            "getItem",
-            staticmethod(lambda *args, **kwargs: (kwargs.get("items", args[3] if len(args) > 3 else [])[0], True)),
-        )
-
-        panel = quick_actions_module.QuickActionsPanel(customer_service, license_service)
-        completed = []
-        panel.action_completed.connect(lambda: completed.append(True))
-
-        panel._on_renew_license()
-
-        assert completed == [True]
-        renewed = license_service.get_license(record.id)
-        assert renewed.license_key != original_key
-
-    def test_suspend_customer_via_picker(
-        self, qapp, monkeypatch, customer_service, license_service
-    ) -> None:
+    def test_suspend_customer_via_picker(self, qapp, monkeypatch, customer_service) -> None:
         import developer_suite.ui.dashboard_quick_actions as quick_actions_module
         from developer_suite.models.customer import CustomerStatus
 
@@ -777,7 +764,7 @@ class TestQuickActionsPanel:
             staticmethod(lambda *args, **kwargs: (kwargs.get("items", args[3] if len(args) > 3 else [])[0], True)),
         )
 
-        panel = quick_actions_module.QuickActionsPanel(customer_service, license_service)
+        panel = quick_actions_module.QuickActionsPanel(customer_service)
         completed = []
         panel.action_completed.connect(lambda: completed.append(True))
 
@@ -787,7 +774,7 @@ class TestQuickActionsPanel:
         assert customer_service.get_customer(customer.id).status is CustomerStatus.SUSPENDED
 
     def test_suspend_customer_with_no_active_customers_does_not_crash(
-        self, qapp, monkeypatch, customer_service, license_service
+        self, qapp, monkeypatch, customer_service
     ) -> None:
         import developer_suite.ui.dashboard_quick_actions as quick_actions_module
 
@@ -798,7 +785,7 @@ class TestQuickActionsPanel:
             staticmethod(lambda *args, **kwargs: shown.append(True)),
         )
 
-        panel = quick_actions_module.QuickActionsPanel(customer_service, license_service)
+        panel = quick_actions_module.QuickActionsPanel(customer_service)
         completed = []
         panel.action_completed.connect(lambda: completed.append(True))
 
@@ -807,19 +794,20 @@ class TestQuickActionsPanel:
         assert completed == []
         assert shown == [True]
 
-    def test_open_buttons_emit_navigate_requested(self, qapp, customer_service, license_service) -> None:
+    def test_open_buttons_emit_navigate_requested(self, qapp, customer_service) -> None:
         from developer_suite.ui.dashboard_quick_actions import QuickActionsPanel
 
-        panel = QuickActionsPanel(customer_service, license_service)
+        panel = QuickActionsPanel(customer_service)
         navigations = []
         panel.navigate_requested.connect(navigations.append)
 
         buttons = {button.text(): button for button in panel.findChildren(QPushButton)}
+        buttons["فتح إدارة الاشتراكات"].click()
         buttons["فتح المراقبة"].click()
         buttons["فتح الإعداد عن بُعد"].click()
         buttons["فتح إدارة التحديثات"].click()
 
-        assert navigations == ["monitoring", "remote_configuration", "update_manager"]
+        assert navigations == ["subscription_manager", "monitoring", "remote_configuration", "update_manager"]
 
 
 # ---------------------------------------------------------------------------
@@ -829,28 +817,28 @@ class TestQuickActionsPanel:
 
 class TestDashboardPage:
     def test_populates_from_refresh_signal(
-        self, qapp, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, qapp, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         from developer_suite.ui.dashboard_page import DashboardPage
 
         customer_service.create_customer(company_name="Acme Co", contact_name="Jane Doe")
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         refresh_service = DashboardRefreshService(service)
 
-        page = DashboardPage(refresh_service, customer_service, license_service)
+        page = DashboardPage(refresh_service, customer_service)
         page._populate(service.get_snapshot())
 
-        assert page._grid.count() == 19
+        assert page._grid.count() == 18
         assert page.registrations_list.count() == 1
 
     def test_quick_action_navigate_requested_forwards_from_the_page(
-        self, qapp, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, qapp, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         from developer_suite.ui.dashboard_page import DashboardPage
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         refresh_service = DashboardRefreshService(service)
-        page = DashboardPage(refresh_service, customer_service, license_service)
+        page = DashboardPage(refresh_service, customer_service)
 
         navigations = []
         page.navigate_requested.connect(navigations.append)
@@ -859,13 +847,13 @@ class TestDashboardPage:
         assert navigations == ["monitoring"]
 
     def test_refresh_button_calls_refresh_now(
-        self, qapp, monkeypatch, customer_service, license_service, sync_scheduler, dev_suite_config
+        self, qapp, monkeypatch, customer_service, subscription_service, sync_scheduler, dev_suite_config
     ) -> None:
         from developer_suite.ui.dashboard_page import DashboardPage
 
-        service = _build_service(customer_service, license_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
+        service = _build_service(customer_service, subscription_service, sync_scheduler, _FakeAdminClient(), dev_suite_config)
         refresh_service = DashboardRefreshService(service)
-        page = DashboardPage(refresh_service, customer_service, license_service)
+        page = DashboardPage(refresh_service, customer_service)
 
         calls = []
         monkeypatch.setattr(refresh_service, "refresh_now", lambda: calls.append(True))
@@ -886,7 +874,7 @@ class TestNavigationAndModules:
         assert [cls.__name__ for cls in ALL_MODULES] == [
             "DashboardModule",
             "CustomerManagementModule",
-            "LicenseManagerModule",
+            "SubscriptionManagerModule",
             "RemoteConfigurationModule",
             "MonitoringModule",
             "UpdateManagerModule",
@@ -938,7 +926,7 @@ class TestNavigationAndModules:
 
 class TestMainWindowStatusBar:
     def test_status_bar_updates_from_snapshot_ready(
-        self, qapp, dev_suite_database, dev_suite_config, customer_service, license_service
+        self, qapp, dev_suite_database, dev_suite_config, customer_service, subscription_service
     ) -> None:
         from developer_suite.container import ServiceContainer
         from developer_suite.services.dashboard_service import DashboardSnapshot

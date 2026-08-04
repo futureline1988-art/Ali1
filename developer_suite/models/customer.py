@@ -3,9 +3,10 @@
 A row here represents one customer/company the vendor has sold the
 Attendance Client to — the Developer Suite's own record *about* that
 customer, never that customer's operational data (see this package's
-``__init__.py``). A later phase links :class:`~models.license.License`-
-equivalent records (not yet built — Phase 3 is Customer Management
-only) to a ``customer_id`` foreign key here.
+``__init__.py``). A customer's subscription lives on the Attendance
+Server (see :mod:`server.models.subscription`), matched by
+``company_name`` rather than a local foreign key here — see
+:mod:`developer_suite.services.subscription_service`.
 """
 
 from __future__ import annotations

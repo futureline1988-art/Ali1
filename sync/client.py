@@ -13,6 +13,7 @@ running.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
 import httpx
 
@@ -69,6 +70,41 @@ class PullBatch:
     next_cursor: int = 0
 
 
+@dataclass(frozen=True)
+class SubscriptionStatusResult:
+    """This installation's own subscription status, as reported by ``GET /api/v1/subscription/status``.
+
+    ``status`` is one of ``"active"``, ``"suspended"``, ``"expired"``,
+    or ``"not_linked"`` (see
+    :func:`~server.api.routers.subscriptions.get_subscription_status`'s
+    own docstring for what each means) — every other field is ``None``
+    when ``status`` is ``"not_linked"``, since there is then no
+    subscription to describe.
+    """
+
+    status: str
+    company_name: str | None = None
+    subscription_end_date: date | None = None
+    max_devices: int | None = None
+    max_users: int | None = None
+    device_count: int | None = None
+    days_remaining: int | None = None
+
+    @classmethod
+    def from_json(cls, data: dict) -> "SubscriptionStatusResult":
+        """Parse a ``GET /api/v1/subscription/status`` response body."""
+        end_date = data.get("subscription_end_date")
+        return cls(
+            status=data["status"],
+            company_name=data.get("company_name"),
+            subscription_end_date=date.fromisoformat(end_date) if end_date else None,
+            max_devices=data.get("max_devices"),
+            max_users=data.get("max_users"),
+            device_count=data.get("device_count"),
+            days_remaining=data.get("days_remaining"),
+        )
+
+
 def _raise_for_response(response: httpx.Response) -> None:
     """Translate a non-2xx response into the appropriate :class:`SyncClientError`."""
     if response.status_code == 401:
@@ -83,6 +119,7 @@ def register_device(
     *,
     name: str,
     device_type: DeviceType = DeviceType.ATTENDANCE_CLIENT,
+    company_name: str | None = None,
     transport: httpx.BaseTransport | None = None,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> tuple[str, str]:
@@ -98,6 +135,11 @@ def register_device(
         name: A human-readable label for this installation.
         device_type: Which application this device is — always
             :attr:`~sync.protocol.DeviceType.ATTENDANCE_CLIENT` here.
+        company_name: The exact ``Subscription.company_name`` this
+            installation belongs to — required by the server for
+            ``device_type=attendance_client`` (see
+            :mod:`server.api.routers.subscriptions`); ignored
+            otherwise.
         transport: Optional ``httpx`` transport override, for tests.
         timeout: Request timeout in seconds.
 
@@ -108,14 +150,16 @@ def register_device(
     Raises:
         SyncConnectionError: The server could not be reached.
         SyncAuthError: The bearer token was rejected.
-        SyncServerError: Any other non-2xx response.
+        SyncServerError: Any other non-2xx response — including no
+            subscription found for ``company_name`` (422) or that
+            subscription's device cap already reached (403).
     """
     client = httpx.Client(base_url=base_url, transport=transport, timeout=timeout)
     try:
         try:
             response = client.post(
                 "/api/v1/devices/register",
-                json={"name": name, "device_type": device_type.value},
+                json={"name": name, "device_type": device_type.value, "company_name": company_name},
                 headers={"Authorization": f"Bearer {admin_bearer_token}"},
             )
         except httpx.TransportError as exc:
@@ -202,3 +246,18 @@ class SyncClient:
         data = response.json()
         changes = [PulledChange.from_json(item) for item in data["changes"]]
         return PullBatch(changes=changes, next_cursor=data["next_cursor"])
+
+    def get_subscription_status(self) -> SubscriptionStatusResult:
+        """Fetch this installation's own subscription status.
+
+        Raises:
+            SyncConnectionError: The server could not be reached.
+            SyncAuthError: This device's credential was rejected.
+            SyncServerError: Any other non-2xx response.
+        """
+        try:
+            response = self._client.get("/api/v1/subscription/status")
+        except httpx.TransportError as exc:
+            raise SyncConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
+        _raise_for_response(response)
+        return SubscriptionStatusResult.from_json(response.json())

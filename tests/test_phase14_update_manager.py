@@ -761,12 +761,6 @@ class TestZeroImpactOnOtherApplications:
                         assert not alias.name.startswith("developer_suite"), module.__name__
                         assert not alias.name.startswith("server"), module.__name__
 
-    def test_update_signing_key_is_a_different_keypair_from_licensing(self) -> None:
-        from licensing.keys import PUBLIC_KEY_PEM as LICENSE_PUBLIC_KEY_PEM
-        from updates.keys import PUBLIC_KEY_PEM as UPDATE_PUBLIC_KEY_PEM
-
-        assert LICENSE_PUBLIC_KEY_PEM != UPDATE_PUBLIC_KEY_PEM
-
     def test_importing_updates_package_does_not_create_developer_suite_config_singleton(self) -> None:
         import updates.checker  # noqa: F401
 

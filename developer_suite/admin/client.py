@@ -24,7 +24,7 @@ Phase 14's own spec calls out explicitly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 
@@ -277,6 +277,46 @@ class UpdateStatsInfo:
             failed_count=data["failed_count"],
             successful_count=data["successful_count"],
             average_download_progress_percent=data.get("average_download_progress_percent"),
+        )
+
+
+@dataclass(frozen=True)
+class SubscriptionInfo:
+    """One company subscription, as returned by ``/api/v1/subscriptions``.
+
+    The server-managed replacement for the retired file-based license
+    system — see :mod:`server.models.subscription`.
+    """
+
+    id: int
+    company_name: str
+    subscription_start_date: date
+    subscription_end_date: date
+    status: str
+    max_devices: int
+    max_users: int | None
+    is_active: bool
+    is_expired: bool
+    days_remaining: int
+    device_count: int | None
+    created_at: datetime
+
+    @classmethod
+    def from_json(cls, data: dict) -> "SubscriptionInfo":
+        """Parse one subscription response body."""
+        return cls(
+            id=data["id"],
+            company_name=data["company_name"],
+            subscription_start_date=date.fromisoformat(data["subscription_start_date"]),
+            subscription_end_date=date.fromisoformat(data["subscription_end_date"]),
+            status=data["status"],
+            max_devices=data["max_devices"],
+            max_users=data.get("max_users"),
+            is_active=data["is_active"],
+            is_expired=data["is_expired"],
+            days_remaining=data["days_remaining"],
+            device_count=data.get("device_count"),
+            created_at=_parse_datetime(data["created_at"]),
         )
 
 
@@ -595,6 +635,151 @@ class AdminApiClient:
         """
         response = self._authenticated_get("/api/v1/updates/device-status")
         return [UpdateDeviceStatusInfo.from_json(item) for item in response.json()["statuses"]]
+
+    # -- Company subscriptions (server-managed licensing replacement) --------
+
+    def create_subscription(
+        self,
+        *,
+        company_name: str,
+        subscription_start_date: date,
+        subscription_end_date: date,
+        max_devices: int,
+        max_users: int | None = None,
+    ) -> SubscriptionInfo:
+        """Create a new company subscription.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. a
+                duplicate company name, 409).
+        """
+        response = self._authenticated_request(
+            "POST",
+            "/api/v1/subscriptions",
+            json={
+                "company_name": company_name,
+                "subscription_start_date": subscription_start_date.isoformat(),
+                "subscription_end_date": subscription_end_date.isoformat(),
+                "max_devices": max_devices,
+                "max_users": max_users,
+            },
+        )
+        return SubscriptionInfo.from_json(response.json())
+
+    def list_subscriptions(self) -> list[SubscriptionInfo]:
+        """Fetch every subscription, each with its current device count.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response.
+        """
+        response = self._authenticated_get("/api/v1/subscriptions")
+        return [SubscriptionInfo.from_json(item) for item in response.json()["subscriptions"]]
+
+    def get_subscription(self, subscription_id: int) -> SubscriptionInfo:
+        """Fetch a single subscription by id.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        response = self._authenticated_get(f"/api/v1/subscriptions/{subscription_id}")
+        return SubscriptionInfo.from_json(response.json())
+
+    def renew_subscription(self, subscription_id: int, *, new_end_date: date) -> SubscriptionInfo:
+        """Extend a subscription's end date, without changing its suspend/active status.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        response = self._authenticated_request(
+            "PATCH",
+            f"/api/v1/subscriptions/{subscription_id}",
+            json={"subscription_end_date": new_end_date.isoformat()},
+        )
+        return SubscriptionInfo.from_json(response.json())
+
+    def suspend_subscription(self, subscription_id: int) -> SubscriptionInfo:
+        """Suspend a subscription immediately.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        response = self._authenticated_request(
+            "PATCH", f"/api/v1/subscriptions/{subscription_id}", json={"action": "suspend"}
+        )
+        return SubscriptionInfo.from_json(response.json())
+
+    def reactivate_subscription(self, subscription_id: int) -> SubscriptionInfo:
+        """Reactivate a suspended subscription.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        response = self._authenticated_request(
+            "PATCH", f"/api/v1/subscriptions/{subscription_id}", json={"action": "reactivate"}
+        )
+        return SubscriptionInfo.from_json(response.json())
+
+    def update_subscription_limits(
+        self, subscription_id: int, *, max_devices: int | None = None, max_users: int | None = None
+    ) -> SubscriptionInfo:
+        """Change a subscription's device/user caps.
+
+        Args:
+            subscription_id: The subscription to update.
+            max_devices: New device cap, or ``None`` to leave unchanged.
+            max_users: New user cap, or ``None`` to leave unchanged
+                (use :meth:`clear_subscription_max_users` to explicitly
+                set it back to unlimited).
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        body: dict[str, object] = {}
+        if max_devices is not None:
+            body["max_devices"] = max_devices
+        if max_users is not None:
+            body["max_users"] = max_users
+        response = self._authenticated_request(
+            "PATCH", f"/api/v1/subscriptions/{subscription_id}", json=body
+        )
+        return SubscriptionInfo.from_json(response.json())
+
+    def clear_subscription_max_users(self, subscription_id: int) -> SubscriptionInfo:
+        """Explicitly set a subscription's user cap back to unlimited.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        response = self._authenticated_request(
+            "PATCH",
+            f"/api/v1/subscriptions/{subscription_id}",
+            json={"max_users_unlimited": True},
+        )
+        return SubscriptionInfo.from_json(response.json())
 
     def _unauthenticated_client(self) -> httpx.Client:
         return httpx.Client(base_url=self._base_url, transport=self._transport, timeout=self._timeout)

@@ -2,7 +2,7 @@
 
 Talks only to :class:`~developer_suite.services.dashboard_refresh_service.DashboardRefreshService`
 (for data) and :class:`~developer_suite.ui.dashboard_quick_actions.QuickActionsPanel`
-(for actions) — never to any repository, or to the customer/license/
+(for actions) — never to any repository, or to the customer/subscription/
 sync services directly — matching this platform's established
 service/UI boundary
 (:class:`~developer_suite.ui.customer_management_page.CustomerManagementPage`'s
@@ -45,15 +45,14 @@ from developer_suite.services.dashboard_refresh_service import DashboardRefreshS
 from developer_suite.services.dashboard_service import (
     DashboardSnapshot,
     RecentCustomerRegistration,
-    RecentLicenseEvent,
     RecentServerEvent,
+    RecentSubscriptionRegistration,
 )
-from developer_suite.services.license_service import LicenseService
 from developer_suite.ui.dashboard_charts import (
     CustomerGrowthChart,
     ExpirationTimelineChart,
-    LicenseDistributionChart,
     OnlineCompaniesChart,
+    SubscriptionStatusChart,
     SyncActivityChart,
 )
 from developer_suite.ui.dashboard_quick_actions import QuickActionsPanel
@@ -143,11 +142,8 @@ def _customer_registration_lines(entries: list[RecentCustomerRegistration]) -> l
     return [f"{entry.company_name} — {_format_datetime(entry.registered_at)}" for entry in entries]
 
 
-def _license_event_lines(entries: list[RecentLicenseEvent]) -> list[str]:
-    return [
-        f"{entry.customer_name} — {entry.license_type_label} — {_format_datetime(entry.event_at)}"
-        for entry in entries
-    ]
+def _subscription_registration_lines(entries: list[RecentSubscriptionRegistration]) -> list[str]:
+    return [f"{entry.company_name} — {_format_datetime(entry.created_at)}" for entry in entries]
 
 
 def _sync_activity_lines(entries: list[SyncActivityEntry]) -> list[str]:
@@ -197,7 +193,6 @@ class DashboardPage(QWidget):
         self,
         refresh_service: DashboardRefreshService,
         customer_service: CustomerService,
-        license_service: LicenseService,
         *,
         parent: QWidget | None = None,
     ) -> None:
@@ -208,7 +203,6 @@ class DashboardPage(QWidget):
                 this page displays, computed off the UI thread (see
                 this module's own docstring).
             customer_service: Passed through to :class:`~developer_suite.ui.dashboard_quick_actions.QuickActionsPanel`.
-            license_service: Passed through to :class:`~developer_suite.ui.dashboard_quick_actions.QuickActionsPanel`.
             parent: Optional parent widget.
         """
         super().__init__(parent)
@@ -241,7 +235,7 @@ class DashboardPage(QWidget):
         header.addWidget(self.refresh_button)
         layout.addLayout(header)
 
-        self.quick_actions = QuickActionsPanel(customer_service, license_service, parent=content)
+        self.quick_actions = QuickActionsPanel(customer_service, parent=content)
         self.quick_actions.action_completed.connect(self._refresh_service.refresh_now)
         self.quick_actions.navigate_requested.connect(self.navigate_requested)
         layout.addWidget(self.quick_actions)
@@ -254,14 +248,14 @@ class DashboardPage(QWidget):
         self._charts_grid = QGridLayout(charts_box)
         self._charts_grid.setSpacing(10)
         self.customer_growth_chart = CustomerGrowthChart(parent=charts_box)
-        self.license_distribution_chart = LicenseDistributionChart(parent=charts_box)
+        self.subscription_status_chart = SubscriptionStatusChart(parent=charts_box)
         self.online_companies_chart = OnlineCompaniesChart(parent=charts_box)
         self.sync_activity_chart = SyncActivityChart(parent=charts_box)
         self.expiration_timeline_chart = ExpirationTimelineChart(parent=charts_box)
         for index, chart in enumerate(
             (
                 self.customer_growth_chart,
-                self.license_distribution_chart,
+                self.subscription_status_chart,
                 self.online_companies_chart,
                 self.sync_activity_chart,
                 self.expiration_timeline_chart,
@@ -276,10 +270,8 @@ class DashboardPage(QWidget):
         self.activity_tabs = QTabWidget(activity_box)
         self.registrations_list = QListWidget(self.activity_tabs)
         self.activity_tabs.addTab(self.registrations_list, "تسجيلات العملاء")
-        self.issuances_list = QListWidget(self.activity_tabs)
-        self.activity_tabs.addTab(self.issuances_list, "إصدار التراخيص")
-        self.renewals_list = QListWidget(self.activity_tabs)
-        self.activity_tabs.addTab(self.renewals_list, "تجديد التراخيص")
+        self.subscriptions_list = QListWidget(self.activity_tabs)
+        self.activity_tabs.addTab(self.subscriptions_list, "الاشتراكات الجديدة")
         self.synchronization_list = QListWidget(self.activity_tabs)
         self.activity_tabs.addTab(self.synchronization_list, "المزامنة")
         self.server_events_list = QListWidget(self.activity_tabs)
@@ -291,7 +283,7 @@ class DashboardPage(QWidget):
         activity_layout.addWidget(self.activity_tabs)
         layout.addWidget(activity_box)
 
-        self.expirations_box = QGroupBox("تراخيص قاربت على الانتهاء", content)
+        self.expirations_box = QGroupBox("اشتراكات قاربت على الانتهاء", content)
         self.expirations_layout = QVBoxLayout(self.expirations_box)
         layout.addWidget(self.expirations_box)
 
@@ -312,11 +304,10 @@ class DashboardPage(QWidget):
             ("إجمالي العملاء", str(snapshot.total_customers)),
             ("العملاء النشطون", str(snapshot.active_customers)),
             ("العملاء الموقوفون", str(snapshot.suspended_customers)),
-            ("التراخيص التجريبية", str(snapshot.trial_licenses)),
-            ("التراخيص الشهرية", str(snapshot.monthly_licenses)),
-            ("التراخيص السنوية", str(snapshot.yearly_licenses)),
-            ("التراخيص الدائمة", str(snapshot.lifetime_licenses)),
-            ("التراخيص المنتهية", str(snapshot.expired_licenses)),
+            ("إجمالي الاشتراكات", _optional_count(snapshot.total_subscriptions)),
+            ("الاشتراكات النشطة", str(snapshot.active_subscriptions)),
+            ("الاشتراكات الموقوفة", str(snapshot.suspended_subscriptions)),
+            ("الاشتراكات المنتهية", str(snapshot.expired_subscriptions)),
             ("الشركات المتصلة", _optional_count(snapshot.online_companies)),
             ("الشركات غير المتصلة", _optional_count(snapshot.offline_companies)),
             ("الأجهزة المتصلة", _optional_count(snapshot.connected_devices)),
@@ -334,7 +325,7 @@ class DashboardPage(QWidget):
             self._grid.addWidget(_stat_tile(title, value), row, column)
 
         self.customer_growth_chart.set_data(snapshot.customer_growth)
-        self.license_distribution_chart.set_data(snapshot.license_distribution)
+        self.subscription_status_chart.set_data(snapshot.subscription_status_breakdown)
         self.online_companies_chart.set_data(snapshot.online_companies, snapshot.offline_companies)
         self.sync_activity_chart.set_data(snapshot.sync_activity_by_status)
         self.expiration_timeline_chart.set_data(snapshot.expiration_timeline)
@@ -345,14 +336,9 @@ class DashboardPage(QWidget):
             empty_text="لا توجد تسجيلات حديثة.",
         )
         _fill_list(
-            self.issuances_list,
-            _license_event_lines(snapshot.recent_license_issuances),
-            empty_text="لا يوجد إصدار تراخيص حديث.",
-        )
-        _fill_list(
-            self.renewals_list,
-            _license_event_lines(snapshot.recent_license_renewals),
-            empty_text="لا يوجد تجديد تراخيص حديث.",
+            self.subscriptions_list,
+            _subscription_registration_lines(snapshot.recent_subscription_registrations),
+            empty_text="لا توجد اشتراكات جديدة حديثة.",
         )
         _fill_list(
             self.synchronization_list,
@@ -377,11 +363,11 @@ class DashboardPage(QWidget):
 
         _clear_layout(self.expirations_layout)
         if not snapshot.upcoming_expirations:
-            self.expirations_layout.addWidget(QLabel("لا توجد تراخيص قاربت على الانتهاء.", self))
+            self.expirations_layout.addWidget(QLabel("لا توجد اشتراكات قاربت على الانتهاء.", self))
         else:
             for expiration in snapshot.upcoming_expirations:
                 text = (
-                    f"{expiration.customer_name} — {expiration.license_type_label} — "
+                    f"{expiration.company_name} — "
                     f"{expiration.days_remaining} يوم متبقٍ (ينتهي في {expiration.expires_at.isoformat()})"
                 )
                 self.expirations_layout.addWidget(QLabel(text, self))

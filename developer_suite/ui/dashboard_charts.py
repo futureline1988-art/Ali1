@@ -1,5 +1,5 @@
-"""Dashboard chart widgets: customer growth, license distribution, online
-companies, synchronization activity, and license expiration timeline.
+"""Dashboard chart widgets: customer growth, subscription status, online
+companies, synchronization activity, and subscription expiration timeline.
 
 Every widget here only draws whatever list of already-aggregated
 values :class:`~developer_suite.services.dashboard_service.DashboardSnapshot`
@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QWidget
 from developer_suite.services.dashboard_service import (
     CustomerGrowthPoint,
     ExpirationTimelineBucket,
-    LicenseDistributionEntry,
+    SubscriptionStatusEntry,
     SyncActivityBucket,
 )
 
@@ -86,12 +86,12 @@ class CustomerGrowthChart(QChartView):
         self._axis_y.setRange(0, max_value + 1)
 
 
-class LicenseDistributionChart(QChartView):
-    """Pie chart of issued licenses per plan."""
+class SubscriptionStatusChart(QChartView):
+    """Pie chart of subscriptions per effective status (active/suspended/expired)."""
 
     def __init__(self, *, parent: QWidget | None = None) -> None:
         chart = _base_chart()
-        chart.setTitle("توزيع التراخيص")
+        chart.setTitle("حالة الاشتراكات")
         chart.legend().setVisible(True)
         chart.legend().setAlignment(Qt.AlignBottom)
         super().__init__(chart, parent)
@@ -101,12 +101,12 @@ class LicenseDistributionChart(QChartView):
         self._series = QPieSeries()
         chart.addSeries(self._series)
 
-    def set_data(self, entries: list[LicenseDistributionEntry]) -> None:
-        """Redraw the slices from :attr:`~developer_suite.services.dashboard_service.DashboardSnapshot.license_distribution`."""
+    def set_data(self, entries: list[SubscriptionStatusEntry]) -> None:
+        """Redraw the slices from :attr:`~developer_suite.services.dashboard_service.DashboardSnapshot.subscription_status_breakdown`."""
         self._series.clear()
         for entry in entries:
             if entry.count > 0:
-                self._series.append(f"{entry.license_type_label} ({entry.count})", entry.count)
+                self._series.append(f"{entry.status_label} ({entry.count})", entry.count)
 
 
 class OnlineCompaniesChart(QChartView):
@@ -188,17 +188,17 @@ class SyncActivityChart(QChartView):
 
 
 class ExpirationTimelineChart(QChartView):
-    """Bar chart of active-license expirations, by upcoming month."""
+    """Bar chart of active-subscription expirations, by upcoming month."""
 
     def __init__(self, *, parent: QWidget | None = None) -> None:
         chart = _base_chart()
-        chart.setTitle("الجدول الزمني لانتهاء التراخيص")
+        chart.setTitle("الجدول الزمني لانتهاء الاشتراكات")
         chart.legend().setVisible(False)
         super().__init__(chart, parent)
         self.setRenderHint(QPainter.Antialiasing)
         self.setMinimumHeight(_MIN_CHART_HEIGHT)
 
-        self._bar_set = QBarSet("تراخيص منتهية")
+        self._bar_set = QBarSet("اشتراكات منتهية")
         self._series = QBarSeries()
         self._series.append(self._bar_set)
         chart.addSeries(self._series)

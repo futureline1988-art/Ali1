@@ -22,7 +22,7 @@ from developer_suite.services.customer_service import (
     CustomerService,
     CustomerServiceError,
 )
-from developer_suite.services.license_service import LicenseService
+from developer_suite.services.subscription_service import SubscriptionService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.ui.customer_details_dialog import CustomerDetailsDialog
 from developer_suite.ui.customer_form_dialog import CustomerFormDialog
@@ -45,7 +45,7 @@ class CustomerManagementPage(QWidget):
     def __init__(
         self,
         customer_service: CustomerService,
-        license_service: LicenseService,
+        subscription_service: SubscriptionService,
         sync_coordinator: SyncCoordinator,
         *,
         parent: QWidget | None = None,
@@ -55,9 +55,9 @@ class CustomerManagementPage(QWidget):
         Args:
             customer_service: The service this page performs every
                 operation through.
-            license_service: Passed through to
+            subscription_service: Passed through to
                 :class:`~developer_suite.ui.customer_details_dialog.CustomerDetailsDialog`
-                for its license-history tab.
+                for its subscription tab.
             sync_coordinator: Passed through to
                 :class:`~developer_suite.ui.customer_details_dialog.CustomerDetailsDialog`
                 for its synchronization-status field.
@@ -65,7 +65,7 @@ class CustomerManagementPage(QWidget):
         """
         super().__init__(parent)
         self._service = customer_service
-        self._license_service = license_service
+        self._subscription_service = subscription_service
         self._sync_coordinator = sync_coordinator
         self._customers: list[Customer] = []
 
@@ -217,5 +217,5 @@ class CustomerManagementPage(QWidget):
         if customer is None:
             QMessageBox.information(self, "التفاصيل", "الرجاء اختيار عميل أولاً.")
             return
-        dialog = CustomerDetailsDialog(customer, self._license_service, self._sync_coordinator, parent=self)
+        dialog = CustomerDetailsDialog(customer, self._subscription_service, self._sync_coordinator, parent=self)
         dialog.exec()

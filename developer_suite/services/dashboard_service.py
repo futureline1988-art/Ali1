@@ -3,12 +3,10 @@
 No business logic lives here that does not already exist elsewhere:
 every count is a plain aggregation over
 :meth:`~developer_suite.services.customer_service.CustomerService.search_customers`/
-:meth:`~developer_suite.services.license_service.LicenseService.search_licenses`
-results (using those models' own
-:attr:`~developer_suite.models.license.IssuedLicense.is_active`/
-:attr:`~developer_suite.models.license.IssuedLicense.is_expired`/
-:attr:`~developer_suite.models.license.IssuedLicense.days_remaining`
-properties rather than recomputing "is this license active" here),
+:class:`~developer_suite.services.subscription_service.SubscriptionService`
+results (using :class:`~developer_suite.admin.client.SubscriptionInfo`'s
+own ``is_active``/``is_expired``/``days_remaining`` fields rather than
+recomputing "is this subscription active" here),
 :class:`~developer_suite.sync.status.SyncStatus` is read verbatim from
 :class:`~developer_suite.sync.scheduler.SyncSchedulerService`, and
 remote server/device/audit data is read verbatim from
@@ -17,23 +15,23 @@ only job is presentation-shaping: turning several services' outputs
 into one :class:`DashboardSnapshot` a UI page can render without
 itself importing five different services.
 
-Phase 12 adds two presentation-only derivations, neither of which is a
-new business rule:
+Company subscriptions (the server-managed replacement for the retired
+file-based license system) have no "plan/type" dimension the way
+licenses did (Trial/Monthly/Yearly/Lifetime) -- just a date range, a
+vendor-controlled Active/Suspended status, and device/user caps. The
+former license-distribution-by-plan chart is replaced by a simpler
+active/suspended/expired status breakdown
+(:attr:`DashboardSnapshot.subscription_status_breakdown`), and the
+former issuance-vs-renewal split (:func:`_split_issuances_and_renewals`,
+now removed) is replaced by a plain "most recently created" list
+(:attr:`DashboardSnapshot.recent_subscription_registrations`) — a
+subscription's :class:`~developer_suite.admin.client.SubscriptionInfo`
+carries only ``created_at``, not the ``created_at``/``updated_at`` pair
+the old, now-retired file-based license record used to distinguish a
+renewal from a first issuance.
 
-* **Issuance vs. renewal.** :class:`~developer_suite.models.license.IssuedLicense`
-  has no ``is_renewal`` flag (adding one would be new persisted
-  business state, which Phase 12 explicitly must not introduce — "do
-  not duplicate models"). Instead, :func:`_split_issuances_and_renewals`
-  reads the two timestamps every model already carries
-  (:class:`~models.base.TimestampMixin`'s ``created_at``/``updated_at``,
-  the latter bumped by the ORM "on every flush that changes the row"):
-  a license whose ``updated_at`` is materially later than its
-  ``created_at`` has been renewed at least once since issuance
-  (:meth:`~developer_suite.services.license_service.LicenseService.renew_license`
-  mutates the same row rather than creating a new one); otherwise it is
-  still showing its original issuance.
 * **Chart aggregation.** :attr:`DashboardSnapshot.customer_growth`,
-  :attr:`DashboardSnapshot.license_distribution`,
+  :attr:`DashboardSnapshot.subscription_status_breakdown`,
   :attr:`DashboardSnapshot.sync_activity_by_status`, and
   :attr:`DashboardSnapshot.expiration_timeline` are all bucketed here
   from data the existing services already return — grouping/counting,
@@ -46,24 +44,22 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
-from developer_suite.admin.client import AdminApiClient, AdminApiError, AuditLogEntry, SyncActivityEntry
+from developer_suite.admin.client import (
+    AdminApiClient,
+    AdminApiError,
+    AuditLogEntry,
+    SubscriptionInfo,
+    SyncActivityEntry,
+)
 from developer_suite.config import DeveloperSuiteConfig
 from developer_suite.models.customer import Customer, CustomerStatus
-from developer_suite.models.license import IssuedLicense
 from developer_suite.services.customer_service import CustomerService
-from developer_suite.services.license_service import LicenseService
+from developer_suite.services.subscription_service import SubscriptionService, SubscriptionServiceError
 from developer_suite.sync.scheduler import SyncSchedulerService
-from licensing.enums import LicenseType
 
 _DEFAULT_UPCOMING_EXPIRATION_WINDOW_DAYS = 30
 _DEFAULT_RECENT_ITEMS_LIMIT = 8
 _DEFAULT_CHART_MONTHS_WINDOW = 6
-#: How much later ``updated_at`` must be than ``created_at`` before a
-#: license is considered renewed rather than merely just-created (see
-#: this module's own docstring) — comfortably larger than the
-#: sub-second gap between the two ``TimestampMixin`` defaults firing on
-#: the same insert.
-_RENEWAL_DETECTION_THRESHOLD = timedelta(seconds=5)
 
 #: Authentication-lifecycle actions shown in the narrower "recent
 #: authentication events" panel; the full action set (including
@@ -71,13 +67,14 @@ _RENEWAL_DETECTION_THRESHOLD = timedelta(seconds=5)
 #: :attr:`DashboardSnapshot.recent_audit_log`.
 _AUTHENTICATION_EVENT_ACTIONS = frozenset({"login", "login_failed", "logout", "account_locked"})
 
+_SUBSCRIPTION_STATUS_LABELS_AR = {"active": "نشط", "suspended": "موقوف", "expired": "منتهي"}
+
 
 @dataclass(frozen=True)
 class UpcomingExpiration:
-    """One active license expiring soon, for the dashboard's expiration list."""
+    """One active subscription expiring soon, for the dashboard's expiration list."""
 
-    customer_name: str
-    license_type_label: str
+    company_name: str
     expires_at: date
     days_remaining: int
 
@@ -91,12 +88,11 @@ class RecentCustomerRegistration:
 
 
 @dataclass(frozen=True)
-class RecentLicenseEvent:
-    """One recent license issuance or renewal, for their respective panels."""
+class RecentSubscriptionRegistration:
+    """One recently created subscription, for the "recent subscriptions" panel."""
 
-    customer_name: str
-    license_type_label: str
-    event_at: datetime
+    company_name: str
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -118,10 +114,10 @@ class CustomerGrowthPoint:
 
 
 @dataclass(frozen=True)
-class LicenseDistributionEntry:
-    """How many issued licenses fall under one plan."""
+class SubscriptionStatusEntry:
+    """How many subscriptions fall under one effective status (active/suspended/expired)."""
 
-    license_type_label: str
+    status_label: str
     count: int
 
 
@@ -135,7 +131,7 @@ class SyncActivityBucket:
 
 @dataclass(frozen=True)
 class ExpirationTimelineBucket:
-    """How many active licenses expire in one calendar month."""
+    """How many active subscriptions expire in one calendar month."""
 
     month: str
     """``"YYYY-MM"``, chronological order."""
@@ -162,14 +158,20 @@ class DashboardSnapshot:
             Attendance Client installations *and* Developer Suite
             installations) currently online; ``None`` under the same
             conditions as :attr:`online_companies`.
-        active_licenses: Licenses currently in good standing (see
-            :attr:`~developer_suite.models.license.IssuedLicense.is_active`).
-        expired_licenses: Licenses past their expiration date.
-        trial_licenses: Licenses of :attr:`~licensing.enums.LicenseType.TRIAL`.
-        monthly_licenses: Licenses of :attr:`~licensing.enums.LicenseType.MONTHLY`.
-        yearly_licenses: Licenses of :attr:`~licensing.enums.LicenseType.YEARLY`.
-        lifetime_licenses: Licenses of :attr:`~licensing.enums.LicenseType.LIFETIME`.
-        upcoming_expirations: Active licenses expiring within the
+        total_subscriptions: Every subscription on the Attendance
+            Server; ``None`` if this could not be determined (no admin
+            token configured, or the server is unreachable).
+        active_subscriptions: Subscriptions currently in good standing
+            (see :attr:`~developer_suite.admin.client.SubscriptionInfo.is_active`).
+        suspended_subscriptions: Subscriptions the vendor has
+            explicitly suspended (and not yet expired — an expired
+            *and* suspended subscription counts under
+            :attr:`expired_subscriptions` only, matching
+            :attr:`~server.models.subscription.Subscription.is_expired`
+            taking priority in the server's own effective-status
+            computation).
+        expired_subscriptions: Subscriptions past their end date.
+        upcoming_expirations: Active subscriptions expiring within the
             configured window, soonest first.
         last_sync_at: This installation's last successful synchronization.
         pending_sync_count: Local changes still queued to push.
@@ -185,11 +187,8 @@ class DashboardSnapshot:
             version.
         recent_customer_registrations: The most recently registered
             customers, most recent first.
-        recent_license_issuances: The most recently *first-issued*
-            licenses (see this module's docstring on the
-            issuance/renewal split), most recent first.
-        recent_license_renewals: The most recently *renewed* licenses,
-            most recent first.
+        recent_subscription_registrations: The most recently created
+            subscriptions, most recent first.
         recent_synchronization: The most recent entries from the
             Attendance Server's own change ledger, across every
             installation — reused verbatim from
@@ -208,12 +207,13 @@ class DashboardSnapshot:
             :meth:`~developer_suite.admin.client.AdminApiClient.list_audit_log`.
         customer_growth: Cumulative customer count by month, oldest
             first, for the customer-growth chart.
-        license_distribution: Issued-license count per plan, for the
-            license-distribution chart.
+        subscription_status_breakdown: Subscription count per effective
+            status (active/suspended/expired), for the
+            subscription-status chart.
         sync_activity_by_status: Recent change-record count per
             outcome status, for the synchronization-activity chart.
-        expiration_timeline: Active-license expiration count per
-            month, for the license-expiration-timeline chart.
+        expiration_timeline: Active-subscription expiration count per
+            month, for the subscription-expiration-timeline chart.
         latest_deployed_version: The highest software update version
             with at least one company reporting a successful install
             (Phase 14 — see
@@ -242,12 +242,10 @@ class DashboardSnapshot:
     online_companies: int | None = None
     offline_companies: int | None = None
     connected_devices: int | None = None
-    active_licenses: int = 0
-    expired_licenses: int = 0
-    trial_licenses: int = 0
-    monthly_licenses: int = 0
-    yearly_licenses: int = 0
-    lifetime_licenses: int = 0
+    total_subscriptions: int | None = None
+    active_subscriptions: int = 0
+    suspended_subscriptions: int = 0
+    expired_subscriptions: int = 0
     upcoming_expirations: list[UpcomingExpiration] = field(default_factory=list)
     last_sync_at: datetime | None = None
     pending_sync_count: int = 0
@@ -256,14 +254,13 @@ class DashboardSnapshot:
     database_connected: bool | None = None
     platform_version: str = ""
     recent_customer_registrations: list[RecentCustomerRegistration] = field(default_factory=list)
-    recent_license_issuances: list[RecentLicenseEvent] = field(default_factory=list)
-    recent_license_renewals: list[RecentLicenseEvent] = field(default_factory=list)
+    recent_subscription_registrations: list[RecentSubscriptionRegistration] = field(default_factory=list)
     recent_synchronization: list[SyncActivityEntry] = field(default_factory=list)
     recent_server_events: list[RecentServerEvent] = field(default_factory=list)
     recent_authentication_events: list[AuditLogEntry] = field(default_factory=list)
     recent_audit_log: list[AuditLogEntry] = field(default_factory=list)
     customer_growth: list[CustomerGrowthPoint] = field(default_factory=list)
-    license_distribution: list[LicenseDistributionEntry] = field(default_factory=list)
+    subscription_status_breakdown: list[SubscriptionStatusEntry] = field(default_factory=list)
     sync_activity_by_status: list[SyncActivityBucket] = field(default_factory=list)
     expiration_timeline: list[ExpirationTimelineBucket] = field(default_factory=list)
     latest_deployed_version: str | None = None
@@ -280,7 +277,7 @@ class DashboardService:
     def __init__(
         self,
         customer_service: CustomerService,
-        license_service: LicenseService,
+        subscription_service: SubscriptionService,
         sync_scheduler: SyncSchedulerService,
         admin_client: AdminApiClient,
         config: DeveloperSuiteConfig,
@@ -294,8 +291,8 @@ class DashboardService:
         Args:
             customer_service: Source of customer counts and recent
                 registrations.
-            license_service: Source of license counts, expirations,
-                and recent issuance/renewal.
+            subscription_service: Source of subscription counts,
+                expirations, and recent creations.
             sync_scheduler: Source of this installation's own sync
                 status.
             admin_client: Source of remote device/server/audit data —
@@ -312,7 +309,7 @@ class DashboardService:
                 :attr:`DashboardSnapshot.expiration_timeline` cover.
         """
         self._customer_service = customer_service
-        self._license_service = license_service
+        self._subscription_service = subscription_service
         self._sync_scheduler = sync_scheduler
         self._admin_client = admin_client
         self._config = config
@@ -331,12 +328,18 @@ class DashboardService:
         total_customers = len(customers)
         active_customers = sum(1 for customer in customers if customer.status is CustomerStatus.ACTIVE)
 
-        licenses = self._license_service.search_licenses("")
-        active_licenses = sum(1 for record in licenses if record.is_active)
-        expired_licenses = sum(1 for record in licenses if record.is_expired)
-        license_counts = Counter(record.license_type for record in licenses)
-        upcoming_expirations = _upcoming_expirations(licenses, window_days=self._upcoming_window_days)
-        issuances, renewals = _split_issuances_and_renewals(licenses, limit=self._recent_items_limit)
+        subscriptions = self._subscriptions()
+        total_subscriptions = len(subscriptions) if subscriptions is not None else None
+        subscriptions = subscriptions or []
+        active_subscriptions = sum(1 for record in subscriptions if record.is_active)
+        expired_subscriptions = sum(1 for record in subscriptions if record.is_expired)
+        suspended_subscriptions = sum(
+            1 for record in subscriptions if record.status == "suspended" and not record.is_expired
+        )
+        upcoming_expirations = _upcoming_expirations(subscriptions, window_days=self._upcoming_window_days)
+        recent_subscription_registrations = _recent_subscription_registrations(
+            subscriptions, limit=self._recent_items_limit
+        )
 
         sync_status = self._sync_scheduler.get_status()
 
@@ -354,12 +357,10 @@ class DashboardService:
             online_companies=online_companies,
             offline_companies=offline_companies,
             connected_devices=connected_devices,
-            active_licenses=active_licenses,
-            expired_licenses=expired_licenses,
-            trial_licenses=license_counts.get(LicenseType.TRIAL, 0),
-            monthly_licenses=license_counts.get(LicenseType.MONTHLY, 0),
-            yearly_licenses=license_counts.get(LicenseType.YEARLY, 0),
-            lifetime_licenses=license_counts.get(LicenseType.LIFETIME, 0),
+            total_subscriptions=total_subscriptions,
+            active_subscriptions=active_subscriptions,
+            suspended_subscriptions=suspended_subscriptions,
+            expired_subscriptions=expired_subscriptions,
             upcoming_expirations=upcoming_expirations,
             last_sync_at=sync_status.last_success_at,
             pending_sync_count=sync_status.pending_changes_count,
@@ -370,16 +371,17 @@ class DashboardService:
             recent_customer_registrations=_recent_customer_registrations(
                 customers, limit=self._recent_items_limit
             ),
-            recent_license_issuances=issuances,
-            recent_license_renewals=renewals,
+            recent_subscription_registrations=recent_subscription_registrations,
             recent_synchronization=recent_synchronization,
             recent_server_events=recent_server_events,
             recent_authentication_events=recent_authentication_events,
             recent_audit_log=recent_audit_log,
             customer_growth=_customer_growth(customers, months_window=self._chart_months_window),
-            license_distribution=_license_distribution(license_counts),
+            subscription_status_breakdown=_subscription_status_breakdown(
+                active_subscriptions, suspended_subscriptions, expired_subscriptions
+            ),
             sync_activity_by_status=_sync_activity_by_status(recent_synchronization),
-            expiration_timeline=_expiration_timeline(licenses, months_window=self._chart_months_window),
+            expiration_timeline=_expiration_timeline(subscriptions, months_window=self._chart_months_window),
             latest_deployed_version=update_stats.latest_deployed_version if update_stats else None,
             companies_per_version=update_stats.companies_per_version if update_stats else {},
             pending_updates_count=update_stats.pending_count if update_stats else 0,
@@ -389,6 +391,12 @@ class DashboardService:
                 update_stats.average_download_progress_percent if update_stats else None
             ),
         )
+
+    def _subscriptions(self) -> list[SubscriptionInfo] | None:
+        try:
+            return self._subscription_service.list_subscriptions()
+        except SubscriptionServiceError:
+            return None
 
     def _count_devices_by_connectivity(self) -> tuple[int | None, int | None, int | None]:
         try:
@@ -449,20 +457,17 @@ class DashboardService:
 
 
 def _upcoming_expirations(
-    licenses: list[IssuedLicense], *, window_days: int
+    subscriptions: list[SubscriptionInfo], *, window_days: int
 ) -> list[UpcomingExpiration]:
-    """Active licenses expiring within ``window_days``, soonest first."""
+    """Active subscriptions expiring within ``window_days``, soonest first."""
     entries = [
         UpcomingExpiration(
-            customer_name=license_record.customer.company_name,
-            license_type_label=license_record.license_type.label_ar,
-            expires_at=license_record.expires_at,
-            days_remaining=license_record.days_remaining,
+            company_name=record.company_name,
+            expires_at=record.subscription_end_date,
+            days_remaining=record.days_remaining,
         )
-        for license_record in licenses
-        if license_record.is_active
-        and license_record.days_remaining is not None
-        and 0 <= license_record.days_remaining <= window_days
+        for record in subscriptions
+        if record.is_active and 0 <= record.days_remaining <= window_days
     ]
     entries.sort(key=lambda entry: entry.days_remaining)
     return entries
@@ -479,28 +484,15 @@ def _recent_customer_registrations(
     ]
 
 
-def _split_issuances_and_renewals(
-    licenses: list[IssuedLicense], *, limit: int
-) -> tuple[list[RecentLicenseEvent], list[RecentLicenseEvent]]:
-    """Split ``licenses`` into recent first-issuances and recent renewals.
-
-    See this module's own docstring for how a renewal is detected from
-    ``created_at``/``updated_at`` alone, with no new persisted field.
-    """
-    issuances: list[RecentLicenseEvent] = []
-    renewals: list[RecentLicenseEvent] = []
-    for record in licenses:
-        was_renewed = (record.updated_at - record.created_at) > _RENEWAL_DETECTION_THRESHOLD
-        event = RecentLicenseEvent(
-            customer_name=record.customer.company_name,
-            license_type_label=record.license_type.label_ar,
-            event_at=record.updated_at if was_renewed else record.created_at,
-        )
-        (renewals if was_renewed else issuances).append(event)
-
-    issuances.sort(key=lambda event: event.event_at, reverse=True)
-    renewals.sort(key=lambda event: event.event_at, reverse=True)
-    return issuances[:limit], renewals[:limit]
+def _recent_subscription_registrations(
+    subscriptions: list[SubscriptionInfo], *, limit: int
+) -> list[RecentSubscriptionRegistration]:
+    """The most recently created subscriptions, most recent first."""
+    ordered = sorted(subscriptions, key=lambda record: record.created_at, reverse=True)
+    return [
+        RecentSubscriptionRegistration(company_name=record.company_name, created_at=record.created_at)
+        for record in ordered[:limit]
+    ]
 
 
 def _month_key(value: date | datetime) -> str:
@@ -536,18 +528,14 @@ def _customer_growth(customers: list[Customer], *, months_window: int) -> list[C
     return points
 
 
-def _license_distribution(license_counts: "Counter[LicenseType]") -> list[LicenseDistributionEntry]:
-    """One entry per :class:`~licensing.enums.LicenseType`, in a stable, fixed order."""
+def _subscription_status_breakdown(
+    active: int, suspended: int, expired: int
+) -> list[SubscriptionStatusEntry]:
+    """One entry per effective subscription status, in a stable, fixed order."""
+    counts = {"active": active, "suspended": suspended, "expired": expired}
     return [
-        LicenseDistributionEntry(
-            license_type_label=license_type.label_ar, count=license_counts.get(license_type, 0)
-        )
-        for license_type in (
-            LicenseType.TRIAL,
-            LicenseType.MONTHLY,
-            LicenseType.YEARLY,
-            LicenseType.LIFETIME,
-        )
+        SubscriptionStatusEntry(status_label=_SUBSCRIPTION_STATUS_LABELS_AR[status], count=counts[status])
+        for status in ("active", "suspended", "expired")
     ]
 
 
@@ -558,9 +546,9 @@ def _sync_activity_by_status(entries: list[SyncActivityEntry]) -> list[SyncActiv
 
 
 def _expiration_timeline(
-    licenses: list[IssuedLicense], *, months_window: int
+    subscriptions: list[SubscriptionInfo], *, months_window: int
 ) -> list[ExpirationTimelineBucket]:
-    """Active-license expiration count per month, covering the coming ``months_window`` months."""
+    """Active-subscription expiration count per month, covering the coming ``months_window`` months."""
     month_keys = _trailing_month_keys(months_window=months_window)
     # Reuse the same window width, but looking forward from this month
     # rather than back — expirations are a future-facing timeline.
@@ -575,9 +563,7 @@ def _expiration_timeline(
             year += 1
 
     expirations_by_month = Counter(
-        _month_key(record.expires_at)
-        for record in licenses
-        if record.is_active and record.expires_at is not None
+        _month_key(record.subscription_end_date) for record in subscriptions if record.is_active
     )
     return [
         ExpirationTimelineBucket(month=month, count=expirations_by_month.get(month, 0))

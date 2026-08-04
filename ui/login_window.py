@@ -266,8 +266,8 @@ class LoginWindow(QWidget):
         which must not be mistaken for the user closing it via the
         window manager - the ``_did_succeed`` flag distinguishes the
         two, exactly like
-        :class:`~ui.license_window.LicenseActivationWindow`'s
-        ``_did_activate`` does for the same reason.
+        :class:`~ui.subscription_blocked_window.SubscriptionBlockedWindow`'s
+        ``_did_pass`` does for the same reason.
         """
         super().closeEvent(event)
         if not self._did_succeed:

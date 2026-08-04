@@ -15,6 +15,13 @@ tracks: real person admin accounts and their login sessions
 — unrelated to :class:`~server.models.device.SyncDevice`, which
 represents an *installation*'s non-interactive sync credential, not a
 person.
+
+:mod:`server.models.subscription` adds :class:`~server.models.subscription.Subscription`
+— company subscriptions, the server-managed replacement for the
+retired file-based license-key system. See that module's own docstring
+for why this is the one place :class:`~server.models.device.SyncDevice`
+now carries a company link, where every earlier phase deliberately
+avoided one.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ from server.models.admin_audit_log import AdminAuditAction, AdminAuditLog
 from server.models.admin_password_reset import AdminPasswordResetToken
 from server.models.admin_session import AdminSession
 from server.models.device import SyncDevice, DeviceType
+from server.models.subscription import Subscription, SubscriptionStatus
 from server.models.sync import ChangeRecord, ChangeStatus, EntityVersion, SyncOperation, SyncSequence
 from server.models.update import (
     DeviceUpdateStatus,
@@ -42,6 +50,8 @@ from server.models.update import (
 __all__ = [
     "SyncDevice",
     "DeviceType",
+    "Subscription",
+    "SubscriptionStatus",
     "ChangeRecord",
     "ChangeStatus",
     "EntityVersion",

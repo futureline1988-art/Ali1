@@ -6,7 +6,7 @@ shape :mod:`utils.csv_export`/:mod:`utils.excel`/:mod:`utils.pdf`
 already share, see :mod:`services.report_service`'s own docstring for
 the Attendance Client's identical convention) purely from data
 :class:`~developer_suite.services.customer_service.CustomerService`,
-:class:`~developer_suite.services.license_service.LicenseService`,
+:class:`~developer_suite.services.subscription_service.SubscriptionService`,
 :class:`~developer_suite.services.configuration_publish_service.ConfigurationPublishService`,
 :class:`~developer_suite.services.dashboard_service.DashboardService`,
 and :class:`~developer_suite.admin.client.AdminApiClient` already
@@ -22,9 +22,11 @@ audit log, device, and update deployment reports) routes through
 :class:`~developer_suite.admin.client.AdminApiError` into
 :class:`ReportingServiceError` — the same one-exception-type-for-the
 -UI wrapper :meth:`~developer_suite.services.update_manager_service.UpdateManagerService._call`
-already established in Phase 14. The customer, license, and
+already established in Phase 14. The customer and
 configuration-publication-history reports never raise it: they only
-read this installation's own local database.
+read this installation's own local database (the subscription report
+is the exception among the "local" reports — it also reaches the
+Attendance Server, via :class:`~developer_suite.services.subscription_service.SubscriptionService`).
 """
 
 from __future__ import annotations
@@ -36,11 +38,10 @@ from typing import Any, Callable, TypeVar
 
 from developer_suite.admin.client import AdminApiClient, AdminApiError, DeviceInfo, UpdateVersionInfo
 from developer_suite.models.customer import CustomerStatus
-from developer_suite.models.license import IssuedLicenseStatus
 from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_service import DashboardService, DashboardSnapshot
-from developer_suite.services.license_service import LicenseService
+from developer_suite.services.subscription_service import SubscriptionService, SubscriptionServiceError
 
 _T = TypeVar("_T")
 
@@ -100,7 +101,7 @@ class ReportCategory(str, Enum):
 
     EXECUTIVE_DASHBOARD = "executive_dashboard"
     CUSTOMERS = "customers"
-    LICENSES = "licenses"
+    SUBSCRIPTIONS = "subscriptions"
     SYNCHRONIZATION = "synchronization"
     UPDATE_DEPLOYMENT = "update_deployment"
     AUDIT_LOG = "audit_log"
@@ -112,7 +113,7 @@ class ReportCategory(str, Enum):
 REPORT_CATEGORY_LABELS_AR: dict[ReportCategory, str] = {
     ReportCategory.EXECUTIVE_DASHBOARD: "التقرير التنفيذي",
     ReportCategory.CUSTOMERS: "تقرير العملاء",
-    ReportCategory.LICENSES: "تقرير التراخيص",
+    ReportCategory.SUBSCRIPTIONS: "تقرير الاشتراكات",
     ReportCategory.SYNCHRONIZATION: "تقرير المزامنة",
     ReportCategory.UPDATE_DEPLOYMENT: "تقرير نشر التحديثات",
     ReportCategory.AUDIT_LOG: "تقرير سجل التدقيق",
@@ -126,7 +127,7 @@ REPORT_CATEGORY_LABELS_AR: dict[ReportCategory, str] = {
 _REPORT_DATE_FIELDS: dict[ReportCategory, str | None] = {
     ReportCategory.EXECUTIVE_DASHBOARD: None,
     ReportCategory.CUSTOMERS: "created_at",
-    ReportCategory.LICENSES: "issued_at",
+    ReportCategory.SUBSCRIPTIONS: "created_at",
     ReportCategory.SYNCHRONIZATION: "created_at",
     ReportCategory.UPDATE_DEPLOYMENT: "reported_at",
     ReportCategory.AUDIT_LOG: "created_at",
@@ -325,7 +326,7 @@ class ReportingService:
     def __init__(
         self,
         customer_service: CustomerService,
-        license_service: LicenseService,
+        subscription_service: SubscriptionService,
         configuration_publish_service: ConfigurationPublishService,
         dashboard_service: DashboardService,
         admin_client: AdminApiClient,
@@ -334,7 +335,7 @@ class ReportingService:
 
         Args:
             customer_service: Source of the customer report.
-            license_service: Source of the license report.
+            subscription_service: Source of the subscription report.
             configuration_publish_service: Source of the configuration
                 publication history report.
             dashboard_service: Source of the executive dashboard
@@ -344,7 +345,7 @@ class ReportingService:
                 device, and update deployment reports.
         """
         self._customer_service = customer_service
-        self._license_service = license_service
+        self._subscription_service = subscription_service
         self._configuration_publish_service = configuration_publish_service
         self._dashboard_service = dashboard_service
         self._admin_client = admin_client
@@ -382,7 +383,7 @@ class ReportingService:
         builder = {
             ReportCategory.EXECUTIVE_DASHBOARD: self.build_executive_dashboard_report,
             ReportCategory.CUSTOMERS: self.build_customer_report,
-            ReportCategory.LICENSES: self.build_license_report,
+            ReportCategory.SUBSCRIPTIONS: self.build_subscription_report,
             ReportCategory.SYNCHRONIZATION: self.build_synchronization_report,
             ReportCategory.UPDATE_DEPLOYMENT: self.build_update_deployment_report,
             ReportCategory.AUDIT_LOG: self.build_audit_log_report,
@@ -431,32 +432,44 @@ class ReportingService:
         ]
         return self._finish(ReportCategory.CUSTOMERS, rows, columns, filters)
 
-    def build_license_report(self, filters: ReportFilters | None = None) -> ReportResult:
-        """The License report: every issued license, with its current standing."""
+    def build_subscription_report(self, filters: ReportFilters | None = None) -> ReportResult:
+        """The Subscription report: every company subscription, with its current standing.
+
+        Raises:
+            ReportingServiceError: The Attendance Server could not be
+                reached (subscriptions are stored there, not locally —
+                see :mod:`server.models.subscription`).
+        """
         filters = filters or ReportFilters()
-        licenses = self._license_service.search_licenses("")
+        try:
+            subscriptions = self._subscription_service.list_subscriptions()
+        except SubscriptionServiceError as exc:
+            raise ReportingServiceError(str(exc)) from exc
         rows = [
             {
-                "company_name": license_record.customer.company_name,
-                "license_type": license_record.license_type.label_ar,
-                "status": _license_status_label(license_record.status, license_record.is_expired),
-                "issued_at": license_record.issued_at,
-                "expires_at": license_record.expires_at,
-                "days_remaining": license_record.days_remaining,
-                "machine_id": license_record.machine_id or "",
+                "company_name": record.company_name,
+                "status": _subscription_status_label(record.status, record.is_expired),
+                "created_at": record.created_at,
+                "subscription_start_date": record.subscription_start_date,
+                "subscription_end_date": record.subscription_end_date,
+                "days_remaining": record.days_remaining,
+                "max_devices": record.max_devices,
+                "max_users": record.max_users if record.max_users is not None else "بلا حدود",
+                "device_count": record.device_count if record.device_count is not None else "",
             }
-            for license_record in licenses
+            for record in subscriptions
         ]
         columns = [
             ("company_name", "اسم الشركة"),
-            ("license_type", "نوع الترخيص"),
             ("status", "الحالة"),
-            ("issued_at", "تاريخ الإصدار"),
-            ("expires_at", "تاريخ الانتهاء"),
+            ("subscription_start_date", "تاريخ البدء"),
+            ("subscription_end_date", "تاريخ الانتهاء"),
             ("days_remaining", "الأيام المتبقية"),
-            ("machine_id", "بصمة الجهاز"),
+            ("max_devices", "الحد الأقصى للأجهزة"),
+            ("device_count", "عدد الأجهزة الحالي"),
+            ("max_users", "الحد الأقصى للمستخدمين"),
         ]
-        return self._finish(ReportCategory.LICENSES, rows, columns, filters)
+        return self._finish(ReportCategory.SUBSCRIPTIONS, rows, columns, filters)
 
     def build_synchronization_report(self, filters: ReportFilters | None = None) -> ReportResult:
         """The Synchronization report: the Attendance Server's own recent change ledger."""
@@ -606,12 +619,12 @@ class ReportingService:
         return self._finish(ReportCategory.CONFIGURATION_PUBLICATIONS, rows, columns, filters)
 
 
-def _license_status_label(status: IssuedLicenseStatus, is_expired: bool) -> str:
-    """Mirror ``developer_suite/ui/license_management_page.py``'s ``_status_label`` exactly."""
-    if status is IssuedLicenseStatus.REVOKED:
-        return "ملغى"
+def _subscription_status_label(status: str, is_expired: bool) -> str:
+    """Mirror ``developer_suite/ui/subscription_management_page.py``'s status labeling exactly."""
     if is_expired:
-        return "منتهي الصلاحية"
+        return "منتهي"
+    if status == "suspended":
+        return "موقوف"
     return "نشط"
 
 
@@ -633,12 +646,10 @@ def _executive_dashboard_rows(snapshot: DashboardSnapshot) -> list[dict[str, Any
         ("الشركات المتصلة", _optional(snapshot.online_companies)),
         ("الشركات غير المتصلة", _optional(snapshot.offline_companies)),
         ("الأجهزة المتصلة", _optional(snapshot.connected_devices)),
-        ("التراخيص النشطة", str(snapshot.active_licenses)),
-        ("التراخيص المنتهية", str(snapshot.expired_licenses)),
-        ("تراخيص تجريبية", str(snapshot.trial_licenses)),
-        ("تراخيص شهرية", str(snapshot.monthly_licenses)),
-        ("تراخيص سنوية", str(snapshot.yearly_licenses)),
-        ("تراخيص دائمة", str(snapshot.lifetime_licenses)),
+        ("إجمالي الاشتراكات", _optional(snapshot.total_subscriptions)),
+        ("الاشتراكات النشطة", str(snapshot.active_subscriptions)),
+        ("الاشتراكات الموقوفة", str(snapshot.suspended_subscriptions)),
+        ("الاشتراكات المنتهية", str(snapshot.expired_subscriptions)),
         ("آخر مزامنة ناجحة", _optional(snapshot.last_sync_at)),
         ("التغييرات المعلقة", str(snapshot.pending_sync_count)),
         ("الخادم متاح", _bool_or_unknown(snapshot.server_reachable)),

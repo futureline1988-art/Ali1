@@ -82,10 +82,9 @@ class UpdateSigningKeyError(UpdateManagerServiceError):
 
     A *missing* key no longer reaches the UI as an error at all — see
     :meth:`UpdateManagerService._load_private_key` — so this now only
-    fires for a key file that is present but corrupt, mirroring
-    :class:`~developer_suite.services.license_service.LicenseSigningKeyError`'s
-    own reasoning: a UI layer should be able to catch one clear
-    exception type without importing from ``licensing.crypto`` itself.
+    fires for a key file that is present but corrupt: a UI layer
+    should be able to catch one clear exception type without importing
+    from ``licensing.crypto`` itself.
     """
 
 
@@ -106,8 +105,7 @@ class UpdateManagerService:
                 Attendance Server's update-management endpoints.
             private_key_path: Where to load the vendor's Ed25519
                 *update-signing* private key from (see
-                :attr:`~developer_suite.config.DeveloperSuiteConfig.update_signing_private_key_path`
-                — a separate key from the license-signing one).
+                :attr:`~developer_suite.config.DeveloperSuiteConfig.update_signing_private_key_path`).
                 Auto-created here, once, the first time it's needed if
                 nothing exists at this path yet — see
                 :func:`licensing.crypto.signing.ensure_keypair`.
@@ -126,9 +124,7 @@ class UpdateManagerService:
     def _load_private_key(self) -> Ed25519PrivateKey:
         """Load the configured update-signing private key, generating it once if missing.
 
-        Mirrors :meth:`~developer_suite.services.license_service.LicenseService._load_private_key`'s
-        reasoning exactly, for the separate update-signing keypair:
-        this machine is always the vendor's own (a customer's
+        This machine is always the vendor's own (a customer's
         Attendance Client never holds or needs this key, only
         ``updates/keys.py``'s embedded public half), so a first call
         with nothing on disk yet bootstraps a fresh keypair rather than

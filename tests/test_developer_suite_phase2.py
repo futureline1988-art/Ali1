@@ -12,7 +12,6 @@ application changed."
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
@@ -32,11 +31,11 @@ from developer_suite.modules import (
     ALL_MODULES,
     CustomerManagementModule,
     DashboardModule,
-    LicenseManagerModule,
     MonitoringModule,
     RemoteConfigurationModule,
     ReportingModule,
     ServerStatusModule,
+    SubscriptionManagerModule,
     UpdateManagerModule,
 )
 from developer_suite.modules.base import PlatformModule
@@ -46,7 +45,6 @@ from developer_suite.services.customer_group_service import CustomerGroupService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
-from developer_suite.services.license_service import LicenseService
 from developer_suite.services.reporting_service import ReportingService
 from developer_suite.services.update_manager_service import UpdateManagerService
 from developer_suite.sync.coordinator import SyncCoordinator
@@ -71,6 +69,18 @@ class _NullAdminTokenProvider:
         return None
 
 
+class _NullSubscriptionService:
+    """A test-only stand-in exposing only the read surface these
+    module-construction tests need — no HTTP, no admin client, matching
+    :class:`~developer_suite.services.subscription_service.SubscriptionService`'s
+    ``list_subscriptions`` closely enough for a module to be built and
+    have its page rendered.
+    """
+
+    def list_subscriptions(self) -> list:
+        return []
+
+
 def _construct_module(
     module_cls: type[PlatformModule], database: Database, config: DeveloperSuiteConfig
 ) -> PlatformModule:
@@ -82,24 +92,23 @@ def _construct_module(
     """
     if module_cls is DashboardModule:
         customer_service = CustomerService(database)
-        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
         coordinator = SyncCoordinator(database, config)
         register_customer_sync(coordinator)
         scheduler = SyncSchedulerService(coordinator, config)
         admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
-        dashboard_service = DashboardService(customer_service, license_service, scheduler, admin_client, config)
+        dashboard_service = DashboardService(
+            customer_service, _NullSubscriptionService(), scheduler, admin_client, config
+        )
         refresh_service = DashboardRefreshService(dashboard_service)
-        return DashboardModule(refresh_service, customer_service, license_service)
+        return DashboardModule(refresh_service, customer_service)
     if module_cls is CustomerManagementModule:
         customer_service = CustomerService(database)
-        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
         coordinator = SyncCoordinator(database, config)
         register_customer_sync(coordinator)
-        return CustomerManagementModule(customer_service, license_service, coordinator)
-    if module_cls is LicenseManagerModule:
+        return CustomerManagementModule(customer_service, _NullSubscriptionService(), coordinator)
+    if module_cls is SubscriptionManagerModule:
         customer_service = CustomerService(database)
-        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
-        return LicenseManagerModule(license_service, customer_service)
+        return SubscriptionManagerModule(_NullSubscriptionService(), customer_service)
     if module_cls is RemoteConfigurationModule:
         customer_service = CustomerService(database)
         admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
@@ -129,15 +138,16 @@ def _construct_module(
         return UpdateManagerModule(update_manager_service, customer_service, customer_group_service, admin_client)
     if module_cls is ReportingModule:
         customer_service = CustomerService(database)
-        license_service = LicenseService(database, private_key_path=Path("/nonexistent/key.pem"))
         configuration_publish_service = ConfigurationPublishService(database)
         coordinator = SyncCoordinator(database, config)
         register_customer_sync(coordinator)
         scheduler = SyncSchedulerService(coordinator, config)
         admin_client = AdminApiClient(config.attendance_server_url, _NullAdminTokenProvider())
-        dashboard_service = DashboardService(customer_service, license_service, scheduler, admin_client, config)
+        dashboard_service = DashboardService(
+            customer_service, _NullSubscriptionService(), scheduler, admin_client, config
+        )
         reporting_service = ReportingService(
-            customer_service, license_service, configuration_publish_service, dashboard_service, admin_client
+            customer_service, _NullSubscriptionService(), configuration_publish_service, dashboard_service, admin_client
         )
         return ReportingModule(reporting_service, config)
     return module_cls()
@@ -227,7 +237,7 @@ class TestModuleInterface:
         assert module_ids == {
             "dashboard",
             "customer_management",
-            "license_manager",
+            "subscription_manager",
             "remote_configuration",
             "monitoring",
             "server_status",
@@ -258,8 +268,8 @@ class TestServiceContainer:
 
     def test_get_module_returns_the_right_instance(self, dev_suite_config, dev_suite_database) -> None:
         container = ServiceContainer(config=dev_suite_config, database=dev_suite_database)
-        module = container.get_module("license_manager")
-        assert module.module_id == "license_manager"
+        module = container.get_module("subscription_manager")
+        assert module.module_id == "subscription_manager"
 
     def test_get_module_raises_for_unknown_id(self, dev_suite_config, dev_suite_database) -> None:
         container = ServiceContainer(config=dev_suite_config, database=dev_suite_database)

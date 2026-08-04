@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from database.database import Database
 from repositories.sync_repository import ClientSyncCredentialRepository, ClientSyncCursorRepository
-from sync.client import SyncClient, register_device
+from sync.client import SubscriptionStatusResult, SyncClient, register_device
 from sync.protocol import DeviceType
 
 
@@ -82,19 +82,25 @@ class ClientSyncCoordinator:
         self._server_url = server_url
         self._transport = transport
 
-    def enroll(self, *, admin_bearer_token: str, name: str) -> None:
+    def enroll(self, *, admin_bearer_token: str, name: str, company_name: str | None = None) -> None:
         """Register this installation with the Attendance Server and persist its credential.
 
         Args:
             admin_bearer_token: A token with the ``sync:admin`` scope
                 (see :func:`~sync.client.register_device`).
             name: A human-readable label for this installation.
+            company_name: The exact ``Subscription.company_name`` this
+                installation belongs to — required for this
+                installation's subscription to be checkable via
+                :meth:`get_subscription_status` (see
+                :mod:`server.api.routers.subscriptions`).
         """
         device_public_id, api_key = register_device(
             self._server_url,
             admin_bearer_token,
             name=name,
             device_type=DeviceType.ATTENDANCE_CLIENT,
+            company_name=company_name,
             transport=self._transport,
         )
         with self._database.session_scope() as session:
@@ -119,6 +125,24 @@ class ClientSyncCoordinator:
             device_api_key=credential.api_key,
             transport=self._transport,
         )
+
+    def get_subscription_status(self) -> SubscriptionStatusResult:
+        """Fetch this installation's own subscription status from the Attendance Server.
+
+        Raises:
+            DeviceNotEnrolledError: This installation has not enrolled
+                yet.
+            ~sync.client.SyncClientError: The server could not be
+                reached, rejected this device's credential, or
+                returned an unexpected error — see
+                :meth:`~sync.client.SyncClient.get_subscription_status`.
+        """
+        with self._database.session_scope() as session:
+            client = self._build_client(session)
+            try:
+                return client.get_subscription_status()
+            finally:
+                client.close()
 
     def pull_and_apply(self, entity_type: str, *, limit: int = 100) -> PullSummary:
         """Pull and apply one batch of changes for ``entity_type`` addressed to this device.

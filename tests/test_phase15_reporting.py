@@ -29,7 +29,6 @@ import socket
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 import uvicorn
@@ -44,14 +43,13 @@ from server.config import ServerConfig, get_server_config
 from server.database.bootstrap import build_database as build_server_database
 
 import developer_suite.config as developer_suite_config_module
-from developer_suite.admin.client import AdminApiClient
+from developer_suite.admin.client import AdminApiClient, SubscriptionInfo
 from developer_suite.config import DeveloperSuiteConfig, get_developer_suite_config
 from developer_suite.database.bootstrap import build_database as build_dev_suite_database
 from developer_suite.services.configuration_publish_service import ConfigurationPublishService
 from developer_suite.services.configuration_service import ConfigurationService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_service import DashboardService
-from developer_suite.services.license_service import LicenseService
 from developer_suite.services.reporting_service import (
     ReportCategory,
     ReportFilters,
@@ -62,11 +60,9 @@ from developer_suite.services.reporting_service import (
     group_and_count,
     sort_rows,
 )
+from developer_suite.services.subscription_service import SubscriptionServiceError
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.scheduler import SyncSchedulerService
-
-from licensing.crypto.signing import generate_keypair, save_private_key
-from licensing.enums import LicenseType
 
 
 # ---------------------------------------------------------------------------
@@ -239,12 +235,58 @@ def customer_service(dev_suite_database) -> CustomerService:
     return CustomerService(dev_suite_database)
 
 
+class _FakeSubscriptionService:
+    """An in-memory :class:`~developer_suite.services.subscription_service.SubscriptionService`
+    stand-in: stores created subscriptions and returns them from
+    ``list_subscriptions()`` — no HTTP, no admin client — sufficient
+    for reporting/dashboard tests that need to seed subscription data
+    without a live Attendance Server subscriptions endpoint.
+    """
+
+    def __init__(self) -> None:
+        self._subscriptions: dict[int, SubscriptionInfo] = {}
+        self._next_id = 1
+        self.raise_on_list = False
+
+    def create_subscription(
+        self,
+        *,
+        company_name: str,
+        subscription_start_date: date,
+        subscription_end_date: date,
+        max_devices: int,
+        max_users: int | None = None,
+    ) -> SubscriptionInfo:
+        subscription_id = self._next_id
+        self._next_id += 1
+        today = date.today()
+        is_expired = subscription_end_date < today
+        record = SubscriptionInfo(
+            id=subscription_id,
+            company_name=company_name,
+            subscription_start_date=subscription_start_date,
+            subscription_end_date=subscription_end_date,
+            status="active",
+            max_devices=max_devices,
+            max_users=max_users,
+            is_active=not is_expired,
+            is_expired=is_expired,
+            days_remaining=(subscription_end_date - today).days,
+            device_count=0,
+            created_at=datetime.now(timezone.utc),
+        )
+        self._subscriptions[subscription_id] = record
+        return record
+
+    def list_subscriptions(self) -> list[SubscriptionInfo]:
+        if self.raise_on_list:
+            raise SubscriptionServiceError("subscriptions unavailable")
+        return list(self._subscriptions.values())
+
+
 @pytest.fixture
-def license_service(dev_suite_database, tmp_path) -> LicenseService:
-    private_key, _public_key = generate_keypair()
-    key_path = tmp_path / "license_signing_key.pem"
-    save_private_key(private_key, key_path)
-    return LicenseService(dev_suite_database, private_key_path=key_path)
+def subscription_service() -> _FakeSubscriptionService:
+    return _FakeSubscriptionService()
 
 
 @pytest.fixture
@@ -254,19 +296,19 @@ def configuration_publish_service(dev_suite_database) -> ConfigurationPublishSer
 
 @pytest.fixture
 def dashboard_service(
-    customer_service, license_service, dev_suite_database, dev_suite_config, admin_client
+    customer_service, subscription_service, dev_suite_database, dev_suite_config, admin_client
 ) -> DashboardService:
     coordinator = SyncCoordinator(dev_suite_database, dev_suite_config)
     scheduler = SyncSchedulerService(coordinator, dev_suite_config)
-    return DashboardService(customer_service, license_service, scheduler, admin_client, dev_suite_config)
+    return DashboardService(customer_service, subscription_service, scheduler, admin_client, dev_suite_config)
 
 
 @pytest.fixture
 def reporting_service(
-    customer_service, license_service, configuration_publish_service, dashboard_service, admin_client
+    customer_service, subscription_service, configuration_publish_service, dashboard_service, admin_client
 ) -> ReportingService:
     return ReportingService(
-        customer_service, license_service, configuration_publish_service, dashboard_service, admin_client
+        customer_service, subscription_service, configuration_publish_service, dashboard_service, admin_client
     )
 
 
@@ -327,16 +369,29 @@ class TestCustomerReport:
         assert [row["company_name"] for row in result.rows] == ["Zenith", "Acme Co"]
 
 
-class TestLicenseReport:
-    def test_reflects_customer_and_derived_status(self, reporting_service, license_service, acme_customer) -> None:
-        license_service.issue_license(customer_id=acme_customer.id, license_type=LicenseType.TRIAL)
-        revoked = license_service.issue_license(customer_id=acme_customer.id, license_type=LicenseType.YEARLY)
-        license_service.revoke_license(revoked.id)
+class TestSubscriptionReport:
+    def test_reflects_company_and_derived_status(self, reporting_service, subscription_service, acme_customer) -> None:
+        subscription_service.create_subscription(
+            company_name="Acme Co",
+            subscription_start_date=date.today() - timedelta(days=10),
+            subscription_end_date=date.today() + timedelta(days=300),
+            max_devices=5,
+        )
 
-        result = reporting_service.build_license_report()
-        statuses = sorted(row["status"] for row in result.rows)
-        assert statuses == ["ملغى", "نشط"]
-        assert all(row["company_name"] == "Acme Co" for row in result.rows)
+        result = reporting_service.build_subscription_report()
+        assert len(result.rows) == 1
+        row = result.rows[0]
+        assert row["company_name"] == "Acme Co"
+        assert row["status"] == "نشط"
+        assert row["max_devices"] == 5
+        assert row["max_users"] == "بلا حدود"
+
+    def test_raises_reporting_service_error_when_subscriptions_are_unavailable(
+        self, reporting_service, subscription_service
+    ) -> None:
+        subscription_service.raise_on_list = True
+        with pytest.raises(ReportingServiceError):
+            reporting_service.build_subscription_report()
 
 
 class TestConfigurationPublicationReport:
@@ -407,11 +462,11 @@ class TestServerBackedReports:
         assert audit_result.rows == []
 
     def test_reports_wrap_admin_api_errors_into_reporting_service_error(
-        self, customer_service, license_service, configuration_publish_service, dashboard_service
+        self, customer_service, subscription_service, configuration_publish_service, dashboard_service
     ) -> None:
         unreachable_client = AdminApiClient("http://127.0.0.1:1", _StaticTokenProvider("token"))
         broken_reporting_service = ReportingService(
-            customer_service, license_service, configuration_publish_service, dashboard_service, unreachable_client
+            customer_service, subscription_service, configuration_publish_service, dashboard_service, unreachable_client
         )
         with pytest.raises(ReportingServiceError):
             broken_reporting_service.build_device_report()
@@ -567,8 +622,14 @@ class TestZeroImpactOnOtherApplications:
         # test ever needs to grow, it means a later phase deliberately
         # added real storage, not Phase 15 (which is read-only reporting
         # over data these two schemas already had).
+        #
+        # ``issued_licenses`` was removed outright by the later
+        # server-managed-subscription migration (developer_suite/models/license.py
+        # was deleted) with no local replacement — subscriptions live only
+        # on the Attendance Server (``subscriptions`` below), never in the
+        # Developer Suite's own schema.
         expected_developer_suite_tables = {
-            "customers", "issued_licenses", "remote_configurations", "theme_profiles",
+            "customers", "remote_configurations", "theme_profiles",
             "print_profiles", "attendance_policy_profiles", "device_profiles", "backup_profiles",
             "configuration_publications", "sync_outbox_entries", "sync_entity_versions",
             "sync_cursors", "sync_device_credential", "admin_session_record",
@@ -580,7 +641,7 @@ class TestZeroImpactOnOtherApplications:
             "admin_accounts", "admin_audit_logs", "admin_password_reset_tokens", "admin_sessions",
             "change_records", "device_update_statuses", "entity_versions", "sync_devices",
             "sync_sequence", "update_audit_events", "update_packages", "update_rollbacks",
-            "update_targets", "update_versions",
+            "update_targets", "update_versions", "subscriptions",
         }
         assert set(ServerBase.metadata.tables) == expected_server_tables
 

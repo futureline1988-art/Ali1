@@ -611,24 +611,25 @@ jobs:
           files: |
             Release/AttendanceServer-Setup.exe
 
-  # Proves the full license lifecycle -- create customer, issue a
-  # license, copy/export it, activate the Attendance Client with it --
-  # actually works on a real, freshly-provisioned Windows machine (every
-  # windows-latest runner is a clean VM, imaged fresh for this one job),
-  # not just on the Linux sandbox this codebase is normally developed
-  # in. Runs the vendor (Developer Suite) and client (Attendance Client)
-  # license code from source rather than the frozen .exe from the other
-  # jobs above: PyInstaller builds have no way to run pytest inside
-  # them, so this is what "test the Vendor/Client application" means on
-  # a CI runner -- the exact same license_service.py, license_key.py,
-  # license_key_dialog.py and license_window.py modules the other jobs'
-  # PyInstaller builds freeze verbatim into DeveloperSuite-Setup.exe and
-  # Setup.exe, just invoked directly instead of through a frozen
-  # bootloader. licensing/machine_id.py uses only stdlib platform/uuid
-  # (no OS-specific registry/WMI calls), so this genuinely exercises the
-  # same machine-ID and signing code paths the frozen apps use, just
-  # computing a different (still valid) fingerprint for this runner.
-  windows-license-lifecycle-test:
+  # Proves the full server-managed subscription lifecycle -- create a
+  # subscription on a real running Attendance Server, register an
+  # Attendance Client device against it, confirm the client's
+  # SubscriptionCheckService grants/blocks access correctly (active,
+  # suspended, expired, max-devices-reached, and the offline grace
+  # period) -- actually works on a real, freshly-provisioned Windows
+  # machine (every windows-latest runner is a clean VM, imaged fresh for
+  # this one job), not just on the Linux sandbox this codebase is
+  # normally developed in. Runs the server, Developer Suite, and
+  # Attendance Client subscription code from source rather than the
+  # frozen .exe from the other jobs above: PyInstaller builds have no
+  # way to run pytest inside them, so this is what "test the Vendor/
+  # Client application" means on a CI runner -- the exact same
+  # subscription_service.py/subscription_check_service.py modules the
+  # other jobs' PyInstaller builds freeze verbatim into
+  # DeveloperSuite-Setup.exe and Setup.exe, just invoked directly
+  # instead of through a frozen bootloader. This replaces the retired
+  # file-based license lifecycle this job used to test.
+  windows-subscription-lifecycle-test:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -645,12 +646,11 @@ jobs:
           pip install -r requirements.txt
 
       # QT_QPA_PLATFORM=offscreen: the runner has no interactive desktop
-      # session, but this still constructs and drives the real
-      # LicenseKeyDialog and LicenseActivationWindow QWidgets (button
-      # clicks, clipboard, text fields) -- it is a headless *display*,
-      # not a mock of the widgets themselves.
-      - name: Run full license lifecycle test (create customer -> issue -> copy/export -> activate)
+      # session, but this still constructs and drives real Developer
+      # Suite QWidgets (Subscription Manager page, dialogs) -- it is a
+      # headless *display*, not a mock of the widgets themselves.
+      - name: Run full subscription lifecycle test (create -> register device -> check -> suspend -> expire -> grace period)
         env:
           QT_QPA_PLATFORM: offscreen
           APP_ENVIRONMENT: testing
-        run: python -m pytest tests/test_license_issuance_end_to_end.py tests/test_licensing_phase1.py -v
+        run: python -m pytest tests/test_subscription_system.py tests/test_licensing_crypto_signing.py -v

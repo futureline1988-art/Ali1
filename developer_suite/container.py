@@ -22,12 +22,12 @@ from developer_suite.modules import (
     ALL_MODULES,
     CustomerManagementModule,
     DashboardModule,
-    LicenseManagerModule,
     MonitoringModule,
     PlatformModule,
     RemoteConfigurationModule,
     ReportingModule,
     ServerStatusModule,
+    SubscriptionManagerModule,
     UpdateManagerModule,
 )
 from developer_suite.services.configuration_publish_service import ConfigurationPublishService
@@ -36,8 +36,8 @@ from developer_suite.services.customer_group_service import CustomerGroupService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.dashboard_refresh_service import DashboardRefreshService
 from developer_suite.services.dashboard_service import DashboardService
-from developer_suite.services.license_service import LicenseService
 from developer_suite.services.reporting_service import ReportingService
+from developer_suite.services.subscription_service import SubscriptionService
 from developer_suite.services.update_manager_service import UpdateManagerService
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.customer_sync import register_customer_sync
@@ -80,7 +80,7 @@ class ServiceContainer:
             Client installation (Phase 13 — see
             :mod:`developer_suite.services.configuration_publish_service`).
         dashboard_service: Aggregates :attr:`customer_service`,
-            :attr:`license_service`, :attr:`sync_scheduler`, and
+            :attr:`subscription_service`, :attr:`sync_scheduler`, and
             :attr:`admin_client` into one dashboard snapshot — see
             :mod:`developer_suite.services.dashboard_service`.
         dashboard_refresh_service: Computes :attr:`dashboard_service`
@@ -105,9 +105,14 @@ class ServiceContainer:
         reporting_service: Assembles, filters, sorts, and groups every
             report category (Phase 15 — see
             :mod:`developer_suite.services.reporting_service`), over
-            :attr:`customer_service`/:attr:`license_service`/
+            :attr:`customer_service`/:attr:`subscription_service`/
             :attr:`configuration_publish_service`/:attr:`dashboard_service`/
             :attr:`admin_client` — introduces no dependency of its own.
+        subscription_service: Create/renew/suspend/reactivate company
+            subscriptions via the Attendance Server's
+            ``/api/v1/subscriptions`` endpoints — the server-managed
+            replacement for the retired file-based license system, see
+            :mod:`developer_suite.services.subscription_service`.
     """
 
     def __init__(self, config: DeveloperSuiteConfig, database: Database) -> None:
@@ -123,11 +128,6 @@ class ServiceContainer:
         self.database = database
         self.customer_service = CustomerService(database)
         self.customer_group_service = CustomerGroupService(database)
-        self.license_service = LicenseService(
-            database,
-            private_key_path=config.licensing_private_key_path,
-            public_key_path=config.licensing_public_key_path,
-        )
         self.configuration_service = ConfigurationService(database)
         self.configuration_publish_service = ConfigurationPublishService(database)
         self.sync_coordinator = SyncCoordinator(database, config)
@@ -136,6 +136,7 @@ class ServiceContainer:
         self.admin_auth_client = AdminAuthClient(config.attendance_server_url)
         self.admin_session_manager = AdminSessionManager(database, self.admin_auth_client)
         self.admin_client = AdminApiClient(config.attendance_server_url, self.admin_session_manager)
+        self.subscription_service = SubscriptionService(self.admin_client)
         self.update_manager_service = UpdateManagerService(
             self.admin_client,
             private_key_path=config.update_signing_private_key_path,
@@ -143,7 +144,7 @@ class ServiceContainer:
         )
         self.dashboard_service = DashboardService(
             self.customer_service,
-            self.license_service,
+            self.subscription_service,
             self.sync_scheduler,
             self.admin_client,
             config,
@@ -151,7 +152,7 @@ class ServiceContainer:
         self.dashboard_refresh_service = DashboardRefreshService(self.dashboard_service)
         self.reporting_service = ReportingService(
             self.customer_service,
-            self.license_service,
+            self.subscription_service,
             self.configuration_publish_service,
             self.dashboard_service,
             self.admin_client,
@@ -171,13 +172,13 @@ class ServiceContainer:
         """
         return {
             DashboardModule: lambda: DashboardModule(
-                self.dashboard_refresh_service, self.customer_service, self.license_service
+                self.dashboard_refresh_service, self.customer_service
             ),
             CustomerManagementModule: lambda: CustomerManagementModule(
-                self.customer_service, self.license_service, self.sync_coordinator
+                self.customer_service, self.subscription_service, self.sync_coordinator
             ),
-            LicenseManagerModule: lambda: LicenseManagerModule(
-                self.license_service, self.customer_service
+            SubscriptionManagerModule: lambda: SubscriptionManagerModule(
+                self.subscription_service, self.customer_service
             ),
             RemoteConfigurationModule: lambda: RemoteConfigurationModule(
                 self.configuration_service,

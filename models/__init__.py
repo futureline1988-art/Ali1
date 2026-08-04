@@ -25,6 +25,7 @@ from models.leave import LeavePolicy, LeaveRequest
 from models.permission import Permission
 from models.role import Role
 from models.shift import EmployeeShiftAssignment, Shift
+from models.subscription_state import ClientSubscriptionState
 from models.sync_state import ClientSyncCredential, ClientSyncCursor
 from models.update_state import ClientUpdateState, ClientUpdateStatus
 from models.user import User
@@ -34,6 +35,7 @@ __all__ = [
     "AttendanceRecord",
     "AuditLog",
     "Branch",
+    "ClientSubscriptionState",
     "ClientSyncCredential",
     "ClientSyncCursor",
     "ClientUpdateState",

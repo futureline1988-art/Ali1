@@ -1,18 +1,15 @@
 """Private-key Ed25519 operations.
 
 Everything in this package operates on raw keys and bytes only — no
-JSON, no license key string format, no
-:class:`~licensing.license_key.LicensePayload`. That keeps the one
-place private-key material can flow through this codebase small and
+JSON, no license-specific format. That keeps the one place
+private-key material can flow through this codebase small and
 auditable.
 
-This module is new foundation code added in Phase 1 of the commercial
-platform work (see ``docs/PLATFORM_ARCHITECTURE_GAP_ANALYSIS.md``) for
-the future Developer Suite application to import. It is not imported
-by anything in the running Attendance Client, and
-``licensing/license_generator.py`` (the existing, working, vendor-only
-CLI tool) is deliberately left untouched rather than migrated onto it
-— see this package's own module docstring in ``signing.py`` for why.
+Used by the Developer Suite's software-update package signing (see
+:mod:`developer_suite.services.update_manager_service`) and verified
+by the Attendance Client's update installer (:mod:`updates.verifier`).
+Never imported by the Attendance Client itself — it only ever verifies
+signatures against an embedded public key.
 """
 
 from __future__ import annotations
