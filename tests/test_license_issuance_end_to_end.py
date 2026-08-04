@@ -211,3 +211,94 @@ class TestFullLicenseLifecycleAcrossBothApplications:
             )
             status = client_service.activate(issued.license_key)
             assert status.code is LicenseStatusCode.VALID
+
+
+class TestFullWorkflowThroughTheRealUiWidgets:
+    """Create customer -> generate license -> copy/export -> paste into client -> activate.
+
+    Drives the actual widgets a vendor and a customer click through
+    (:class:`~developer_suite.ui.license_key_dialog.LicenseKeyDialog`
+    and :class:`~ui.license_window.LicenseActivationWindow`), not just
+    the services underneath them -- closes the gap the two prior tests
+    in this file leave (they call ``client_service.activate(...)``
+    directly with the in-memory key string, never round-tripping it
+    through the export-to-file / paste-into-a-QPlainTextEdit path a
+    real customer actually uses).
+    """
+
+    def test_export_to_file_then_paste_into_the_activation_window_activates(
+        self,
+        qapp,
+        monkeypatch,
+        tmp_path,
+        dev_suite_config: DeveloperSuiteConfig,
+        dev_suite_license_service: LicenseService,
+    ) -> None:
+        from developer_suite.ui.license_key_dialog import LicenseKeyDialog
+        from ui.license_window import LicenseActivationWindow
+
+        customer_id = _new_customer(
+            dev_suite_license_service, company_name="Acme Co", contact_name="Jane Doe"
+        )
+        issued = dev_suite_license_service.issue_license(
+            customer_id=customer_id, license_type=LicenseType.YEARLY, machine_id=_TEST_MACHINE_ID
+        )
+
+        # ---- Vendor side: the real dialog shown after issuance exports the key. ----
+        key_dialog = LicenseKeyDialog(issued)
+        exported_path = key_dialog.export_to_file(tmp_path / "acme.lic")
+        exported_text = exported_path.read_text(encoding="utf-8")
+        # The whole signed key must survive the round trip -- no truncation.
+        assert exported_text.strip() == issued.license_key
+
+        # ---- Customer side: paste the exported text into the real activation window. ----
+        client_service = _client_service_trusting_whatever_was_just_bootstrapped(
+            monkeypatch, dev_suite_config, tmp_path
+        )
+        activation_window = LicenseActivationWindow(license_service=client_service)
+        activation_window.license_key_edit.setPlainText(exported_text)
+        activation_window._on_activate_clicked()
+
+        assert activation_window._did_activate is True
+        status = client_service.get_status()
+        assert status.code is LicenseStatusCode.VALID
+        assert status.license_type is LicenseType.YEARLY
+
+    def test_copy_button_then_paste_into_the_activation_window_activates(
+        self,
+        qapp,
+        monkeypatch,
+        tmp_path,
+        dev_suite_config: DeveloperSuiteConfig,
+        dev_suite_license_service: LicenseService,
+    ) -> None:
+        from PySide6.QtGui import QGuiApplication
+
+        from developer_suite.ui.license_key_dialog import LicenseKeyDialog
+        from ui.license_window import LicenseActivationWindow
+
+        customer_id = _new_customer(
+            dev_suite_license_service, company_name="Beta LLC", contact_name="John Roe"
+        )
+        issued = dev_suite_license_service.issue_license(
+            customer_id=customer_id, license_type=LicenseType.LIFETIME, machine_id=_TEST_MACHINE_ID
+        )
+
+        # ---- Vendor side: click Copy. ----
+        key_dialog = LicenseKeyDialog(issued)
+        key_dialog._on_copy_clicked()
+        clipboard_text = QGuiApplication.clipboard().text()
+        assert clipboard_text == issued.license_key
+
+        # ---- Customer side: paste the clipboard contents and activate. ----
+        client_service = _client_service_trusting_whatever_was_just_bootstrapped(
+            monkeypatch, dev_suite_config, tmp_path
+        )
+        activation_window = LicenseActivationWindow(license_service=client_service)
+        activation_window.license_key_edit.setPlainText(clipboard_text)
+        activation_window._on_activate_clicked()
+
+        assert activation_window._did_activate is True
+        status = client_service.get_status()
+        assert status.code is LicenseStatusCode.VALID
+        assert status.license_type is LicenseType.LIFETIME

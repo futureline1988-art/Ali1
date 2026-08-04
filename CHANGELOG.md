@@ -162,6 +162,37 @@ Windows build for the first time:
   public keys), published as updated `DeveloperSuite-Setup.exe` /
   `Setup.exe` / `Portable.exe` assets on this same `v1.1.0` release
   train (no new major/minor tag).
+- **Unify the licensing system on a single format, library, and keypair**
+  (this release): audited the whole licensing surface end to end after
+  the two fixes above and confirmed the Attendance Client and the
+  Developer Suite already shared one implementation for everything
+  that matters — the `AMS1.<payload>.<signature>` key format
+  (`licensing/license_key.py`), the Ed25519 signing/verification
+  algorithm (`licensing/crypto/signing.py`), and machine-ID generation
+  (`licensing/machine_id.py`) are each a single module both
+  applications import, not separate copies. The one real gap found was
+  dead code, not a second live format: `models/license.py` and
+  `repositories/license_repository.py` were a per-company,
+  `String(255)`-keyed license model predating the shared `licensing/`
+  package, never wired into any service, controller, or UI in this
+  codebase (confirmed unused by grepping the whole tree), and had it
+  ever been connected it would have silently truncated a real signed
+  key on save. Removed both files, the `licenses`
+  relationship/`current_license` property off `Company`, and dropped
+  the orphaned `licenses` table via a new Alembic migration
+  (`551b9791696c`) — a clean removal, not a data migration, since the
+  table was never populated by any live code path. Added
+  `tests/test_licensing_phase1.py::TestSingleUnifiedLicensingSystem`
+  (asserts the legacy model/table/relationship are gone and that both
+  applications resolve to the exact same `get_machine_id` function
+  object) and
+  `tests/test_license_issuance_end_to_end.py::TestFullWorkflowThroughTheRealUiWidgets`
+  (drives the real `LicenseKeyDialog` export-to-file and copy-to
+  -clipboard actions, then pastes the result into the real
+  `LicenseActivationWindow` and activates — proving the exported/copied
+  key round-trips without truncation and activates on a clean client).
+  `config.py`'s `AppConfig.app_version` bumped to `1.1.2` for the
+  migration.
 - **Issued license key was never shown or exported** (this release): the
   License Manager's "Issue New License" and "Renew" actions called
   `LicenseService.issue_license()` / `.renew_license()`, discarded the

@@ -401,3 +401,62 @@ class TestDeveloperMode:
     def test_never_permitted_when_frozen_and_production(self, monkeypatch) -> None:
         monkeypatch.setattr("sys.frozen", True, raising=False)
         assert is_developer_mode_permitted(Environment.PRODUCTION) is False
+
+
+class TestSingleUnifiedLicensingSystem:
+    """There is exactly one license format, keypair, and machine-ID algorithm.
+
+    Confirms the pre-``licensing/`` per-company ``License`` model (a
+    different, never-integrated ``String(255)``-keyed record predating
+    the shared Ed25519-signed ``AMS1.<payload>.<signature>`` format)
+    has been fully removed rather than left as a second, dead, and
+    subtly-truncating format alongside the real one.
+    """
+
+    def test_legacy_per_company_license_model_no_longer_exists(self) -> None:
+        with pytest.raises(ModuleNotFoundError):
+            import models.license  # noqa: F401
+
+        with pytest.raises(ModuleNotFoundError):
+            import repositories.license_repository  # noqa: F401
+
+    def test_legacy_licenses_table_is_not_in_the_attendance_client_schema(self) -> None:
+        from models.base import Base
+
+        assert "licenses" not in Base.metadata.tables
+
+    def test_company_model_no_longer_carries_a_licenses_relationship(self) -> None:
+        from models.company import Company
+
+        assert not hasattr(Company, "licenses")
+        assert not hasattr(Company, "current_license")
+
+    def test_only_one_get_machine_id_implementation_exists_for_both_applications(self) -> None:
+        """Both the Attendance Client and the Developer Suite call the same function object."""
+        from licensing.machine_id import get_machine_id as client_get_machine_id
+        from licensing.machine_id import get_machine_id as vendor_get_machine_id
+
+        assert client_get_machine_id is vendor_get_machine_id
+
+    def test_only_one_license_key_format_module_exists(self) -> None:
+        """Vendor-side signing and client-side verification share one encode/decode module.
+
+        :func:`licensing.license_generator.issue_license_key` (used by
+        :mod:`developer_suite.services.license_service`) and
+        :class:`licensing.license_service.ClientLicenseService` (used
+        by the Attendance Client) both go through
+        :mod:`licensing.license_key` -- there is no second encoder or
+        decoder anywhere in the codebase.
+        """
+        import ast
+
+        license_key_source = (Path(__file__).resolve().parent.parent / "licensing" / "license_key.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(license_key_source)
+        format_tags = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith("AMS")
+        }
+        assert format_tags == {"AMS1"}

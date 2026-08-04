@@ -7,11 +7,14 @@ company-scoped — it is the tenant boundary that scoping is relative to.
 
 Adding a new company therefore never requires a code change: it is a
 single ``INSERT`` into this table (plus, typically, seeding a default
-:class:`~models.role.Role` set and an initial
-:class:`~models.license.License` — both service-layer concerns handled
-in later files), after which every existing repository and service
-already filters by ``company_id`` and works for the new tenant
-unmodified.
+:class:`~models.role.Role` set), after which every existing repository
+and service already filters by ``company_id`` and works for the new
+tenant unmodified.
+
+Licensing for the whole installation is handled separately, outside
+this multi-tenant schema entirely — see :mod:`licensing` (the shared
+machine-locked activation library both this application and the
+vendor's Developer Suite use) rather than a per-``Company`` row here.
 """
 
 from __future__ import annotations
@@ -43,9 +46,6 @@ class Company(BaseModel):
             service layer) regardless of any individual license's
             validity.
         branches: This company's :class:`~models.branch.Branch` records.
-        licenses: This company's :class:`~models.license.License`
-            history (see that module for why more than one row may
-            exist).
     """
 
     name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
@@ -60,23 +60,6 @@ class Company(BaseModel):
     branches: Mapped[list["Branch"]] = relationship(  # noqa: F821
         "Branch", back_populates="company"
     )
-    licenses: Mapped[list["License"]] = relationship(  # noqa: F821
-        "License", back_populates="company"
-    )
-
-    @property
-    def current_license(self) -> "License | None":  # noqa: F821
-        """The company's currently active license, if any.
-
-        Returns the first :class:`~models.license.License` in
-        :attr:`licenses` with ``is_active`` set; returns ``None`` if the
-        company has no active license (e.g. expired trial not yet
-        renewed).
-        """
-        for license_ in self.licenses:
-            if license_.is_active:
-                return license_
-        return None
 
     def __repr__(self) -> str:
         """Return a concise, debugger-friendly representation."""

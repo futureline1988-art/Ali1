@@ -22,7 +22,6 @@ from models.device import Device
 from models.employee import Employee
 from models.holiday import Holiday
 from models.leave import LeavePolicy, LeaveRequest
-from models.license import License
 from models.permission import Permission
 from models.role import Role
 from models.shift import EmployeeShiftAssignment, Shift
@@ -48,7 +47,6 @@ __all__ = [
     "Holiday",
     "LeavePolicy",
     "LeaveRequest",
-    "License",
     "Permission",
     "Role",
     "Shift",
