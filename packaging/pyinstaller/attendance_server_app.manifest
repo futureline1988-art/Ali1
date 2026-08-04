@@ -22,7 +22,7 @@
   </trustInfo>
 
   <!-- No DPI-awareness/windowSettings block here, unlike the two
-       desktop applications' manifests -- this is a console-mode
+       desktop applications' manifests: this is a console-mode
        server process with no window of its own to render. -->
   <asmv3:application>
     <asmv3:windowsSettings xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">
