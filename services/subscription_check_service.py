@@ -1,4 +1,4 @@
-"""Validates this installation's subscription with the Attendance Server at startup/login.
+"""Validates this installation's subscription with the Attendance Server at login.
 
 The server-managed replacement for the retired file-based license
 system (see :mod:`licensing`, being removed): rather than verifying a
@@ -8,13 +8,19 @@ and caches the last *server-confirmed* answer locally (see
 :mod:`models.subscription_state`) purely so a temporarily unreachable
 server does not lock a paying customer out.
 
-Also owns this installation's fully-automatic first-run enrollment
-(see :meth:`SubscriptionCheckService._auto_enroll`): if not yet
-enrolled, :meth:`check` self-registers with only a configured
-``company_name`` — no admin bearer token, no manual linking anywhere
-in the Developer Suite. A freshly-registered installation falls
-straight through to a live status check in the same call, so "register
--> allowed" is one seamless step from the caller's point of view.
+Also owns this installation's fully-automatic, login-driven first-time
+enrollment (see :meth:`check_for_login`/:meth:`_auto_enroll`): a fresh
+installation has no way to know its own company in advance in a
+multi-tenant, central-server deployment, so no company is ever
+preconfigured on the client. Instead, the very first successful local
+username/password login (see :mod:`ui.login_window` /
+:class:`main.ApplicationController`) is what tells this installation
+which company it belongs to — :meth:`check_for_login` self-registers
+this device against that company's subscription right then, with no
+admin bearer token and no manual linking anywhere in the Developer
+Suite, and permanently binds this device to that company (see
+:meth:`~repositories.sync_repository.ClientSyncCredentialRepository.set_bound_company`)
+so every future login skips this step entirely.
 
 Grace period: if the server cannot be reached, this installation is
 allowed to keep running for a bounded window (:data:`DEFAULT_GRACE_PERIOD`,
@@ -34,6 +40,7 @@ from enum import Enum
 from database.database import Database
 from models.subscription_state import ClientSubscriptionState
 from repositories.subscription_state_repository import ClientSubscriptionStateRepository
+from repositories.sync_repository import ClientSyncCredentialRepository
 from sync.client import (
     DeviceRegistrationRejectedError,
     MaxDevicesReachedError,
@@ -101,7 +108,6 @@ class SubscriptionCheckService:
         database: Database,
         sync_coordinator: ClientSyncCoordinator,
         *,
-        company_name: str = "",
         device_name: str = "Attendance Client",
         grace_period: timedelta = DEFAULT_GRACE_PERIOD,
     ) -> None:
@@ -111,23 +117,16 @@ class SubscriptionCheckService:
             database: The Attendance Client's own database, where the
                 last server-confirmed status is cached.
             sync_coordinator: Sync coordinator, enrolled or not — if
-                not yet enrolled, :meth:`check` enrolls it
+                not yet enrolled, :meth:`check_for_login` enrolls it
                 automatically (see :meth:`_auto_enroll`).
-            company_name: This installation's configured company name
-                (``config.sync.company_name``), used only for
-                automatic first-run enrollment. Left empty, a
-                not-yet-enrolled installation simply reports
-                :attr:`SubscriptionCheckOutcome.NOT_REGISTERED` without
-                contacting the server.
             device_name: A human-readable label for this installation,
-                used only for automatic first-run enrollment.
+                used only for automatic first-time enrollment.
             grace_period: How long a cached, previously-confirmed
                 status remains valid once the server becomes
                 unreachable.
         """
         self._database = database
         self._sync_coordinator = sync_coordinator
-        self._company_name = company_name
         self._device_name = device_name
         self._grace_period = grace_period
 
@@ -142,19 +141,26 @@ class SubscriptionCheckService:
             return ClientSubscriptionStateRepository(session).get()
 
     def check(self) -> SubscriptionCheckResult:
-        """Check this installation's subscription status.
+        """Check this installation's already-established subscription status.
 
-        If not yet enrolled, first attempts fully-automatic
-        self-registration (see :meth:`_auto_enroll`) — on success,
-        falls straight through to a live status check below in the
-        same call. Otherwise always reaches out to the server first;
-        only falls back to the cached, last-confirmed status (subject
-        to the grace period) if the server cannot be reached at all.
+        Assumes this device has already enrolled — if not, returns
+        :attr:`SubscriptionCheckOutcome.NOT_REGISTERED` immediately
+        without contacting the server (see :meth:`check_for_login` for
+        the first-time, login-driven enrollment step). Otherwise always
+        reaches out to the server first; only falls back to the
+        cached, last-confirmed status (subject to the grace period) if
+        the server cannot be reached at all.
         """
         if not self._sync_coordinator.is_enrolled():
-            enrollment_failure = self._auto_enroll()
-            if enrollment_failure is not None:
-                return enrollment_failure
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
+                allowed=False,
+                message_ar="لم يتم تسجيل هذا الجهاز بعد. يرجى تسجيل الدخول أولاً لإتمام التسجيل التلقائي.",
+                message_en=(
+                    "This installation has not registered yet. Please log in first to "
+                    "complete automatic registration."
+                ),
+            )
 
         try:
             status = self._sync_coordinator.get_subscription_status()
@@ -172,29 +178,72 @@ class SubscriptionCheckService:
 
         return self._result_from_live_status(status)
 
-    def _auto_enroll(self) -> SubscriptionCheckResult | None:
-        """Attempt fully-automatic first-run self-registration.
+    def check_for_login(self, *, company_id: int, company_name: str) -> SubscriptionCheckResult:
+        """Check (and, the first time, perform) this device's enrollment for a just-authenticated login.
+
+        This is what actually decides whether a user who just typed a
+        correct local username/password may proceed past the login
+        screen (see :mod:`ui.login_window` / ``main.ApplicationController``)
+        — a new device cannot be expected to already know its company
+        in a multi-tenant, central-server deployment, so no company is
+        ever preconfigured on the client; the authenticated login
+        itself is what establishes it.
+
+        If this device has never been bound to a company before (a
+        brand-new installation, or one whose previous enrollment
+        attempt failed — e.g. no subscription existed yet for this
+        company), self-registers this device to ``company_name``'s
+        active subscription now. On success, this device is
+        permanently bound to ``company_id`` (see
+        :meth:`~repositories.sync_repository.ClientSyncCredentialRepository.set_bound_company`)
+        — every future call to this method, or to :meth:`check`,
+        assumes that company from then on; the login screen itself
+        stops offering a company choice too (see
+        :meth:`~ui.login_window.LoginWindow._populate_companies`).
+
+        If this device is already bound to a company, ``company_id``/
+        ``company_name`` are ignored and this is equivalent to
+        :meth:`check`.
+
+        Args:
+            company_id: The local :class:`~models.company.Company` id
+                the user just authenticated into.
+            company_name: That company's display name — the exact
+                ``Subscription.company_name`` to register against, the
+                first time only.
+        """
+        with self._database.session_scope() as session:
+            already_bound = ClientSyncCredentialRepository(session).get_bound_company_id() is not None
+        if already_bound:
+            return self.check()
+
+        if not company_name:
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
+                allowed=False,
+                message_ar="تعذر تحديد الشركة لهذا الحساب؛ يتعذر التسجيل التلقائي.",
+                message_en="Could not determine this account's company; automatic registration cannot proceed.",
+            )
+
+        if not self._sync_coordinator.is_enrolled():
+            enrollment_failure = self._auto_enroll(company_name)
+            if enrollment_failure is not None:
+                return enrollment_failure
+            with self._database.session_scope() as session:
+                ClientSyncCredentialRepository(session).set_bound_company(company_id)
+
+        return self.check()
+
+    def _auto_enroll(self, company_name: str) -> SubscriptionCheckResult | None:
+        """Attempt fully-automatic self-registration to ``company_name``'s subscription.
 
         Returns:
             ``None`` on success (the caller falls through to a live
             status check); a blocking :class:`SubscriptionCheckResult`
             explaining why not, otherwise.
         """
-        if not self._company_name:
-            return SubscriptionCheckResult(
-                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
-                allowed=False,
-                message_ar=(
-                    "لم يتم إعداد اسم الشركة لهذا الجهاز؛ يتعذر التسجيل التلقائي. "
-                    "يرجى التحقق من إعدادات التثبيت."
-                ),
-                message_en=(
-                    "No company name is configured for this installation; automatic "
-                    "registration cannot proceed. Please check the installation settings."
-                ),
-            )
         try:
-            self._sync_coordinator.self_enroll(name=self._device_name, company_name=self._company_name)
+            self._sync_coordinator.self_enroll(name=self._device_name, company_name=company_name)
             return None
         except MaxDevicesReachedError:
             return SubscriptionCheckResult(
@@ -202,7 +251,7 @@ class SubscriptionCheckService:
                 allowed=False,
                 message_ar="تم الوصول إلى الحد الأقصى للأجهزة المسموح بها. (Maximum allowed devices reached.)",
                 message_en="Maximum allowed devices reached.",
-                company_name=self._company_name,
+                company_name=company_name,
             )
         except DeviceRegistrationRejectedError:
             return SubscriptionCheckResult(
@@ -212,7 +261,7 @@ class SubscriptionCheckService:
                     "لا يوجد اشتراك نشط لهذه الشركة على الخادم. يرجى التواصل مع مزوّد الخدمة."
                 ),
                 message_en="No active subscription exists for this company. Please contact your provider.",
-                company_name=self._company_name,
+                company_name=company_name,
             )
         except SyncClientError:
             return SubscriptionCheckResult(
@@ -220,7 +269,7 @@ class SubscriptionCheckService:
                 allowed=False,
                 message_ar="تعذر الاتصال بخادم الحضور لتسجيل هذا الجهاز تلقائيًا.",
                 message_en="Could not reach the Attendance Server to automatically register this installation.",
-                company_name=self._company_name,
+                company_name=company_name,
             )
 
     def _result_from_live_status(self, status: SubscriptionStatusResult) -> SubscriptionCheckResult:

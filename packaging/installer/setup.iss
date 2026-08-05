@@ -12,7 +12,7 @@
 ; ==============================================================================
 
 #define MyAppName "Attendance Management System"
-#define MyAppVersion "1.2.1"
+#define MyAppVersion "1.2.2"
 #define MyAppPublisher "Attendance Systems"
 #define MyAppExeName "AttendanceManagementSystem.exe"
 #define MyAppDataFolder "AttendanceManagementSystem"

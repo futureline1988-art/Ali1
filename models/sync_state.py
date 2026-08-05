@@ -59,6 +59,21 @@ class ClientSyncCredential(Base):
         server_url: The Attendance Server base URL this credential was
             issued by.
         registered_at: When this installation enrolled.
+        bound_company_id: The local :class:`~models.company.Company`
+            id this device was permanently bound to, the first time a
+            login at that company drove this installation's
+            first-ever enrollment (see
+            :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`).
+            ``None`` before that first successful login-driven
+            enrollment — once set, the login screen stops offering a
+            company choice at all (see
+            :meth:`~ui.login_window.LoginWindow._populate_companies`),
+            since this application's central-server model is one
+            device permanently serving one company. Not declared as a
+            foreign key: like :attr:`~models.subscription_state.ClientSubscriptionState.company_name`,
+            this is a plain reference into business data from this
+            infrastructure-bookkeeping table, not a joinable
+            relationship this package ever navigates.
     """
 
     __tablename__ = "client_sync_credential"
@@ -68,6 +83,7 @@ class ClientSyncCredential(Base):
     api_key: Mapped[str] = mapped_column(EncryptedString, nullable=False)
     server_url: Mapped[str] = mapped_column(String(500), nullable=False)
     registered_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=_utc_now)
+    bound_company_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ClientSyncCursor(Base):

@@ -1,4 +1,4 @@
-"""Subscription blocked screen: shown at startup whenever the subscription check disallows access.
+"""Subscription blocked screen: shown after login whenever the subscription/enrollment check disallows access.
 
 The server-managed replacement for the retired
 :class:`~ui.license_window.LicenseActivationWindow`. Unlike that
@@ -8,6 +8,12 @@ created, renewed, suspended, or reactivated from the Developer Suite
 screen only displays the clear reason access was denied (e.g.
 "Subscription expired", "Company suspended", "Maximum devices
 reached") and offers a "Retry" button to re-check with the server.
+
+Shown by ``main.ApplicationController`` right after a *successful*
+local username/password login whose company-level subscription/device
+-enrollment check then failed — never before login, since a fresh
+device has no way to know its company until a user actually logs in
+(see :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`).
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from services.subscription_check_service import SubscriptionCheckResult
 from ui.widgets import Card, make_heading_label, make_primary_button, make_status_label
@@ -25,14 +31,18 @@ class SubscriptionBlockedWindow(QWidget):
     """The subscription-blocked screen.
 
     Emits :attr:`passed` once a re-check finds this installation
-    allowed to proceed; the composition root (``main.py``) is
-    responsible for closing this window and continuing startup in
-    response. Closing this window *without* passing quits the whole
-    application - there is nothing else to show.
+    allowed to proceed, or :attr:`dismissed` if the user closes this
+    window without that happening — the composition root (``main.py``)
+    is responsible, in either case, for closing this window and
+    returning to the login screen (or, on :attr:`passed`, continuing
+    into the main window) in response.
     """
 
     passed = Signal()
     """Emitted once a re-check allows this installation to proceed."""
+
+    dismissed = Signal()
+    """Emitted if this window is closed without a re-check ever passing."""
 
     def __init__(
         self,
@@ -88,7 +98,7 @@ class SubscriptionBlockedWindow(QWidget):
         self.show_result(result.message_ar)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        """Quit the whole application if this window is closed without passing.
+        """Emit :attr:`dismissed` if this window is closed without passing.
 
         The composition root closes this window itself right after a
         successful re-check (see ``main.py``), which must not be
@@ -99,6 +109,4 @@ class SubscriptionBlockedWindow(QWidget):
         """
         super().closeEvent(event)
         if not self._did_pass:
-            app = QApplication.instance()
-            if app is not None:
-                app.quit()
+            self.dismissed.emit()

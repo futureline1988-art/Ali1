@@ -449,6 +449,7 @@ class TestSubscriptionCheckServiceEndToEnd:
 
         assert result.allowed is False
         assert result.outcome is SubscriptionCheckOutcome.NOT_REGISTERED
+        assert coordinator.is_enrolled() is False
 
     def test_active_subscription_allows_access_and_caches_the_result(
         self, client_database: Database, running_server_url: str, admin_bearer_token: str
@@ -735,23 +736,47 @@ class TestAutomaticEnrollmentEndToEnd:
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         assert coordinator.is_enrolled() is False
 
-        service = SubscriptionCheckService(
-            client_database, coordinator, company_name="Acme Co", device_name="New PC"
-        )
-        result = service.check()
+        service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
+        result = service.check_for_login(company_id=1, company_name="Acme Co")
 
         assert result.allowed is True
         assert result.outcome is SubscriptionCheckOutcome.VALID
         assert result.company_name == "Acme Co"
         assert coordinator.is_enrolled() is True
 
-    def test_no_company_name_configured_blocks_without_contacting_the_server(
+    def test_second_login_does_not_ask_or_re_register_and_just_checks(
+        self, client_database: Database, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        """Future logins must not ask for the company again — see check_for_login's docstring."""
+        _create_subscription_via_admin_api(running_server_url, admin_bearer_token, company_name="Acme Co")
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
+        first_result = service.check_for_login(company_id=1, company_name="Acme Co")
+        assert first_result.allowed is True
+
+        with client_database.session_scope() as session:
+            device_public_id_after_first_login = ClientSyncCredentialRepository(session).get().device_public_id
+
+        # A different (bogus) company_id/company_name this time -- ignored,
+        # since this device is already bound; it must not attempt to
+        # re-register or change which company it belongs to.
+        second_result = service.check_for_login(company_id=999, company_name="Some Other Co")
+
+        assert second_result.allowed is True
+        assert second_result.outcome is SubscriptionCheckOutcome.VALID
+        assert second_result.company_name == "Acme Co"
+        with client_database.session_scope() as session:
+            credential_repo = ClientSyncCredentialRepository(session)
+            assert credential_repo.get().device_public_id == device_public_id_after_first_login
+            assert credential_repo.get_bound_company_id() == 1
+
+    def test_no_company_resolved_blocks_without_contacting_the_server(
         self, client_database: Database, running_server_url: str
     ) -> None:
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
-        service = SubscriptionCheckService(client_database, coordinator, company_name="")
+        service = SubscriptionCheckService(client_database, coordinator)
 
-        result = service.check()
+        result = service.check_for_login(company_id=1, company_name="")
 
         assert result.allowed is False
         assert result.outcome is SubscriptionCheckOutcome.NOT_REGISTERED
@@ -761,9 +786,9 @@ class TestAutomaticEnrollmentEndToEnd:
         self, client_database: Database, running_server_url: str
     ) -> None:
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
-        service = SubscriptionCheckService(client_database, coordinator, company_name="Nonexistent Co")
+        service = SubscriptionCheckService(client_database, coordinator)
 
-        result = service.check()
+        result = service.check_for_login(company_id=1, company_name="Nonexistent Co")
 
         assert result.allowed is False
         assert result.outcome is SubscriptionCheckOutcome.NO_SUBSCRIPTION_FOR_COMPANY
@@ -779,23 +804,17 @@ class TestAutomaticEnrollmentEndToEnd:
         first_database = Database(DatabaseConfig(sqlite_path=tmp_path / "first.db"))
         first_database.initialize()
         first_service = SubscriptionCheckService(
-            first_database,
-            ClientSyncCoordinator(first_database, running_server_url),
-            company_name="Acme Co",
-            device_name="PC 1",
+            first_database, ClientSyncCoordinator(first_database, running_server_url), device_name="PC 1"
         )
 
         second_database = Database(DatabaseConfig(sqlite_path=tmp_path / "second.db"))
         second_database.initialize()
         second_service = SubscriptionCheckService(
-            second_database,
-            ClientSyncCoordinator(second_database, running_server_url),
-            company_name="Acme Co",
-            device_name="PC 2",
+            second_database, ClientSyncCoordinator(second_database, running_server_url), device_name="PC 2"
         )
 
-        first_result = first_service.check()
-        second_result = second_service.check()
+        first_result = first_service.check_for_login(company_id=1, company_name="Acme Co")
+        second_result = second_service.check_for_login(company_id=1, company_name="Acme Co")
 
         assert first_result.allowed is True
         assert second_result.allowed is True
@@ -813,22 +832,16 @@ class TestAutomaticEnrollmentEndToEnd:
         first_database = Database(DatabaseConfig(sqlite_path=tmp_path / "first.db"))
         first_database.initialize()
         first_service = SubscriptionCheckService(
-            first_database,
-            ClientSyncCoordinator(first_database, running_server_url),
-            company_name="Acme Co",
-            device_name="PC 1",
+            first_database, ClientSyncCoordinator(first_database, running_server_url), device_name="PC 1"
         )
-        assert first_service.check().allowed is True
+        assert first_service.check_for_login(company_id=1, company_name="Acme Co").allowed is True
 
         second_database = Database(DatabaseConfig(sqlite_path=tmp_path / "second.db"))
         second_database.initialize()
         second_service = SubscriptionCheckService(
-            second_database,
-            ClientSyncCoordinator(second_database, running_server_url),
-            company_name="Acme Co",
-            device_name="PC 2",
+            second_database, ClientSyncCoordinator(second_database, running_server_url), device_name="PC 2"
         )
-        second_result = second_service.check()
+        second_result = second_service.check_for_login(company_id=1, company_name="Acme Co")
 
         assert second_result.allowed is False
         assert second_result.outcome is SubscriptionCheckOutcome.MAX_DEVICES_REACHED
@@ -844,10 +857,8 @@ class TestAutomaticEnrollmentEndToEnd:
             running_server_url, admin_bearer_token, company_name="Acme Co"
         )
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
-        service = SubscriptionCheckService(
-            client_database, coordinator, company_name="Acme Co", device_name="New PC"
-        )
-        assert service.check().allowed is True
+        service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
+        assert service.check_for_login(company_id=1, company_name="Acme Co").allowed is True
 
         _patch_subscription_via_admin_api(
             running_server_url, admin_bearer_token, subscription["id"], action="suspend"
@@ -865,10 +876,9 @@ class TestAutomaticEnrollmentEndToEnd:
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         coordinator.enroll(admin_bearer_token=admin_bearer_token, name="Legacy Client", company_name="Acme Co")
 
-        # No company_name configured for auto-enrollment -- irrelevant,
-        # since this installation is already enrolled and check() must
-        # never attempt to re-register it.
-        service = SubscriptionCheckService(client_database, coordinator, company_name="")
+        # Never bound via a login-driven check_for_login call -- check()
+        # must still work fine for this already-enrolled installation.
+        service = SubscriptionCheckService(client_database, coordinator)
         result = service.check()
 
         assert result.allowed is True

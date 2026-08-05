@@ -19,6 +19,7 @@ from config import get_config
 from database.database import DatabaseConnectionError, get_database, session_scope
 from models.permission import Permission
 from models.update_state import ClientUpdateStatus
+from repositories.company_repository import CompanyRepository
 from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.permission_repository import PermissionRepository
 from repositories.update_state_repository import ClientUpdateStateRepository
@@ -153,6 +154,19 @@ def _install_exception_hook() -> None:
     sys.excepthook = _log_uncaught
 
 
+def _local_company_name(company_id: int) -> str:
+    """Look up a local company's display name, for :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`.
+
+    A plain local lookup (this installation's own database already
+    has the company row a user just authenticated into) — never
+    ``None``/missing in practice, since ``company_id`` always comes
+    from a login that just succeeded against that exact row.
+    """
+    with session_scope() as session:
+        company = CompanyRepository(session).get_by_id(company_id)
+        return company.name if company is not None else ""
+
+
 def _show_remote_configuration_restart_notice(parent, company_id: int) -> None:
     """Show and clear a pending "restart required" notice for this company, if any.
 
@@ -243,18 +257,31 @@ def _show_update_notice_if_needed(parent) -> None:
 class ApplicationController:
     """Owns the login <-> main-window lifecycle for one running process.
 
-    A thin state machine with exactly two states: showing the login
-    window, or showing the main window for an authenticated session.
-    Both windows share the same :class:`~utils.security.SessionManager`
-    instance, so the idle-timeout clock main window polls actually
-    reflects the session started at login.
+    A thin state machine with three states: showing the login window,
+    showing the post-login subscription-blocked screen, or showing the
+    main window for an authenticated session. Every window shares the
+    same :class:`~utils.security.SessionManager` instance, so the
+    idle-timeout clock the main window polls actually reflects the
+    session started at login.
     """
 
-    def __init__(self) -> None:
-        """Create the controller and show the initial login window."""
+    def __init__(self, subscription_check_service: SubscriptionCheckService) -> None:
+        """Create the controller and show the initial login window.
+
+        Args:
+            subscription_check_service: Performs this device's
+                subscription/enrollment check right after each
+                successful local login (see
+                :meth:`_on_login_successful`) — this application has
+                no preconfigured company, so this is the only place
+                that check ever runs.
+        """
         self._session_manager = SessionManager()
+        self._subscription_check_service = subscription_check_service
         self._main_window: MainWindow | None = None
         self._login_window: LoginWindow | None = None
+        self._blocked_window: SubscriptionBlockedWindow | None = None
+        self._pending_login: tuple[dict, int] | None = None
         self._show_login_window()
 
     def _show_login_window(self) -> None:
@@ -268,7 +295,65 @@ class ApplicationController:
         self._login_window.show()
 
     def _on_login_successful(self, user: dict, company_id: int) -> None:
-        """Replace the login window with a fully-wired main window.
+        """Run this device's subscription/enrollment check, then proceed or block.
+
+        A new device cannot be expected to already know its company in
+        this application's multi-tenant, central-server deployment —
+        this successful local login is what establishes it (see
+        :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`).
+
+        Args:
+            user: The authenticated user's data.
+            company_id: The company they logged into.
+        """
+        company_name = _local_company_name(company_id)
+        result = self._subscription_check_service.check_for_login(
+            company_id=company_id, company_name=company_name
+        )
+        if not result.allowed:
+            self._pending_login = (user, company_id)
+            self._perform_logout()
+            if self._login_window is not None:
+                self._login_window.close()
+                self._login_window = None
+            self._show_blocked_window(result.message_ar)
+            return
+
+        self._enter_main_window(user, company_id)
+
+    def _show_blocked_window(self, message_ar: str) -> None:
+        """Show the subscription-blocked screen for the login just denied."""
+        blocked = SubscriptionBlockedWindow(recheck=self._retry_pending_login)
+        blocked.show_result(message_ar)
+        blocked.passed.connect(self._on_blocked_passed)
+        blocked.dismissed.connect(self._on_blocked_dismissed)
+        self._blocked_window = blocked
+        blocked.show()
+
+    def _retry_pending_login(self):
+        """Re-run the subscription/enrollment check for the pending denied login."""
+        user, company_id = self._pending_login
+        company_name = _local_company_name(company_id)
+        return self._subscription_check_service.check_for_login(
+            company_id=company_id, company_name=company_name
+        )
+
+    def _on_blocked_passed(self) -> None:
+        """A retry succeeded: close the blocked screen and proceed into the app."""
+        self._blocked_window.close()
+        self._blocked_window = None
+        user, company_id = self._pending_login
+        self._pending_login = None
+        self._enter_main_window(user, company_id)
+
+    def _on_blocked_dismissed(self) -> None:
+        """The blocked screen was closed without a retry succeeding: return to login."""
+        self._blocked_window = None
+        self._pending_login = None
+        self._show_login_window()
+
+    def _enter_main_window(self, user: dict, company_id: int) -> None:
+        """Replace the login/blocked window with a fully-wired main window.
 
         Args:
             user: The authenticated user's data.
@@ -388,7 +473,14 @@ def main() -> int:
     sync_scheduler_holder: dict[str, ClientSyncSchedulerService] = {}
 
     def _launch_app() -> None:
-        """Run the rest of startup: database, subscription check, splash, main app."""
+        """Run the rest of startup: database, background sync, splash, login screen.
+
+        No subscription/enrollment check happens here — a fresh
+        installation has no company to check yet in this application's
+        multi-tenant, central-server deployment; that only gets
+        established once a user actually logs in (see
+        :class:`ApplicationController`).
+        """
         database = get_database()
         try:
             database.initialize()
@@ -406,65 +498,42 @@ def main() -> int:
 
         sync_coordinator = ClientSyncCoordinator(database, config.sync.server_url)
         subscription_check_service = SubscriptionCheckService(
-            database,
-            sync_coordinator,
-            company_name=config.sync.company_name,
-            device_name=config.sync.device_name,
+            database, sync_coordinator, device_name=config.sync.device_name
         )
 
-        def _continue_after_subscription_check() -> None:
-            update_checker = (
-                UpdateCheckService(
-                    database,
-                    config.sync.server_url,
-                    current_version=config.app_version,
-                    package_type=config.updates.package_type,
-                    downloads_dir=config.updates.downloads_dir,
-                    public_key=load_public_key(),
-                )
-                if config.updates.enabled
-                else None
-            )
-            sync_scheduler = ClientSyncSchedulerService(
-                sync_coordinator,
+        # Safe to start before this device has enrolled -- both the sync
+        # cycle and (transitively) the update check are no-ops until
+        # ClientSyncCoordinator.is_enrolled() is True (see
+        # ClientSyncSchedulerService._run_cycle), which now only happens
+        # once a user's first login establishes this device's company.
+        update_checker = (
+            UpdateCheckService(
                 database,
-                sync_enabled=config.sync.enabled,
-                sync_interval_seconds=config.sync.interval_seconds,
-                update_check_service=update_checker,
+                config.sync.server_url,
+                current_version=config.app_version,
+                package_type=config.updates.package_type,
+                downloads_dir=config.updates.downloads_dir,
+                public_key=load_public_key(),
             )
-            sync_scheduler.start()
-            sync_scheduler_holder["scheduler"] = sync_scheduler
-
-            splash = build_splash_screen(app_name=config.app_name_ar)
-            splash.show()
-            app.processEvents()
-
-            run_state["controller"] = ApplicationController()
-            QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
-
-        result = subscription_check_service.check()
-        if result.allowed:
-            _continue_after_subscription_check()
-            return
-
-        logger.warning(
-            "Subscription check blocked startup: {outcome} - {message}",
-            outcome=result.outcome.value,
-            message=result.message_en,
+            if config.updates.enabled
+            else None
         )
-        # subscription_check_service.check() itself re-attempts automatic
-        # enrollment on every call (see SubscriptionCheckService._auto_enroll),
-        # so a straight re-check is also the correct retry action.
-        blocked_window = SubscriptionBlockedWindow(recheck=subscription_check_service.check)
-        blocked_window.show_result(result.message_ar)
+        sync_scheduler = ClientSyncSchedulerService(
+            sync_coordinator,
+            database,
+            sync_enabled=config.sync.enabled,
+            sync_interval_seconds=config.sync.interval_seconds,
+            update_check_service=update_checker,
+        )
+        sync_scheduler.start()
+        sync_scheduler_holder["scheduler"] = sync_scheduler
 
-        def _on_subscription_passed() -> None:
-            blocked_window.close()
-            _continue_after_subscription_check()
+        splash = build_splash_screen(app_name=config.app_name_ar)
+        splash.show()
+        app.processEvents()
 
-        blocked_window.passed.connect(_on_subscription_passed)
-        blocked_window.show()
-        run_state["subscription_blocked_window"] = blocked_window
+        run_state["controller"] = ApplicationController(subscription_check_service)
+        QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
 
     QTimer.singleShot(0, _launch_app)
 

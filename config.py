@@ -429,21 +429,20 @@ class SyncConfig:
     fields, since both applications talk to the same server through
     the same generic sync API.
 
-    ``company_name`` is also this installation's subscription identity
-    and the sole input its fully-automatic first-run enrollment needs
-    (see :mod:`services.subscription_check_service`): the exact
-    ``Subscription.company_name`` created for this customer in the
-    Developer Suite. No administrator token or manual device-to
-    -subscription linking is involved — a fresh installation
-    self-registers with only this value (see
-    :meth:`~sync.coordinator.ClientSyncCoordinator.self_enroll`).
+    No company is preconfigured here: this application serves multiple
+    companies from a single central Attendance Server, so a fresh
+    installation cannot know its company in advance. Instead, this
+    installation's company is established by its first successful
+    local login (see
+    :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`)
+    and then remembered locally — no administrator token or manual
+    device-to-subscription linking is involved either way.
     """
 
     enabled: bool = True
     server_url: str = "http://127.0.0.1:8000"
     interval_seconds: int = 300
     device_name: str = "Attendance Client"
-    company_name: str = ""
 
     @classmethod
     def from_env(cls) -> "SyncConfig":
@@ -453,7 +452,6 @@ class SyncConfig:
             server_url=os.getenv("SYNC_ATTENDANCE_SERVER_URL", cls.server_url),
             interval_seconds=_env_int("SYNC_INTERVAL_SECONDS", 300),
             device_name=os.getenv("SYNC_DEVICE_NAME", cls.device_name),
-            company_name=os.getenv("SYNC_COMPANY_NAME", ""),
         )
 
 
@@ -536,7 +534,7 @@ class AppConfig:
 
     app_name: str = "Attendance Management System"
     app_name_ar: str = "نظام إدارة الحضور والانصراف"
-    app_version: str = "1.2.1"
+    app_version: str = "1.2.2"
     organization_name: str = "Attendance Systems"
     environment: Environment = Environment.PRODUCTION
 

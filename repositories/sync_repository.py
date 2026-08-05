@@ -64,6 +64,36 @@ class ClientSyncCredentialRepository:
         self.session.flush()
         return credential
 
+    def get_bound_company_id(self) -> int | None:
+        """Return this device's permanently bound local company id, or ``None`` if never bound.
+
+        See :meth:`set_bound_company`.
+        """
+        credential = self.get()
+        return credential.bound_company_id if credential is not None else None
+
+    def set_bound_company(self, company_id: int) -> None:
+        """Permanently bind this already-enrolled device to a local company.
+
+        Called once, right after this device's first-ever successful
+        login-driven self-registration completes (see
+        :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`)
+        — every future login skips the company picker (see
+        :meth:`~ui.login_window.LoginWindow._populate_companies`) and
+        every future subscription check assumes this company.
+
+        Raises:
+            RuntimeError: This device has not enrolled yet (no
+                credential row exists to bind).
+        """
+        credential = self.get()
+        if credential is None:
+            raise RuntimeError(
+                "Cannot bind a company before this installation has enrolled with the Attendance Server."
+            )
+        credential.bound_company_id = company_id
+        self.session.flush()
+
 
 class ClientSyncCursorRepository:
     """Data access for per-``entity_type`` pull cursors."""

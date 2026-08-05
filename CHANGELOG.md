@@ -3,6 +3,42 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 1.2.2] - 2026-08-05
+
+### Changed — Company is now established by the first login, not preconfigured
+
+The previous automatic-enrollment design (1.2.1) still required a
+`SYNC_COMPANY_NAME` value to be preconfigured on each installation
+before it could enroll — unworkable for a single central Attendance
+Server onboarding many different companies, since a freshly installed
+client has no way to already know which company it belongs to.
+
+- `config.py`'s `SyncConfig.company_name` / `SYNC_COMPANY_NAME` is
+  removed entirely. No company is ever preconfigured on the client.
+- The login screen's existing company picker + username/password form
+  is now also what establishes this installation's company: local
+  authentication happens first (unchanged), and only once it succeeds
+  does `SubscriptionCheckService.check_for_login` self-register this
+  device to the authenticated company's active subscription (if not
+  already enrolled) and permanently bind this device to that company.
+- The subscription/device-enrollment check no longer runs before the
+  login screen — it can't, since the company isn't known yet. It runs
+  once, immediately after a successful login, and denies access with a
+  clear message ("Maximum allowed devices reached.", "Subscription is
+  suspended/expired," etc.) if it fails, logging the session back out.
+- Once a device has completed this first-login enrollment, every
+  future login skips the company picker entirely — it's locked to the
+  bound company — and no re-registration is attempted; only a live
+  subscription status check runs, same as before.
+- `ClientSyncCredential` (the device's own local record of its
+  Attendance Server identity) gained a `bound_company_id` column
+  recording which local company a device was bound to.
+- `SubscriptionBlockedWindow` is now shown after a denied login
+  (previously: before any login, gating startup itself); closing it
+  without a successful retry returns to the login screen rather than
+  quitting the application, since there is always a login screen to
+  fall back to.
+
 ## [Client 1.2.1 / Developer Suite 1.1.1 / Server 1.1.1] - 2026-08-05
 
 ### Added — Fully automatic device enrollment

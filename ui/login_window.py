@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from controllers.auth_controller import AuthController
 from database.database import session_scope
+from repositories.sync_repository import ClientSyncCredentialRepository
 from services.company_service import CompanyService
 from ui.widgets import make_heading_label, make_primary_button, make_secondary_label
 from utils.security import SessionManager
@@ -47,6 +48,27 @@ def _load_active_companies() -> list[dict[str, Any]]:
         service = CompanyService(session)
         companies = service.list_companies(active_only=True)
         return [{"id": company.id, "name": company.name} for company in companies]
+
+
+def _load_bound_company() -> dict[str, Any] | None:
+    """Return this installation's permanently bound company, if any.
+
+    ``None`` before this installation's first-ever successful login
+    -driven enrollment (see
+    :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`,
+    driven by ``main.ApplicationController`` right after a successful
+    login) — from that point on, this device serves exactly one
+    company, so the picker never needs to ask again.
+    """
+    with session_scope() as session:
+        bound_company_id = ClientSyncCredentialRepository(session).get_bound_company_id()
+        if bound_company_id is None:
+            return None
+        service = CompanyService(session)
+        company = service.company_repo.get_by_id(bound_company_id)
+        if company is None:
+            return None
+        return {"id": company.id, "name": company.name}
 
 
 class LoginWindow(QWidget):
@@ -179,7 +201,24 @@ class LoginWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _populate_companies(self) -> None:
-        """Load active companies into :attr:`company_combo`."""
+        """Load :attr:`company_combo`.
+
+        If this installation has already been bound to a company by a
+        previous successful login (see :func:`_load_bound_company`),
+        the picker is locked to that one company — this application's
+        central-server model is one device permanently serving one
+        company, so future logins never ask again. Otherwise every
+        active company is offered, exactly like before this
+        installation ever enrolled.
+        """
+        bound = _load_bound_company()
+        if bound is not None:
+            self.company_combo.clear()
+            self.company_combo.addItem(bound["name"], userData=bound["id"])
+            self.company_combo.setEnabled(False)
+            self.login_button.setEnabled(True)
+            return
+
         companies = _load_active_companies()
         self.company_combo.clear()
         for company in companies:
