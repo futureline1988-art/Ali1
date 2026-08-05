@@ -32,7 +32,13 @@ from sqlalchemy.orm import Session
 
 from database.database import Database
 from repositories.sync_repository import ClientSyncCredentialRepository, ClientSyncCursorRepository
-from sync.client import SubscriptionStatusResult, SyncClient, register_device, self_register_device
+from sync.client import (
+    InitialAdminResult,
+    SubscriptionStatusResult,
+    SyncClient,
+    register_device,
+    self_register_device,
+)
 from sync.protocol import DeviceType
 
 
@@ -179,6 +185,24 @@ class ClientSyncCoordinator:
             client = self._build_client(session)
             try:
                 return client.get_subscription_status()
+            finally:
+                client.close()
+
+    def get_initial_admin(self) -> InitialAdminResult:
+        """Download this installation's company's initial administrator credential.
+
+        Raises:
+            DeviceNotEnrolledError: This installation has not enrolled
+                yet.
+            ~sync.client.SyncClientError: The server could not be
+                reached, rejected this device's credential, or
+                returned an unexpected error — see
+                :meth:`~sync.client.SyncClient.get_initial_admin`.
+        """
+        with self._database.session_scope() as session:
+            client = self._build_client(session)
+            try:
+                return client.get_initial_admin()
             finally:
                 client.close()
 

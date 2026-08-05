@@ -629,6 +629,11 @@ class TestZeroImpactOnOtherApplications:
         # was deleted) with no local replacement — subscriptions live only
         # on the Attendance Server (``subscriptions`` below), never in the
         # Developer Suite's own schema.
+        #
+        # ``initial_admin_accounts`` was added later still, by the
+        # initial-administrator-bootstrap migration (see
+        # server.models.initial_admin) — a genuine new table, not a Phase
+        # 15 regression, so it belongs in this snapshot going forward.
         expected_developer_suite_tables = {
             "customers", "remote_configurations", "theme_profiles",
             "print_profiles", "attendance_policy_profiles", "device_profiles", "backup_profiles",
@@ -642,7 +647,7 @@ class TestZeroImpactOnOtherApplications:
             "admin_accounts", "admin_audit_logs", "admin_password_reset_tokens", "admin_sessions",
             "change_records", "device_update_statuses", "entity_versions", "sync_devices",
             "sync_sequence", "update_audit_events", "update_packages", "update_rollbacks",
-            "update_targets", "update_versions", "subscriptions",
+            "update_targets", "update_versions", "subscriptions", "initial_admin_accounts",
         }
         assert set(ServerBase.metadata.tables) == expected_server_tables
 

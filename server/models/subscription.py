@@ -101,6 +101,19 @@ class Subscription(ServerBaseModel):
             entirely outside this server's own schema) -- surfaced to
             the Attendance Client's own user-creation flow as a limit
             to check locally, and to the Developer Suite for display.
+        support_phone_primary: This company's primary support phone
+            number, set from the Developer Suite and read-only from
+            every Attendance Client -- see
+            :func:`~server.api.routers.subscriptions.get_subscription_status`.
+            All support_* fields are optional; a company with none set
+            simply has no support information configured.
+        support_phone_secondary: Optional secondary support phone.
+        support_whatsapp: Optional WhatsApp contact number.
+        support_email: Optional support email address.
+        support_hours: Optional free-text support hours (e.g. "Sun-Thu
+            9am-5pm").
+        support_message: Optional free-text message shown alongside
+            the contact details (e.g. a greeting or escalation note).
     """
 
     company_name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
@@ -112,6 +125,13 @@ class Subscription(ServerBaseModel):
     )
     max_devices: Mapped[int] = mapped_column(Integer, nullable=False)
     max_users: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    support_phone_primary: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    support_phone_secondary: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    support_whatsapp: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    support_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    support_hours: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    support_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     @property
     def is_expired(self) -> bool:

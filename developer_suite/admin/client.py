@@ -307,6 +307,12 @@ class SubscriptionInfo:
     days_remaining: int
     device_count: int | None
     created_at: datetime
+    support_phone_primary: str | None = None
+    support_phone_secondary: str | None = None
+    support_whatsapp: str | None = None
+    support_email: str | None = None
+    support_hours: str | None = None
+    support_message: str | None = None
 
     @classmethod
     def from_json(cls, data: dict) -> "SubscriptionInfo":
@@ -325,7 +331,36 @@ class SubscriptionInfo:
             days_remaining=data["days_remaining"],
             device_count=data.get("device_count"),
             created_at=_parse_datetime(data["created_at"]),
+            support_phone_primary=data.get("support_phone_primary"),
+            support_phone_secondary=data.get("support_phone_secondary"),
+            support_whatsapp=data.get("support_whatsapp"),
+            support_email=data.get("support_email"),
+            support_hours=data.get("support_hours"),
+            support_message=data.get("support_message"),
         )
+
+
+@dataclass(frozen=True)
+class InitialAdminInfo:
+    """A subscription's initial Company Administrator, as returned by ``GET .../initial-admin``.
+
+    ``configured`` is ``False`` if the Developer Suite has not set one
+    yet for this subscription -- every other field is ``None`` in that
+    case. Never carries a password or its hash -- see
+    :mod:`server.services.initial_admin_service`'s own docstring for
+    why this endpoint deliberately omits it.
+    """
+
+    configured: bool
+    username: str | None = None
+    full_name: str | None = None
+
+    @classmethod
+    def from_json(cls, data: dict) -> "InitialAdminInfo":
+        """Parse a ``GET /api/v1/subscriptions/{id}/initial-admin`` response body."""
+        if not data.get("configured"):
+            return cls(configured=False)
+        return cls(configured=True, username=data["username"], full_name=data["full_name"])
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -788,6 +823,81 @@ class AdminApiClient:
             json={"max_users_unlimited": True},
         )
         return SubscriptionInfo.from_json(response.json())
+
+    def update_support_info(
+        self,
+        subscription_id: int,
+        *,
+        support_phone_primary: str | None = ...,
+        support_phone_secondary: str | None = ...,
+        support_whatsapp: str | None = ...,
+        support_email: str | None = ...,
+        support_hours: str | None = ...,
+        support_message: str | None = ...,
+    ) -> SubscriptionInfo:
+        """Set this company's Support Information, shown to its Attendance Clients.
+
+        Every field defaults to the ``...`` sentinel ("leave
+        unchanged") rather than ``None`` ("clear this field"), so a
+        caller can update just one field at a time -- see
+        :class:`~server.api.schemas.UpdateSupportInfoRequest`'s own
+        docstring for the same distinction server-side.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. 404).
+        """
+        fields = {
+            "support_phone_primary": support_phone_primary,
+            "support_phone_secondary": support_phone_secondary,
+            "support_whatsapp": support_whatsapp,
+            "support_email": support_email,
+            "support_hours": support_hours,
+            "support_message": support_message,
+        }
+        body = {key: value for key, value in fields.items() if value is not ...}
+        response = self._authenticated_request(
+            "PATCH", f"/api/v1/subscriptions/{subscription_id}/support-info", json=body
+        )
+        return SubscriptionInfo.from_json(response.json())
+
+    def set_initial_admin(
+        self, subscription_id: int, *, username: str, full_name: str, password: str
+    ) -> InitialAdminInfo:
+        """Create or replace a subscription's initial Company Administrator.
+
+        The only path an Attendance Client's very first administrator
+        account is ever created through -- see
+        :mod:`server.services.initial_admin_service`'s own docstring.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response (e.g. a
+                weak password, 422, or unknown subscription, 404).
+        """
+        response = self._authenticated_request(
+            "PUT",
+            f"/api/v1/subscriptions/{subscription_id}/initial-admin",
+            json={"username": username, "full_name": full_name, "password": password},
+        )
+        data = response.json()
+        return InitialAdminInfo(configured=True, username=data["username"], full_name=data["full_name"])
+
+    def get_initial_admin(self, subscription_id: int) -> InitialAdminInfo:
+        """Fetch a subscription's currently-configured initial administrator, if any.
+
+        Raises:
+            AdminApiNotConfiguredError: No admin token is available.
+            AdminApiConnectionError: The server could not be reached.
+            AdminApiAuthError: The token was rejected.
+            AdminApiServerError: Any other non-2xx response.
+        """
+        response = self._authenticated_get(f"/api/v1/subscriptions/{subscription_id}/initial-admin")
+        return InitialAdminInfo.from_json(response.json())
 
     def _unauthenticated_client(self) -> httpx.Client:
         return httpx.Client(base_url=self._base_url, transport=self._transport, timeout=self._timeout)

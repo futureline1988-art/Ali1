@@ -189,6 +189,19 @@ class SubscriptionService(BaseService):
             fields["max_users"] = max_users
         return self._update(subscription_id, **fields)
 
+    def update_support_info(self, subscription_id: int, **fields: object) -> Subscription:
+        """Set any subset of a subscription's ``support_*`` fields.
+
+        Only the fields actually passed are changed (mirrors
+        :meth:`~server.api.routers.subscriptions.update_support_info`'s
+        ``model_dump(exclude_unset=True)`` call) -- an explicit
+        ``None`` clears a field, an omitted one is left as-is.
+
+        Raises:
+            SubscriptionNotFoundError: No subscription with that id.
+        """
+        return self._update(subscription_id, **fields)
+
     def _update(self, subscription_id: int, **fields: object) -> Subscription:
         with self._session_scope() as session:
             repo = SubscriptionRepository(session)

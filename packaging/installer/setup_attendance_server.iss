@@ -22,7 +22,7 @@
 ; ==============================================================================
 
 #define MyAppName "Attendance Server"
-#define MyAppVersion "1.1.2"
+#define MyAppVersion "1.1.3"
 #define MyAppPublisher "Attendance Systems"
 #define MyAppExeName "AttendanceServer.exe"
 #define MyAppDataFolder "AttendanceServer"

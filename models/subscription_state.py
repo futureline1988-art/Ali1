@@ -47,6 +47,19 @@ class ClientSubscriptionState(Base):
             reported.
         max_devices: The subscription's device cap, as last reported.
         days_remaining: Days remaining until expiry, as last reported.
+        support_phone_primary: This company's Support Information, as
+            last reported (see
+            :class:`~server.models.subscription.Subscription`'s own
+            docstring) — cached here so it stays visible in
+            ``ui/support_info_dialog.py`` even while offline, and is
+            replaced wholesale on every successful check, exactly like
+            every other field on this row. All support_* fields are
+            individually optional.
+        support_phone_secondary: Optional secondary support phone.
+        support_whatsapp: Optional WhatsApp contact number.
+        support_email: Optional support email address.
+        support_hours: Optional free-text support hours.
+        support_message: Optional free-text message.
         checked_at: When this row was last refreshed by a successful
             server response — the grace period's baseline.
     """
@@ -59,4 +72,10 @@ class ClientSubscriptionState(Base):
     subscription_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     max_devices: Mapped[int | None] = mapped_column(Integer, nullable=True)
     days_remaining: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    support_phone_primary: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    support_phone_secondary: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    support_whatsapp: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    support_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    support_hours: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    support_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     checked_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=_utc_now)

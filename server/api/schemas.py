@@ -82,6 +82,43 @@ class UpdateSubscriptionRequest(BaseModel):
     )
 
 
+class UpdateSupportInfoRequest(BaseModel):
+    """PATCH /api/v1/subscriptions/{id}/support-info request body.
+
+    Every field is optional and independently nullable -- omitted
+    fields are left unchanged, fields explicitly set to ``null`` are
+    cleared. Developer-Suite-only; the Attendance Client only ever
+    reads these values back via ``GET /api/v1/subscription/status``,
+    see :mod:`server.models.subscription`'s own docstring.
+    """
+
+    support_phone_primary: str | None = Field(default=None, max_length=50)
+    support_phone_secondary: str | None = Field(default=None, max_length=50)
+    support_whatsapp: str | None = Field(default=None, max_length=50)
+    support_email: str | None = Field(default=None, max_length=255)
+    support_hours: str | None = Field(default=None, max_length=200)
+    support_message: str | None = Field(default=None, max_length=1000)
+
+
+class SetInitialAdminRequest(BaseModel):
+    """PUT /api/v1/subscriptions/{id}/initial-admin request body.
+
+    Developer-Suite-only -- see
+    :mod:`server.services.initial_admin_service`'s own docstring for
+    why the Attendance Client must never be able to call this. The
+    password is plaintext over the wire exactly once, from the
+    Developer Suite operator's own machine to this server, which
+    hashes it immediately (see
+    :meth:`~server.services.initial_admin_service.InitialAdminService.set_initial_admin`)
+    -- the Attendance Client later downloads only the resulting hash,
+    never this plaintext.
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+    full_name: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=1)
+
+
 class ChangeItemRequest(BaseModel):
     """One entry in a POST /api/v1/sync/push request body's ``changes`` list."""
 

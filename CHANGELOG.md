@@ -3,6 +3,54 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 1.2.4 / Developer Suite 1.1.3 / Server 1.1.3] - 2026-08-05
+
+### Changed — The Attendance Client can no longer create a company's first administrator
+
+Every prior enrollment design still let the Attendance Client itself
+decide who the very first user of a newly-onboarded company was. This
+moves that decision exclusively into the Developer Suite, and adds a
+Support Information section the vendor manages centrally:
+
+- **Attendance Server**: `Subscription` gains six optional
+  `support_*` columns (primary/secondary phone, WhatsApp, email,
+  hours, message) — Developer-Suite-writable only, via a new
+  `PATCH /api/v1/subscriptions/{id}/support-info`, and included in the
+  existing device-facing `GET /api/v1/subscription/status` so the
+  Attendance Client already gets them on every routine check. A new
+  `InitialAdminAccount` table (one row per subscription, unique) holds
+  a company's initial Company Administrator — created only via the new
+  admin-scoped `PUT /api/v1/subscriptions/{id}/initial-admin` (which
+  hashes the password immediately; the plaintext is never stored or
+  re-transmitted) and `GET .../initial-admin` to check what's
+  configured. The device-facing counterpart,
+  `GET /api/v1/subscription/initial-admin`, lets any device already
+  linked to that subscription download the same bcrypt hash — not
+  consumed on fetch, so multiple independent installations of the same
+  company can each bootstrap their own local admin account from it.
+- **Attendance Client**: on a company's first-ever enrollment (its
+  Company Code resolves, but no local `Company` exists here yet), the
+  login screen now creates that local company itself, downloads the
+  Developer-Suite-created initial administrator, and stores it as this
+  installation's first local user (`system_admin` role) using the
+  downloaded bcrypt hash directly — the plaintext the user just typed
+  is only ever checked against that stored hash, never used to create
+  it. If the Developer Suite has not configured an initial
+  administrator yet, enrollment is blocked with a clear message
+  instead of falling back to any local creation flow — there is none.
+  From that point on, the administrator creates every additional user
+  locally exactly as before. The login screen also gained a "Need
+  Help? / Contact Support" button opening a dialog with the company's
+  cached Support Information (or "No support information has been
+  configured." if none is set) — populated from the same subscription
+  check that already runs at every login/startup, so it stays visible
+  offline too.
+- **Developer Suite**: the Subscription Manager gained two toolbar
+  actions — "Set Initial Administrator" (username, full name,
+  password; shows what's currently configured, if anything) and
+  "Support Information" (all six fields, pre-filled with the
+  subscription's current values) — the only place either is ever set.
+
 ## [Client 1.2.3 / Developer Suite 1.1.2 / Server 1.1.2] - 2026-08-05
 
 ### Changed — Company Code replaces any company list or selection

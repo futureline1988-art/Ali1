@@ -17,11 +17,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from server.api.schemas import CreateSubscriptionRequest, UpdateSubscriptionRequest
+from server.api.schemas import (
+    CreateSubscriptionRequest,
+    SetInitialAdminRequest,
+    UpdateSubscriptionRequest,
+    UpdateSupportInfoRequest,
+)
 from server.auth.dependencies import AuthenticatedPrincipal, require_scope
 from server.auth.device_auth import get_authenticated_device
 from server.models.device import SyncDevice
 from server.models.subscription import SubscriptionStatus
+from server.services.initial_admin_service import (
+    InitialAdminPasswordPolicyError,
+    InitialAdminService,
+    SubscriptionNotFoundForInitialAdminError,
+)
 from server.services.subscription_service import (
     DuplicateCompanyNameError,
     SubscriptionNotFoundError,
@@ -29,6 +39,20 @@ from server.services.subscription_service import (
 )
 
 router = APIRouter(tags=["subscriptions"])
+
+_SUPPORT_INFO_FIELDS = (
+    "support_phone_primary",
+    "support_phone_secondary",
+    "support_whatsapp",
+    "support_email",
+    "support_hours",
+    "support_message",
+)
+
+
+def _support_info_dict(subscription) -> dict:
+    """The support-info subset of a subscription, shared by the admin and device-facing responses."""
+    return {field: getattr(subscription, field) for field in _SUPPORT_INFO_FIELDS}
 
 
 def _subscription_dict(subscription) -> dict:
@@ -133,6 +157,79 @@ def update_subscription(
     return data
 
 
+@router.patch("/api/v1/subscriptions/{subscription_id}/support-info")
+def update_support_info(
+    subscription_id: int,
+    body: UpdateSupportInfoRequest,
+    request: Request,
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin")),
+) -> dict:
+    """Set this company's Support Information, shown to its Attendance Clients.
+
+    Developer-Suite-only (see :class:`~server.api.schemas.UpdateSupportInfoRequest`'s
+    own docstring); the Attendance Client only ever reads these fields
+    back via ``GET /api/v1/subscription/status``.
+    """
+    subscription_service: SubscriptionService = request.app.state.container.subscription_service
+    subscription = subscription_service.get(subscription_id)
+    if subscription is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such subscription.")
+    updates = body.model_dump(exclude_unset=True)
+    subscription = subscription_service.update_support_info(subscription_id, **updates)
+    return _support_info_dict(subscription)
+
+
+# ---------------------------------------------------------------------------
+# Admin: the subscription's initial Company Administrator.
+# ---------------------------------------------------------------------------
+
+
+@router.put("/api/v1/subscriptions/{subscription_id}/initial-admin")
+def set_initial_admin(
+    subscription_id: int,
+    body: SetInitialAdminRequest,
+    request: Request,
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin")),
+) -> dict:
+    """Create or replace this subscription's initial Company Administrator.
+
+    Developer-Suite-only -- see :mod:`server.services.initial_admin_service`'s
+    own docstring for why the Attendance Client must never call this.
+    """
+    initial_admin_service: InitialAdminService = request.app.state.container.initial_admin_service
+    try:
+        account = initial_admin_service.set_initial_admin(
+            subscription_id,
+            username=body.username,
+            full_name=body.full_name,
+            password=body.password,
+        )
+    except SubscriptionNotFoundForInitialAdminError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InitialAdminPasswordPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"username": account.username, "full_name": account.full_name}
+
+
+@router.get("/api/v1/subscriptions/{subscription_id}/initial-admin")
+def get_initial_admin_admin(
+    subscription_id: int,
+    request: Request,
+    _principal: AuthenticatedPrincipal = Depends(require_scope("sync:admin", "sync:read")),
+) -> dict:
+    """Fetch this subscription's currently-configured initial administrator, if any.
+
+    Never returns the password hash -- this is for the Developer Suite
+    to display *whether* one is configured and its username/full name,
+    not to expose the credential itself.
+    """
+    initial_admin_service: InitialAdminService = request.app.state.container.initial_admin_service
+    account = initial_admin_service.get_for_subscription(subscription_id)
+    if account is None:
+        return {"configured": False}
+    return {"configured": True, "username": account.username, "full_name": account.full_name}
+
+
 # ---------------------------------------------------------------------------
 # Device-facing: this installation's own subscription status.
 # ---------------------------------------------------------------------------
@@ -166,7 +263,7 @@ def get_subscription_status(
     else:
         effective_status = "active"
 
-    return {
+    data = {
         "status": effective_status,
         "company_name": subscription.company_name,
         "subscription_start_date": subscription.subscription_start_date.isoformat(),
@@ -175,4 +272,38 @@ def get_subscription_status(
         "max_users": subscription.max_users,
         "device_count": subscription_service.device_count(subscription.id),
         "days_remaining": subscription.days_remaining,
+    }
+    data.update(_support_info_dict(subscription))
+    return data
+
+
+@router.get("/api/v1/subscription/initial-admin")
+def get_initial_admin(
+    request: Request, device: SyncDevice = Depends(get_authenticated_device)
+) -> dict:
+    """Download this device's own company's initial administrator credential.
+
+    Idempotent, not consumed on fetch (see
+    :mod:`server.models.initial_admin`'s own docstring for why): every
+    independent Attendance Client installation linked to this
+    subscription bootstraps its own local ``User`` row from the same
+    downloaded hash, and never sends the plaintext password anywhere.
+
+    Returns:
+        ``{"configured": False}`` if the Developer Suite has not yet
+        set an initial administrator for this device's subscription;
+        otherwise ``{"configured": True, "username", "full_name",
+        "password_hash"}``.
+    """
+    initial_admin_service: InitialAdminService = request.app.state.container.initial_admin_service
+    if device.subscription_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device is not linked to a subscription.")
+    account = initial_admin_service.get_for_subscription(device.subscription_id)
+    if account is None:
+        return {"configured": False}
+    return {
+        "configured": True,
+        "username": account.username,
+        "full_name": account.full_name,
+        "password_hash": account.password_hash,
     }

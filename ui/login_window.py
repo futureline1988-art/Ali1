@@ -23,6 +23,18 @@ that runs *before* a company is known), then delegates the actual
 login attempt to a freshly-constructed
 :class:`~controllers.auth_controller.AuthController` bound to the
 resolved company.
+
+The Attendance Client never creates a company's first administrator
+itself. On a company's first-ever enrollment (no local ``Company`` row
+yet matches the resolved company code), :meth:`LoginWindow._bootstrap_company_and_admin`
+creates the local company and materializes the one initial
+administrator the Developer Suite already created for it (downloaded
+via :meth:`~services.subscription_check_service.SubscriptionCheckService.download_initial_admin`)
+as this installation's first local user — see
+:mod:`server.models.initial_admin`'s own docstring for why. The
+username/password typed into this screen on that first run must match
+that administrator's; local authentication then proceeds exactly as
+on every later login.
 """
 
 from __future__ import annotations
@@ -44,9 +56,14 @@ from PySide6.QtWidgets import (
 
 from controllers.auth_controller import AuthController
 from database.database import session_scope
+from models.enums import UserRole
+from repositories.role_repository import RoleRepository
 from repositories.sync_repository import ClientSyncCredentialRepository
 from services.company_service import CompanyService
 from services.subscription_check_service import SubscriptionCheckService
+from services.user_service import UserService
+from sync.client import SyncClientError
+from ui.support_info_dialog import SupportInfoDialog
 from ui.widgets import make_heading_label, make_primary_button, make_secondary_label
 from utils.security import SessionManager
 
@@ -207,6 +224,13 @@ class LoginWindow(QWidget):
         self.login_button.clicked.connect(self._attempt_login)
         layout.addWidget(self.login_button)
 
+        self.support_button = QToolButton(panel)
+        self.support_button.setText("هل تحتاج مساعدة؟")
+        self.support_button.setCursor(Qt.PointingHandCursor)
+        self.support_button.setAutoRaise(True)
+        self.support_button.clicked.connect(self._on_support_clicked)
+        layout.addWidget(self.support_button, alignment=Qt.AlignCenter)
+
         layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         return panel
@@ -245,6 +269,18 @@ class LoginWindow(QWidget):
         self.error_label.clear()
         self.error_label.hide()
 
+    def _on_support_clicked(self) -> None:
+        """Show this company's cached Support Information (see :class:`~ui.support_info_dialog.SupportInfoDialog`).
+
+        Works whether or not this installation is bound yet, and
+        whether or not the Attendance Server is currently reachable —
+        it only ever reads the local cache populated by the last
+        successful :meth:`~services.subscription_check_service.SubscriptionCheckService.check`,
+        never contacts the server itself.
+        """
+        cached = self._subscription_check_service.get_cached()
+        SupportInfoDialog(cached=cached, parent=self).exec()
+
     def _attempt_login(self) -> None:
         """Validate input and attempt authentication, resolving a company code first if needed."""
         self._clear_error()
@@ -278,14 +314,59 @@ class LoginWindow(QWidget):
 
         with session_scope() as session:
             company = CompanyService(session).company_repo.get_by_name(resolution.company_name)
+
         if company is None:
-            self._show_error(
-                "هذه الشركة غير مُعدّة على هذا الجهاز بعد. يرجى التواصل مع مسؤول النظام."
-            )
-            return
+            company_id = self._bootstrap_company_and_admin(resolution.company_name)
+            if company_id is None:
+                return
+        else:
+            company_id = company.id
 
         self._pending_company_code = company_code
-        self._authenticate_locally(company.id, username, password)
+        self._authenticate_locally(company_id, username, password)
+
+    def _bootstrap_company_and_admin(self, company_name: str) -> int | None:
+        """First-ever enrollment for this company: create it locally and materialize its initial administrator.
+
+        Called only when no local ``Company`` row matches
+        ``company_name`` yet — this installation's very first
+        successful company-code resolution. Never creates the
+        administrator account itself: downloads the one the Developer
+        Suite already created (see
+        :meth:`~services.subscription_check_service.SubscriptionCheckService.download_initial_admin`)
+        and stores it as-is.
+
+        Returns:
+            The newly created local company's id, or ``None`` if
+            bootstrapping could not proceed (an inline error is
+            already shown in that case).
+        """
+        try:
+            admin = self._subscription_check_service.download_initial_admin()
+        except SyncClientError:
+            self._show_error(
+                "تعذر تنزيل حساب المسؤول الأولي من خادم الحضور. يرجى التحقق من الاتصال والمحاولة مرة أخرى."
+            )
+            return None
+
+        if not admin.configured:
+            self._show_error(
+                "لم يتم إعداد مسؤول أولي لهذه الشركة بعد من قبل مزوّد الخدمة. يرجى التواصل معه."
+            )
+            return None
+
+        with session_scope() as session:
+            company = CompanyService(session).create_company(name=company_name)
+            role = RoleRepository(session, company_id=company.id).get_by_code(
+                UserRole.SYSTEM_ADMIN.value
+            )
+            UserService(session, company_id=company.id).create_bootstrap_admin(
+                username=admin.username,
+                full_name=admin.full_name,
+                password_hash=admin.password_hash,
+                role_id=role.id,
+            )
+            return company.id
 
     def _authenticate_locally(self, company_id: int, username: str, password: str) -> None:
         """Attempt local username/password authentication against a resolved company."""

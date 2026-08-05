@@ -51,6 +51,7 @@ from repositories.subscription_state_repository import ClientSubscriptionStateRe
 from repositories.sync_repository import ClientSyncCredentialRepository
 from sync.client import (
     DeviceRegistrationRejectedError,
+    InitialAdminResult,
     MaxDevicesReachedError,
     SubscriptionStatusResult,
     SyncClientError,
@@ -201,6 +202,12 @@ class SubscriptionCheckService:
                 subscription_end_date=status.subscription_end_date,
                 max_devices=status.max_devices,
                 days_remaining=status.days_remaining,
+                support_phone_primary=status.support_phone_primary,
+                support_phone_secondary=status.support_phone_secondary,
+                support_whatsapp=status.support_whatsapp,
+                support_email=status.support_email,
+                support_hours=status.support_hours,
+                support_message=status.support_message,
             )
 
         return self._result_from_live_status(status)
@@ -270,6 +277,29 @@ class SubscriptionCheckService:
         """Return the company code this installation is currently bound with, or ``None``."""
         with self._database.session_scope() as session:
             return ClientSyncCredentialRepository(session).get_company_code()
+
+    def download_initial_admin(self) -> InitialAdminResult:
+        """Download this installation's company's initial administrator credential.
+
+        Called by :mod:`ui.login_window` right after
+        :meth:`resolve_company_code` succeeds for a company this
+        installation has never bootstrapped locally before -- the
+        Attendance Client never creates this account itself, only
+        materializes the one the Developer Suite already created (see
+        :mod:`server.models.initial_admin`'s own docstring).
+        :attr:`~sync.client.InitialAdminResult.configured` is ``False``
+        if the Developer Suite has not set one yet; the caller must
+        treat that as a blocking condition, not proceed with local
+        account creation.
+
+        Raises:
+            DeviceNotEnrolledError: This installation has not enrolled
+                yet.
+            ~sync.client.SyncClientError: The server could not be
+                reached, rejected this device's credential, or
+                returned an unexpected error.
+        """
+        return self._sync_coordinator.get_initial_admin()
 
     def reset_enrollment(self) -> None:
         """Forget this installation's enrollment entirely (administrator action only).

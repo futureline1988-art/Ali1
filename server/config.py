@@ -183,7 +183,7 @@ class ServerConfig:
     """
 
     app_name: str = "Attendance Server"
-    app_version: str = "1.1.2"
+    app_version: str = "1.1.3"
     environment: Environment = Environment.PRODUCTION
 
     paths: ServerPaths = field(default_factory=ServerPaths.default)

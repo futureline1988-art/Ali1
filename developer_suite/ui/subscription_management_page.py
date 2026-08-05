@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -35,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from developer_suite.admin.client import SubscriptionInfo
+from developer_suite.admin.client import InitialAdminInfo, SubscriptionInfo
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.subscription_service import SubscriptionService, SubscriptionServiceError
 from developer_suite.ui.subscription_form_dialog import SubscriptionFormDialog
@@ -90,6 +91,105 @@ class _RenewDialog(QDialog):
 
     def new_end_date(self) -> date:
         return self.end_date_edit.date().toPython()
+
+
+class _InitialAdminDialog(QDialog):
+    """Collects username/full name/password for a subscription's initial Company Administrator.
+
+    The only place this credential is ever entered — see
+    :mod:`server.services.initial_admin_service`'s own docstring for
+    why the Attendance Client can only ever download the result, never
+    create it itself.
+    """
+
+    def __init__(self, current: InitialAdminInfo, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("تعيين المسؤول الأولي")
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+
+        status_text = (
+            f"المسؤول الحالي: {current.username} ({current.full_name})"
+            if current.configured
+            else "لم يتم تعيين مسؤول أولي لهذا الاشتراك بعد."
+        )
+        status_label = QLabel(status_text, self)
+        status_label.setWordWrap(True)
+        layout.addWidget(status_label)
+
+        form = QFormLayout()
+        self.username_edit = QLineEdit(self)
+        form.addRow("اسم المستخدم", self.username_edit)
+        self.full_name_edit = QLineEdit(self)
+        form.addRow("الاسم الكامل", self.full_name_edit)
+        self.password_edit = QLineEdit(self)
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("كلمة المرور", self.password_edit)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def field_values(self) -> dict[str, str]:
+        return {
+            "username": self.username_edit.text().strip(),
+            "full_name": self.full_name_edit.text().strip(),
+            "password": self.password_edit.text(),
+        }
+
+
+class _SupportInfoDialog(QDialog):
+    """Collects a subscription's Support Information, pre-filled from its current values.
+
+    Synchronized to every Attendance Client of this company on their
+    next successful check — see
+    :mod:`server.models.subscription`'s own docstring.
+    """
+
+    def __init__(self, current: SubscriptionInfo, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("معلومات الدعم الفني")
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.phone_primary_edit = QLineEdit(current.support_phone_primary or "", self)
+        form.addRow("الهاتف الرئيسي", self.phone_primary_edit)
+        self.phone_secondary_edit = QLineEdit(current.support_phone_secondary or "", self)
+        form.addRow("الهاتف الثانوي (اختياري)", self.phone_secondary_edit)
+        self.whatsapp_edit = QLineEdit(current.support_whatsapp or "", self)
+        form.addRow("واتساب", self.whatsapp_edit)
+        self.email_edit = QLineEdit(current.support_email or "", self)
+        form.addRow("البريد الإلكتروني (اختياري)", self.email_edit)
+        self.hours_edit = QLineEdit(current.support_hours or "", self)
+        form.addRow("ساعات العمل (اختياري)", self.hours_edit)
+        self.message_edit = QLineEdit(current.support_message or "", self)
+        form.addRow("رسالة الدعم (اختياري)", self.message_edit)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def field_values(self) -> dict[str, str | None]:
+        """Every field, with a blank input mapped to ``None`` (clears that field on save)."""
+        return {
+            "support_phone_primary": self.phone_primary_edit.text().strip() or None,
+            "support_phone_secondary": self.phone_secondary_edit.text().strip() or None,
+            "support_whatsapp": self.whatsapp_edit.text().strip() or None,
+            "support_email": self.email_edit.text().strip() or None,
+            "support_hours": self.hours_edit.text().strip() or None,
+            "support_message": self.message_edit.text().strip() or None,
+        }
 
 
 class SubscriptionManagementPage(QWidget):
@@ -152,6 +252,14 @@ class SubscriptionManagementPage(QWidget):
         self.reactivate_button = QPushButton("إعادة تفعيل", self)
         self.reactivate_button.clicked.connect(self._on_reactivate_clicked)
         toolbar.addWidget(self.reactivate_button)
+
+        self.initial_admin_button = QPushButton("تعيين المسؤول الأولي", self)
+        self.initial_admin_button.clicked.connect(self._on_set_initial_admin_clicked)
+        toolbar.addWidget(self.initial_admin_button)
+
+        self.support_info_button = QPushButton("معلومات الدعم الفني", self)
+        self.support_info_button.clicked.connect(self._on_support_info_clicked)
+        toolbar.addWidget(self.support_info_button)
 
         layout.addLayout(toolbar)
 
@@ -297,5 +405,68 @@ class SubscriptionManagementPage(QWidget):
             self._subscription_service.reactivate_subscription(subscription.id)
         except SubscriptionServiceError as exc:
             QMessageBox.warning(self, "تعذّر إعادة التفعيل", str(exc))
+            return
+        self.reload()
+
+    def _on_set_initial_admin_clicked(self) -> None:
+        """Create or replace the selected subscription's initial Company Administrator.
+
+        The Attendance Client for this company must never create this
+        account itself -- this dialog is the one and only place it is
+        ever set, downloaded from there afterward (see
+        :mod:`server.services.initial_admin_service`'s own docstring).
+        """
+        subscription = self._selected_subscription()
+        if subscription is None:
+            QMessageBox.information(self, "تعيين المسؤول الأولي", "الرجاء اختيار اشتراك أولاً.")
+            return
+
+        try:
+            current = self._subscription_service.get_initial_admin(subscription.id)
+        except SubscriptionServiceError as exc:
+            QMessageBox.warning(self, "تعذّر جلب بيانات المسؤول الأولي", str(exc))
+            return
+
+        dialog = _InitialAdminDialog(current, parent=self)
+        if dialog.exec() != _InitialAdminDialog.DialogCode.Accepted:
+            return
+        values = dialog.field_values()
+        if not values["username"] or not values["full_name"] or not values["password"]:
+            QMessageBox.information(
+                self, "تعيين المسؤول الأولي", "الرجاء تعبئة اسم المستخدم والاسم الكامل وكلمة المرور."
+            )
+            return
+
+        try:
+            self._subscription_service.set_initial_admin(subscription.id, **values)
+        except SubscriptionServiceError as exc:
+            QMessageBox.warning(self, "تعذّر تعيين المسؤول الأولي", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "تم تعيين المسؤول الأولي",
+            "تم تعيين المسؤول الأولي بنجاح. سيتم تنزيله تلقائيًا عند أول تسجيل دخول لبرنامج الحضور بهذا الرمز.",
+        )
+
+    def _on_support_info_clicked(self) -> None:
+        """Set the selected subscription's Support Information.
+
+        Synchronized to every Attendance Client of this company on
+        their next successful check — see
+        :mod:`server.models.subscription`'s own docstring.
+        """
+        subscription = self._selected_subscription()
+        if subscription is None:
+            QMessageBox.information(self, "معلومات الدعم الفني", "الرجاء اختيار اشتراك أولاً.")
+            return
+
+        dialog = _SupportInfoDialog(subscription, parent=self)
+        if dialog.exec() != _SupportInfoDialog.DialogCode.Accepted:
+            return
+
+        try:
+            self._subscription_service.update_support_info(subscription.id, **dialog.field_values())
+        except SubscriptionServiceError as exc:
+            QMessageBox.warning(self, "تعذّر حفظ معلومات الدعم الفني", str(exc))
             return
         self.reload()

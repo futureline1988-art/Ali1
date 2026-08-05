@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Callable, TypeVar
 
-from developer_suite.admin.client import AdminApiClient, AdminApiError, SubscriptionInfo
+from developer_suite.admin.client import AdminApiClient, AdminApiError, InitialAdminInfo, SubscriptionInfo
 
 _T = TypeVar("_T")
 
@@ -97,6 +97,61 @@ class SubscriptionService:
     def clear_max_users(self, subscription_id: int) -> SubscriptionInfo:
         """Explicitly set a subscription's user cap back to unlimited."""
         return self._call(lambda: self._admin_client.clear_subscription_max_users(subscription_id))
+
+    def update_support_info(
+        self,
+        subscription_id: int,
+        *,
+        support_phone_primary: str | None = ...,
+        support_phone_secondary: str | None = ...,
+        support_whatsapp: str | None = ...,
+        support_email: str | None = ...,
+        support_hours: str | None = ...,
+        support_message: str | None = ...,
+    ) -> SubscriptionInfo:
+        """Set this company's Support Information, synchronized to every one of its Attendance Clients.
+
+        Every field defaults to "leave unchanged"; pass ``None``
+        explicitly to clear a field. This is the only place any of
+        these fields is ever written -- the Attendance Client only
+        ever reads them back.
+        """
+        return self._call(
+            lambda: self._admin_client.update_support_info(
+                subscription_id,
+                support_phone_primary=support_phone_primary,
+                support_phone_secondary=support_phone_secondary,
+                support_whatsapp=support_whatsapp,
+                support_email=support_email,
+                support_hours=support_hours,
+                support_message=support_message,
+            )
+        )
+
+    def set_initial_admin(
+        self, subscription_id: int, *, username: str, full_name: str, password: str
+    ) -> InitialAdminInfo:
+        """Create or replace a subscription's initial Company Administrator.
+
+        The only place a company's very first administrator account is
+        ever created — see :mod:`server.services.initial_admin_service`'s
+        own docstring for why the Attendance Client can only ever
+        download it, never create it.
+
+        Raises:
+            SubscriptionServiceError: The server rejected the request
+                (e.g. a weak password, or an unknown subscription) or
+                could not be reached.
+        """
+        return self._call(
+            lambda: self._admin_client.set_initial_admin(
+                subscription_id, username=username, full_name=full_name, password=password
+            )
+        )
+
+    def get_initial_admin(self, subscription_id: int) -> InitialAdminInfo:
+        """Fetch a subscription's currently-configured initial administrator, if any."""
+        return self._call(lambda: self._admin_client.get_initial_admin(subscription_id))
 
     @staticmethod
     def _call(operation: Callable[[], _T]) -> _T:

@@ -334,6 +334,245 @@ class TestSubscriptionApi:
         assert response.json()["status"] == "not_linked"
 
 
+class TestInitialAdminAndSupportInfoApi:
+    """The initial-administrator bootstrap credential and Support Information.
+
+    Covers the Developer-Suite-only admin endpoints
+    (``PUT``/``GET .../initial-admin``, ``PATCH .../support-info``) and
+    the device-facing counterparts (``GET /api/v1/subscription/initial-admin``,
+    the ``support_*`` fields on ``GET /api/v1/subscription/status``) --
+    see :mod:`server.services.initial_admin_service`'s own docstring
+    for why the Attendance Client can only ever read these, never
+    create/change them.
+    """
+
+    def test_admin_get_before_set_is_not_configured(self, client: TestClient, admin_headers) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        response = client.get(f"/api/v1/subscriptions/{created['id']}/initial-admin", headers=admin_headers)
+        assert response.status_code == 200
+        assert response.json() == {"configured": False}
+
+    def test_set_initial_admin_then_admin_get_reflects_it_without_the_hash(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        response = client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "Str0ng!Passw0rd"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"username": "admin", "full_name": "Company Admin"}
+
+        fetched = client.get(f"/api/v1/subscriptions/{created['id']}/initial-admin", headers=admin_headers)
+        assert fetched.json() == {"configured": True, "username": "admin", "full_name": "Company Admin"}
+
+    def test_set_initial_admin_unknown_subscription_is_404(self, client: TestClient, admin_headers) -> None:
+        response = client.put(
+            "/api/v1/subscriptions/999999/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "Str0ng!Passw0rd"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 404
+
+    def test_set_initial_admin_weak_password_is_422(self, client: TestClient, admin_headers) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        response = client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "weak"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+
+    def test_set_initial_admin_requires_admin_scope(
+        self, client: TestClient, admin_headers, server_config: ServerConfig
+    ) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        read_only_token = issue_token(
+            {"principal_id": "reader", "principal_type": "developer_suite", "scopes": ["sync:read"]},
+            config=server_config,
+        )
+        response = client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "Str0ng!Passw0rd"},
+            headers={"Authorization": f"Bearer {read_only_token}"},
+        )
+        assert response.status_code == 403
+
+    def test_setting_again_replaces_it_in_place(self, client: TestClient, admin_headers) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "Str0ng!Passw0rd"},
+            headers=admin_headers,
+        )
+        response = client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "manager", "full_name": "New Manager", "password": "AnotherStr0ng!Pw"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+        fetched = client.get(f"/api/v1/subscriptions/{created['id']}/initial-admin", headers=admin_headers)
+        assert fetched.json() == {"configured": True, "username": "manager", "full_name": "New Manager"}
+
+    def test_device_facing_download_not_configured(self, client: TestClient, admin_headers) -> None:
+        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        registration = _register_device(client, admin_headers, name="Client 1", company_name="Acme Co")
+        device_id = registration.json()["device"]["public_id"]
+        api_key = registration.json()["api_key"]
+
+        response = client.get(
+            "/api/v1/subscription/initial-admin",
+            headers={"X-Device-Id": device_id, "X-Device-Api-Key": api_key},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"configured": False}
+
+    def test_device_facing_download_returns_a_verifiable_hash_never_the_plaintext(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        from utils.security import verify_password
+
+        created = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "Str0ng!Passw0rd"},
+            headers=admin_headers,
+        )
+        registration = _register_device(client, admin_headers, name="Client 1", company_name="Acme Co")
+        device_id = registration.json()["device"]["public_id"]
+        api_key = registration.json()["api_key"]
+
+        response = client.get(
+            "/api/v1/subscription/initial-admin",
+            headers={"X-Device-Id": device_id, "X-Device-Api-Key": api_key},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["configured"] is True
+        assert body["username"] == "admin"
+        assert body["full_name"] == "Company Admin"
+        assert body["password_hash"] != "Str0ng!Passw0rd"
+        assert verify_password("Str0ng!Passw0rd", body["password_hash"]) is True
+        assert verify_password("wrong-password", body["password_hash"]) is False
+
+    def test_device_facing_download_available_to_any_device_on_the_same_subscription(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        """Not consumed on fetch -- a second, independent installation can also download it."""
+        created = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        client.put(
+            f"/api/v1/subscriptions/{created['id']}/initial-admin",
+            json={"username": "admin", "full_name": "Company Admin", "password": "Str0ng!Passw0rd"},
+            headers=admin_headers,
+        )
+        for name in ("Client 1", "Client 2"):
+            registration = _register_device(client, admin_headers, name=name, company_name="Acme Co")
+            device_id = registration.json()["device"]["public_id"]
+            api_key = registration.json()["api_key"]
+            response = client.get(
+                "/api/v1/subscription/initial-admin",
+                headers={"X-Device-Id": device_id, "X-Device-Api-Key": api_key},
+            )
+            assert response.json()["configured"] is True
+
+    def test_support_info_defaults_to_all_null_in_status(self, client: TestClient, admin_headers) -> None:
+        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        registration = _register_device(client, admin_headers, name="Client 1", company_name="Acme Co")
+        device_id = registration.json()["device"]["public_id"]
+        api_key = registration.json()["api_key"]
+
+        response = client.get(
+            "/api/v1/subscription/status",
+            headers={"X-Device-Id": device_id, "X-Device-Api-Key": api_key},
+        )
+        body = response.json()
+        for field in (
+            "support_phone_primary",
+            "support_phone_secondary",
+            "support_whatsapp",
+            "support_email",
+            "support_hours",
+            "support_message",
+        ):
+            assert body[field] is None
+
+    def test_support_info_update_is_partial_and_appears_in_status(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        registration = _register_device(client, admin_headers, name="Client 1", company_name="Acme Co")
+        device_id = registration.json()["device"]["public_id"]
+        api_key = registration.json()["api_key"]
+
+        first = client.patch(
+            f"/api/v1/subscriptions/{created['id']}/support-info",
+            json={"support_phone_primary": "+1-555-0100", "support_email": "help@acme.example"},
+            headers=admin_headers,
+        )
+        assert first.status_code == 200
+        assert first.json()["support_phone_primary"] == "+1-555-0100"
+        assert first.json()["support_email"] == "help@acme.example"
+
+        second = client.patch(
+            f"/api/v1/subscriptions/{created['id']}/support-info",
+            json={"support_whatsapp": "+1-555-0199"},
+            headers=admin_headers,
+        )
+        assert second.status_code == 200
+        # Previously-set fields untouched by an update that omits them.
+        assert second.json()["support_phone_primary"] == "+1-555-0100"
+        assert second.json()["support_whatsapp"] == "+1-555-0199"
+
+        status_response = client.get(
+            "/api/v1/subscription/status",
+            headers={"X-Device-Id": device_id, "X-Device-Api-Key": api_key},
+        )
+        body = status_response.json()
+        assert body["support_phone_primary"] == "+1-555-0100"
+        assert body["support_email"] == "help@acme.example"
+        assert body["support_whatsapp"] == "+1-555-0199"
+        assert body["support_phone_secondary"] is None
+
+    def test_support_info_explicit_null_clears_a_field(self, client: TestClient, admin_headers) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        client.patch(
+            f"/api/v1/subscriptions/{created['id']}/support-info",
+            json={"support_email": "help@acme.example"},
+            headers=admin_headers,
+        )
+        response = client.patch(
+            f"/api/v1/subscriptions/{created['id']}/support-info",
+            json={"support_email": None},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["support_email"] is None
+
+    def test_support_info_update_requires_admin_scope(
+        self, client: TestClient, admin_headers, server_config: ServerConfig
+    ) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        read_only_token = issue_token(
+            {"principal_id": "reader", "principal_type": "developer_suite", "scopes": ["sync:read"]},
+            config=server_config,
+        )
+        response = client.patch(
+            f"/api/v1/subscriptions/{created['id']}/support-info",
+            json={"support_email": "help@acme.example"},
+            headers={"Authorization": f"Bearer {read_only_token}"},
+        )
+        assert response.status_code == 403
+
+    def test_support_info_update_unknown_subscription_is_404(self, client: TestClient, admin_headers) -> None:
+        response = client.patch(
+            "/api/v1/subscriptions/999999/support-info",
+            json={"support_email": "help@acme.example"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 404
+
+
 class TestDeviceRegistrationSubscriptionEnforcement:
     def test_unknown_company_name_is_422(self, client: TestClient, admin_headers) -> None:
         response = _register_device(client, admin_headers, name="Client 1", company_name="Nonexistent Co")
@@ -445,6 +684,40 @@ def _patch_subscription_via_admin_api(
 
     response = httpx.patch(
         f"{running_server_url}/api/v1/subscriptions/{subscription_id}",
+        json=fields,
+        headers={"Authorization": f"Bearer {admin_bearer_token}"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _set_initial_admin_via_admin_api(
+    running_server_url: str,
+    admin_bearer_token: str,
+    subscription_id: int,
+    *,
+    username: str,
+    full_name: str,
+    password: str,
+) -> dict:
+    import httpx
+
+    response = httpx.put(
+        f"{running_server_url}/api/v1/subscriptions/{subscription_id}/initial-admin",
+        json={"username": username, "full_name": full_name, "password": password},
+        headers={"Authorization": f"Bearer {admin_bearer_token}"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _set_support_info_via_admin_api(
+    running_server_url: str, admin_bearer_token: str, subscription_id: int, **fields
+) -> dict:
+    import httpx
+
+    response = httpx.patch(
+        f"{running_server_url}/api/v1/subscriptions/{subscription_id}/support-info",
         json=fields,
         headers={"Authorization": f"Bearer {admin_bearer_token}"},
     )
@@ -919,3 +1192,165 @@ class TestAutomaticEnrollmentEndToEnd:
 
         assert result.allowed is True
         assert result.outcome is SubscriptionCheckOutcome.VALID
+
+
+# ---------------------------------------------------------------------------
+# Initial-administrator bootstrap + Support Information: the full requested
+# workflow, end to end -- new company -> new subscription -> new
+# administrator (Developer Suite side) -> fresh Attendance Client -> company
+# code enrollment -> automatic device registration -> initial administrator
+# download -> local login -> creating additional employees locally -> offline
+# login/support-info continuing to work.
+# ---------------------------------------------------------------------------
+
+
+class TestInitialAdminBootstrapEndToEnd:
+    def _bootstrap_company_and_admin(
+        self, client_database: Database, service: SubscriptionCheckService, *, company_name: str
+    ) -> int:
+        """Exactly what ``ui.login_window.LoginWindow._bootstrap_company_and_admin`` does, without Qt."""
+        from repositories.role_repository import RoleRepository
+        from services.company_service import CompanyService
+        from services.user_service import UserService
+
+        admin = service.download_initial_admin()
+        assert admin.configured is True
+
+        with client_database.session_scope() as session:
+            company = CompanyService(session).create_company(name=company_name)
+            role = RoleRepository(session, company_id=company.id).get_by_code("system_admin")
+            UserService(session, company_id=company.id).create_bootstrap_admin(
+                username=admin.username,
+                full_name=admin.full_name,
+                password_hash=admin.password_hash,
+                role_id=role.id,
+            )
+            return company.id
+
+    def test_full_workflow_new_company_to_local_login_and_additional_employees(
+        self, client_database: Database, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        from models.enums import UserRole
+        from repositories.role_repository import RoleRepository
+        from services.auth_service import AuthenticationError, AuthService
+        from services.user_service import UserService
+
+        # 1. Developer Suite: new company (subscription) + new administrator.
+        subscription = _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co"
+        )
+        _set_initial_admin_via_admin_api(
+            running_server_url,
+            admin_bearer_token,
+            subscription["id"],
+            username="admin",
+            full_name="Company Admin",
+            password="Str0ng!Passw0rd",
+        )
+        _set_support_info_via_admin_api(
+            running_server_url,
+            admin_bearer_token,
+            subscription["id"],
+            support_phone_primary="+1-555-0100",
+            support_whatsapp="+1-555-0199",
+            support_message="We're happy to help!",
+        )
+
+        # 2. Fresh Attendance Client: company code enrollment -> automatic
+        # device registration (self.resolve_company_code drives both).
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
+        assert coordinator.is_enrolled() is False
+
+        resolution = service.resolve_company_code(company_code=subscription["company_code"])
+        assert resolution.blocked is None
+        assert resolution.company_name == "Acme Co"
+        assert coordinator.is_enrolled() is True
+
+        # 3. Initial administrator download + local storage (no local Company
+        # existed yet for this company -- this is this installation's very
+        # first enrollment for it).
+        company_id = self._bootstrap_company_and_admin(client_database, service, company_name="Acme Co")
+        service.confirm_local_binding(company_id=company_id, company_code=subscription["company_code"])
+
+        # 4. Local login succeeds with the Developer-Suite-set credential,
+        # and only that credential -- entirely against the local database.
+        with client_database.session_scope() as session:
+            admin_user = AuthService(session, company_id=company_id).login("admin", "Str0ng!Passw0rd")
+            assert admin_user.username == "admin"
+            assert admin_user.full_name == "Company Admin"
+
+        with client_database.session_scope() as session:
+            with pytest.raises(AuthenticationError):
+                AuthService(session, company_id=company_id).login("admin", "totally-wrong-password")
+
+        # 5. The administrator creates additional employees/users locally.
+        with client_database.session_scope() as session:
+            user_role = RoleRepository(session, company_id=company_id).get_by_code(UserRole.USER.value)
+            new_employee_account = UserService(
+                session, company_id=company_id, actor_user_id=admin_user.id
+            ).create_user(
+                username="jsmith",
+                full_name="Jane Smith",
+                password="AnotherStr0ng!Pw",
+                role_id=user_role.id,
+            )
+            assert new_employee_account.id is not None
+
+        with client_database.session_scope() as session:
+            employee_login = AuthService(session, company_id=company_id).login("jsmith", "AnotherStr0ng!Pw")
+            assert employee_login.username == "jsmith"
+
+        # 6. A regular subscription check now succeeds and support
+        # information is downloaded and cached locally.
+        result = service.check()
+        assert result.allowed is True
+        assert result.outcome is SubscriptionCheckOutcome.VALID
+
+        cached = service.get_cached()
+        assert cached.support_phone_primary == "+1-555-0100"
+        assert cached.support_whatsapp == "+1-555-0199"
+        assert cached.support_message == "We're happy to help!"
+        assert cached.support_phone_secondary is None
+
+        # 7. Offline: local login keeps working purely against the local
+        # database (never touches the network), and the cached subscription
+        # check still allows access within the grace period even though the
+        # server is now unreachable. The device's own stored server_url is
+        # what an actual pull/check call uses (see
+        # ClientSyncCoordinator._build_client), not the base_url a
+        # coordinator happens to be constructed with, so simulating "offline"
+        # means pointing that *stored* credential at an address nothing is
+        # listening on.
+        with client_database.session_scope() as session:
+            ClientSyncCredentialRepository(session).get().server_url = "http://127.0.0.1:1"
+
+        offline_result = service.check()
+        assert offline_result.allowed is True
+        assert offline_result.outcome is SubscriptionCheckOutcome.UNREACHABLE_WITHIN_GRACE
+
+        with client_database.session_scope() as session:
+            offline_login = AuthService(session, company_id=company_id).login("admin", "Str0ng!Passw0rd")
+            assert offline_login.username == "admin"
+
+        # Support info also stays visible offline, from the same cache.
+        offline_cached = service.get_cached()
+        assert offline_cached.support_phone_primary == "+1-555-0100"
+
+    def test_no_initial_admin_configured_blocks_bootstrap_with_a_clear_reason(
+        self, client_database: Database, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        """The Attendance Client must never fabricate an administrator -- it can only download one."""
+        subscription = _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co"
+        )
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
+
+        resolution = service.resolve_company_code(company_code=subscription["company_code"])
+        assert resolution.blocked is None
+
+        admin = service.download_initial_admin()
+        assert admin.configured is False
+        assert admin.username is None
+        assert admin.password_hash is None

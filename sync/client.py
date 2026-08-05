@@ -97,7 +97,10 @@ class SubscriptionStatusResult:
     :func:`~server.api.routers.subscriptions.get_subscription_status`'s
     own docstring for what each means) — every other field is ``None``
     when ``status`` is ``"not_linked"``, since there is then no
-    subscription to describe.
+    subscription to describe. The ``support_*`` fields are this
+    company's Support Information (see
+    :mod:`server.models.subscription`'s own docstring) — set from the
+    Developer Suite, read-only here, individually optional.
     """
 
     status: str
@@ -107,6 +110,12 @@ class SubscriptionStatusResult:
     max_users: int | None = None
     device_count: int | None = None
     days_remaining: int | None = None
+    support_phone_primary: str | None = None
+    support_phone_secondary: str | None = None
+    support_whatsapp: str | None = None
+    support_email: str | None = None
+    support_hours: str | None = None
+    support_message: str | None = None
 
     @classmethod
     def from_json(cls, data: dict) -> "SubscriptionStatusResult":
@@ -120,6 +129,42 @@ class SubscriptionStatusResult:
             max_users=data.get("max_users"),
             device_count=data.get("device_count"),
             days_remaining=data.get("days_remaining"),
+            support_phone_primary=data.get("support_phone_primary"),
+            support_phone_secondary=data.get("support_phone_secondary"),
+            support_whatsapp=data.get("support_whatsapp"),
+            support_email=data.get("support_email"),
+            support_hours=data.get("support_hours"),
+            support_message=data.get("support_message"),
+        )
+
+
+@dataclass(frozen=True)
+class InitialAdminResult:
+    """This installation's company's initial administrator, as reported by ``GET /api/v1/subscription/initial-admin``.
+
+    ``configured`` is ``False`` when the Developer Suite has not yet
+    set one for this device's subscription -- every other field is
+    ``None`` in that case. ``password_hash`` is a bcrypt hash, already
+    computed server-side (see
+    :mod:`server.models.initial_admin`'s own docstring for why) --
+    never a plaintext password.
+    """
+
+    configured: bool
+    username: str | None = None
+    full_name: str | None = None
+    password_hash: str | None = None
+
+    @classmethod
+    def from_json(cls, data: dict) -> "InitialAdminResult":
+        """Parse a ``GET /api/v1/subscription/initial-admin`` response body."""
+        if not data.get("configured"):
+            return cls(configured=False)
+        return cls(
+            configured=True,
+            username=data["username"],
+            full_name=data["full_name"],
+            password_hash=data["password_hash"],
         )
 
 
@@ -341,3 +386,22 @@ class SyncClient:
             raise SyncConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
         _raise_for_response(response)
         return SubscriptionStatusResult.from_json(response.json())
+
+    def get_initial_admin(self) -> InitialAdminResult:
+        """Download this installation's company's initial administrator credential.
+
+        Idempotent -- safe to call again (e.g. on a later startup
+        before local enrollment has finished); see
+        :mod:`server.models.initial_admin`'s own docstring.
+
+        Raises:
+            SyncConnectionError: The server could not be reached.
+            SyncAuthError: This device's credential was rejected.
+            SyncServerError: Any other non-2xx response.
+        """
+        try:
+            response = self._client.get("/api/v1/subscription/initial-admin")
+        except httpx.TransportError as exc:
+            raise SyncConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
+        _raise_for_response(response)
+        return InitialAdminResult.from_json(response.json())
