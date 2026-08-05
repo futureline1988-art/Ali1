@@ -28,7 +28,7 @@ from controllers.employee_controller import EmployeeController
 from models.enums import DeviceProtocol
 from ui.face_enrollment_dialog import BiometricStatusDialog, FaceEnrollmentDialog, SelectDeviceDialog
 from ui.table_page import TablePage
-from ui.widgets import ConfirmDialog, make_danger_button
+from ui.widgets import ConfirmDialog, make_danger_button, run_blocking_operation
 
 
 class EmployeeFormDialog(QDialog):
@@ -420,8 +420,12 @@ class EmployeesPage(TablePage):
         device = self._select_device(face_capable_only=False)
         if device is None:
             return
-        succeeded = self._device_controller.push_employee_to_device(
-            device_id=device["id"], employee_id=row["id"]
+        succeeded = run_blocking_operation(
+            self,
+            "جارٍ إرسال بيانات الموظف إلى الجهاز...",
+            lambda: self._device_controller.push_employee_to_device(
+                device_id=device["id"], employee_id=row["id"]
+            ),
         )
         if succeeded:
             QMessageBox.information(
@@ -445,8 +449,12 @@ class EmployeesPage(TablePage):
         if device is None:
             return
 
-        begin_result = self._device_controller.begin_face_enrollment(
-            device_id=device["id"], employee_id=row["id"]
+        begin_result = run_blocking_operation(
+            self,
+            "جارٍ التحضير لتسجيل بصمة الوجه على الجهاز...",
+            lambda: self._device_controller.begin_face_enrollment(
+                device_id=device["id"], employee_id=row["id"]
+            ),
         )
         if begin_result is None:
             return

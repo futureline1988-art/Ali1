@@ -8,9 +8,12 @@ service, or repository directly.
 
 from __future__ import annotations
 
+from typing import Callable, TypeVar
+
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QDialog,
     QFrame,
@@ -19,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSpacerItem,
@@ -29,6 +33,8 @@ from PySide6.QtWidgets import (
 )
 
 from services.notification_service import Notification, NotificationLevel
+
+_T = TypeVar("_T")
 
 _LEVEL_STATUS = {
     NotificationLevel.INFO: "info",
@@ -503,6 +509,47 @@ class LoadingOverlay(QWidget):
         for child in self.findChildren(QLabel):
             child.setText(message)
             break
+
+
+def run_blocking_operation(
+    parent: QWidget | None, message: str, func: Callable[[], _T]
+) -> _T:
+    """Run a synchronous, possibly slow ``func`` behind an indeterminate progress dialog.
+
+    Every device round-trip, report export, and backup create/restore in
+    this application runs synchronously on the GUI thread (no background
+    worker) — without this, a customer sees the whole window freeze for a
+    few seconds with no indication anything is happening. This shows a
+    modal "current action" dialog with an indeterminate progress bar
+    first, forces one repaint via :meth:`QApplication.processEvents`
+    (Qt never paints while Python code is running, so the dialog would
+    otherwise never actually become visible before ``func`` blocks), then
+    runs ``func`` and closes the dialog once it returns.
+
+    Args:
+        parent: The dialog's parent widget (for correct centering/modality).
+        message: The current-action text shown to the user, e.g.
+            "جارٍ الاتصال بالجهاز...".
+        func: The blocking call to run, taking no arguments (wrap with a
+            ``lambda`` at the call site if it needs any).
+
+    Returns:
+        Whatever ``func`` returns. Any exception ``func`` raises
+        propagates after the dialog is closed, unchanged.
+    """
+    dialog = QProgressDialog(message, None, 0, 0, parent)
+    dialog.setWindowTitle("الرجاء الانتظار")
+    dialog.setWindowModality(Qt.WindowModal)
+    dialog.setCancelButton(None)
+    dialog.setMinimumDuration(0)
+    dialog.setAutoClose(False)
+    dialog.setAutoReset(False)
+    dialog.show()
+    QApplication.processEvents()
+    try:
+        return func()
+    finally:
+        dialog.close()
 
 
 class ConfirmDialog(QDialog):

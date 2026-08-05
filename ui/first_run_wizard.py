@@ -58,7 +58,7 @@ from services.company_service import CompanyService, CompanyValidationError
 from services.device_service import DeviceService, DeviceValidationError
 from services.user_service import UserManagementError, UserService
 from ui.devices import _PROTOCOL_LABELS_AR
-from ui.widgets import make_primary_button, make_secondary_label
+from ui.widgets import make_primary_button, make_secondary_label, run_blocking_operation
 from utils.security import SessionManager
 
 _DEFAULT_BRAND_PRIMARY = "#2563EB"
@@ -290,7 +290,9 @@ class _DevicePage(QWizardPage):
         )
         connector = DeviceManager().get_connector(probe)
         try:
-            result = connector.test_connection_detailed()
+            result = run_blocking_operation(
+                self, "جارٍ اختبار الاتصال بالجهاز...", connector.test_connection_detailed
+            )
         except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is
             result = None
             self.result_label.setText(f"فشل الاتصال: {exc}")

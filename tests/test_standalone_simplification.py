@@ -506,3 +506,38 @@ class TestFriendlyBackupLabel:
 
         label = _friendly_backup_label("/some/path/not_a_backup_file.db.enc")
         assert label == "not_a_backup_file.db.enc"
+
+
+# ----------------------------------------------------------------------
+# Progress indicator for long-running operations (production-readiness pass)
+# ----------------------------------------------------------------------
+
+
+class TestRunBlockingOperation:
+    def test_returns_the_wrapped_function_result(self, qtbot):
+        from ui.widgets import run_blocking_operation
+
+        result = run_blocking_operation(None, "جارٍ العمل...", lambda: 42)
+        assert result == 42
+
+    def test_propagates_exceptions_raised_by_the_wrapped_function(self, qtbot):
+        from ui.widgets import run_blocking_operation
+
+        def _boom():
+            raise ValueError("device unreachable")
+
+        with pytest.raises(ValueError, match="device unreachable"):
+            run_blocking_operation(None, "جارٍ العمل...", _boom)
+
+    def test_progress_dialog_is_not_left_open_after_completion(self, qtbot):
+        from PySide6.QtWidgets import QApplication
+
+        from ui.widgets import run_blocking_operation
+
+        run_blocking_operation(None, "جارٍ العمل...", lambda: None)
+        visible_progress_dialogs = [
+            widget
+            for widget in QApplication.topLevelWidgets()
+            if widget.__class__.__name__ == "QProgressDialog" and widget.isVisible()
+        ]
+        assert visible_progress_dialogs == []

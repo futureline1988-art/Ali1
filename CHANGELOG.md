@@ -3,6 +3,51 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.0.0] - 2026-08-05 — First standalone commercial edition
+
+The Attendance Client's first release as a permanently-owned, one-time-
+purchase desktop product: no subscription, no Company Code, no central
+Attendance Server dependency for normal operation (`server/` and
+`developer_suite/` remain in the repository as optional internal tools
+only). This release folds together the standalone simplification, the
+non-technical-user UX pass, and this final production-readiness pass
+into one commercial-grade build.
+
+### Added
+
+- First-run setup wizard (company name/logo, brand colors,
+  administrator account, optional attendance device with a mandatory
+  connection test) — a brand-new installation is fully usable without
+  reading any documentation.
+- Rich, precisely-classified device connection diagnostics (wrong
+  communication key, timeout, port closed, network unreachable,
+  success) with device model/serial/firmware persisted on a successful
+  test, and a one-line on-screen hint for finding a ZKTeco device's IP
+  address on the device's own screen.
+- Download employees from a device (`pull_employees_from_device`),
+  completing the push/pull pair.
+- Every long-running operation (device test/sync/push/pull, face
+  enrollment, report generation, backup create/restore) now shows an
+  indeterminate progress dialog with a plain-Arabic current-action
+  message instead of silently freezing the window, and confirms
+  success or failure afterward instead of completing silently.
+- Friendly, human-readable backup names ("نسخة احتياطية بتاريخ ...")
+  in place of raw filesystem paths in the backup list and status
+  messages.
+
+### Fixed
+
+- `ZKTecoConnector._connect()` was not catching `ZKNetworkError` (a
+  sibling of `ZKErrorConnection` in `pyzk`, not a subclass) — a real
+  network failure during a device operation could previously propagate
+  as an unhandled exception instead of a clean Arabic diagnostic.
+
+### Removed
+
+- `sync/` package, subscription checking, Company Code enrollment,
+  server-issued initial-admin download, and every other client-side
+  dependency on the central Attendance Server for normal operation.
+
 ## [Client 1.2.4 / Developer Suite 1.1.3 / Server 1.1.3] - 2026-08-05
 
 ### Changed — The Attendance Client can no longer create a company's first administrator

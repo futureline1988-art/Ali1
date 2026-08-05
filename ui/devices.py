@@ -26,7 +26,13 @@ from devices.device_manager import DeviceManager
 from models.device import Device
 from models.enums import DeviceProtocol
 from ui.table_page import TablePage
-from ui.widgets import ConfirmDialog, make_danger_button, make_primary_button, make_secondary_label
+from ui.widgets import (
+    ConfirmDialog,
+    make_danger_button,
+    make_primary_button,
+    make_secondary_label,
+    run_blocking_operation,
+)
 
 _PROTOCOL_LABELS_AR = {
     DeviceProtocol.ZKTECO_TCP: "ZKTeco (TCP/IP)",
@@ -224,7 +230,9 @@ class DeviceFormDialog(QDialog):
         if not values["name"] or not values["host"]:
             QMessageBox.warning(self, "بيانات ناقصة", "الرجاء إدخال اسم الجهاز وعنوانه أولاً.")
             return
-        result = _probe_connection(values)
+        result = run_blocking_operation(
+            self, "جارٍ اختبار الاتصال بالجهاز...", lambda: _probe_connection(values)
+        )
         self._last_test_succeeded = bool(result.get("success"))
         ConnectionDiagnosticDialog(result=result, parent=self).exec()
 
@@ -530,7 +538,9 @@ class DevicesPage(TablePage):
         row = self.selected_row()
         if row is None:
             return
-        result = self._controller.test_connection(row["id"])
+        result = run_blocking_operation(
+            self, "جارٍ اختبار الاتصال بالجهاز...", lambda: self._controller.test_connection(row["id"])
+        )
         self.refresh()
         if result is not None:
             ConnectionDiagnosticDialog(result=result, parent=self).exec()
@@ -540,7 +550,11 @@ class DevicesPage(TablePage):
         row = self.selected_row()
         if row is None:
             return
-        new_count = self._controller.sync_attendance_logs(row["id"])
+        new_count = run_blocking_operation(
+            self,
+            "جارٍ تنزيل سجلات الحضور من الجهاز...",
+            lambda: self._controller.sync_attendance_logs(row["id"]),
+        )
         self.refresh()
         if new_count > 0:
             QMessageBox.information(
@@ -573,8 +587,12 @@ class DevicesPage(TablePage):
         selected_employee = next(
             (employee for employee in employees if employee["id"] == employee_id), None
         )
-        succeeded = self._controller.push_employee_to_device(
-            device_id=row["id"], employee_id=employee_id
+        succeeded = run_blocking_operation(
+            self,
+            "جارٍ إرسال بيانات الموظف إلى الجهاز...",
+            lambda: self._controller.push_employee_to_device(
+                device_id=row["id"], employee_id=employee_id
+            ),
         )
         if succeeded and selected_employee is not None:
             QMessageBox.information(
@@ -588,7 +606,11 @@ class DevicesPage(TablePage):
         row = self.selected_row()
         if row is None:
             return
-        created_count = self._controller.pull_employees_from_device(row["id"])
+        created_count = run_blocking_operation(
+            self,
+            "جارٍ تنزيل الموظفين من الجهاز...",
+            lambda: self._controller.pull_employees_from_device(row["id"]),
+        )
         self.refresh()
         if created_count > 0:
             QMessageBox.information(

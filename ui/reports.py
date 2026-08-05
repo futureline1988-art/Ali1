@@ -20,7 +20,13 @@ from controllers.department_controller import DepartmentController
 from controllers.employee_controller import EmployeeController
 from controllers.report_controller import ReportController
 from models.enums import ReportFormat, ReportType
-from ui.widgets import Card, make_heading_label, make_primary_button, make_status_label
+from ui.widgets import (
+    Card,
+    make_heading_label,
+    make_primary_button,
+    make_status_label,
+    run_blocking_operation,
+)
 
 # Only the report types ReportController actually dispatches (BY_DEVICE has
 # no build_* method yet, so it is deliberately left out of this picker
@@ -205,14 +211,18 @@ class ReportsPage(QWidget):
             else None
         )
 
-        self._controller.generate_report(
-            report_type=report_type,
-            output_format=report_format,
-            output_path=output_path,
-            start_date=start,
-            end_date=end,
-            employee_id=employee_id,
-            department_id=department_id,
+        run_blocking_operation(
+            self,
+            "جارٍ توليد التقرير...",
+            lambda: self._controller.generate_report(
+                report_type=report_type,
+                output_format=report_format,
+                output_path=output_path,
+                start_date=start,
+                end_date=end,
+                employee_id=employee_id,
+                department_id=department_id,
+            ),
         )
 
     def _prompt_save_path(self, report_format: ReportFormat) -> Path | None:

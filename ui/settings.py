@@ -23,7 +23,13 @@ from PySide6.QtWidgets import (
 )
 
 from controllers.settings_controller import SettingsController
-from ui.widgets import ConfirmDialog, make_primary_button, make_secondary_label, make_status_label
+from ui.widgets import (
+    ConfirmDialog,
+    make_primary_button,
+    make_secondary_label,
+    make_status_label,
+    run_blocking_operation,
+)
 
 #: Matches services/backup_service.py's own filename format:
 #: ``backup_YYYYMMDD_HHMMSS_ffffff[_label].db.enc``.
@@ -354,7 +360,9 @@ class BackupTab(_StatusMixin, QWidget):
         the message first would have it wiped out immediately.
         """
         self._hide_status()
-        path = self._controller.create_backup()
+        path = run_blocking_operation(
+            self, "جارٍ إنشاء نسخة احتياطية...", self._controller.create_backup
+        )
         if path is not None:
             self.refresh()
             self._show_status(
@@ -384,7 +392,11 @@ class BackupTab(_StatusMixin, QWidget):
         if not confirmed:
             return
         self._hide_status()
-        success = self._controller.restore_backup(Path(backup_path))
+        success = run_blocking_operation(
+            self,
+            "جارٍ استعادة النسخة الاحتياطية...",
+            lambda: self._controller.restore_backup(Path(backup_path)),
+        )
         if success:
             self._show_status(
                 "تمت استعادة النسخة الاحتياطية بنجاح. يُنصح بإعادة تشغيل التطبيق.",

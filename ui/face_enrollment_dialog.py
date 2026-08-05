@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.widgets import make_heading_label, make_secondary_label
+from ui.widgets import make_heading_label, make_secondary_label, run_blocking_operation
 
 #: How often the background worker asks the device for its current face count.
 _POLL_INTERVAL_SECONDS = 3.0
@@ -350,8 +350,12 @@ class BiometricStatusDialog(QDialog):
         device_id = dialog.selected_device_id()
         if device_id is None:
             return
-        status = self._controller.refresh_employee_biometric_status(
-            device_id=device_id, employee_id=self._employee_id
+        status = run_blocking_operation(
+            self,
+            "جارٍ تحديث الحالة البيومترية من الجهاز...",
+            lambda: self._controller.refresh_employee_biometric_status(
+                device_id=device_id, employee_id=self._employee_id
+            ),
         )
         if status is not None:
             self._apply_status(status)
