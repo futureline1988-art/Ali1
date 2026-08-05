@@ -13,10 +13,11 @@ directly from disk.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     Date,
     ForeignKey,
     Integer,
@@ -25,7 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from models.base import BaseModel, CompanyScopedMixin, enum_column_type
+from models.base import BaseModel, CompanyScopedMixin, UTCDateTime, enum_column_type
 from models.encrypted_types import EncryptedDecimal
 from models.enums import EmploymentStatus
 
@@ -76,6 +77,35 @@ class Employee(CompanyScopedMixin, BaseModel):
         qr_code_path: Filesystem path to a generated QR code encoding
             this employee's identity (see ``utils/qr_barcode.py``).
         barcode_path: Filesystem path to a generated barcode.
+        face_enrolled: Whether this employee's face is currently
+            believed to be enrolled on :attr:`face_enrolled_device_id`.
+            Set only by
+            ``services.device_service.DeviceService.confirm_face_enrollment``
+            — see that method's own docstring for why this is a
+            best-effort, operator-confirmed flag rather than a
+            device-verified fact (the ZKTeco protocol this project
+            speaks has no per-employee face-enrollment query).
+        face_enrolled_device_id: Which device :attr:`face_enrolled`
+            refers to, if any.
+        face_enrolled_at: When :attr:`face_enrolled` was last set.
+        fingerprint_count: How many fingerprint templates this
+            employee has enrolled on a device, as of the last
+            biometric-status refresh (see
+            ``services.device_service.DeviceService.refresh_employee_biometric_status``).
+            Unlike :attr:`face_enrolled`, this genuinely reflects the
+            device's own per-user template count (pyzk supports
+            reading it exactly).
+        card_assigned: Whether an access card is assigned to this
+            employee on a device, as of the last biometric-status
+            refresh.
+        biometric_last_synced_at: When :attr:`fingerprint_count`/
+            :attr:`card_assigned` were last refreshed from a device.
+        biometric_last_verification_result: Free-form code describing
+            the outcome of the last face-enrollment attempt (e.g.
+            ``"confirmed"``, ``"not_detected"``, ``"cancelled"``,
+            ``"timeout"``, ``"device_error"``) — shown in the
+            biometric-status section, not otherwise interpreted by
+            this model.
         department: The related :class:`~models.department.Department`.
     """
 
@@ -124,6 +154,18 @@ class Employee(CompanyScopedMixin, BaseModel):
     photo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     qr_code_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     barcode_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    face_enrolled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    face_enrolled_device_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("devices.id", ondelete="SET NULL"), nullable=True
+    )
+    face_enrolled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    fingerprint_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    card_assigned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    biometric_last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    biometric_last_verification_result: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
 
     department: Mapped["Department | None"] = relationship(  # noqa: F821 - resolved via registry
         "Department", backref="employees"

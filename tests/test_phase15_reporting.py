@@ -63,6 +63,34 @@ from developer_suite.services.reporting_service import (
 from developer_suite.services.subscription_service import SubscriptionServiceError
 from developer_suite.sync.coordinator import SyncCoordinator
 from developer_suite.sync.scheduler import SyncSchedulerService
+from server.models.device import DeviceType
+
+
+def _register_device_credential(
+    server_url: str, admin_bearer_token: str, *, name: str
+) -> tuple[str, str]:
+    """Register a new device against the running test server and return its credential.
+
+    Direct replacement for the retired ``sync.client.register_device`` —
+    same request, same response shape — since this application no
+    longer ships a client-side sync package; these report tests only
+    need a server-registered device to exist, not a locally persisted
+    credential.
+
+    Returns:
+        ``(device_public_id, api_key)``.
+    """
+    import httpx
+
+    with httpx.Client(base_url=server_url, timeout=15.0) as client:
+        response = client.post(
+            "/api/v1/devices/register",
+            json={"name": name, "device_type": DeviceType.ATTENDANCE_CLIENT.value, "company_name": None},
+            headers={"Authorization": f"Bearer {admin_bearer_token}"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["device"]["public_id"], data["api_key"]
 
 
 # ---------------------------------------------------------------------------
@@ -441,14 +469,12 @@ class TestServerBackedReports:
     ) -> None:
         from config import DatabaseConfig
         from database.database import Database as AttendanceDatabase
-        from sync.coordinator import ClientSyncCoordinator
 
-        # Enroll a throwaway Attendance Client device against the same
+        # Register a throwaway Attendance Client device against the same
         # running server so the Device report has at least one row.
         database = AttendanceDatabase(DatabaseConfig(sqlite_path=tmp_path / "client.db"))
         database.initialize()
-        coordinator = ClientSyncCoordinator(database, running_server_url)
-        coordinator.enroll(admin_bearer_token=admin_bearer_token, name="Test Device")
+        _register_device_credential(running_server_url, admin_bearer_token, name="Test Device")
         database.dispose()
 
         result = reporting_service.build_device_report()
@@ -477,22 +503,17 @@ class TestServerBackedReports:
     ) -> None:
         from database.database import Database as AttendanceDatabase
         from config import DatabaseConfig
-        from sync.coordinator import ClientSyncCoordinator
         from updates.client import UpdatesApiClient
         from developer_suite.services.update_manager_service import UpdateManagerService
-        from repositories.sync_repository import ClientSyncCredentialRepository
         from licensing.crypto.signing import generate_keypair as gen_kp, save_private_key as save_priv
 
-        # Enroll a throwaway Attendance Client so the report can resolve
+        # Register a throwaway Attendance Client so the report can resolve
         # its device name.
         client_db = AttendanceDatabase(DatabaseConfig(sqlite_path=tmp_path / "client.db"))
         client_db.initialize()
-        coordinator = ClientSyncCoordinator(client_db, running_server_url)
-        coordinator.enroll(admin_bearer_token=admin_bearer_token, name="Deployment Test Device")
-        with client_db.session_scope() as session:
-            credential = ClientSyncCredentialRepository(session).get()
-            device_public_id = credential.device_public_id
-            device_api_key = credential.api_key
+        device_public_id, device_api_key = _register_device_credential(
+            running_server_url, admin_bearer_token, name="Deployment Test Device"
+        )
 
         # Publish a version through the real Update Manager service (Phase 14).
         private_key, _public_key = gen_kp()

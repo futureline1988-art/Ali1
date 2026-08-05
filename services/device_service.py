@@ -16,11 +16,19 @@ not created as an orphaned punch.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from devices.device_interface import RawDeviceUser
+from devices.device_interface import (
+    ConnectionTestResult,
+    DeviceCapabilities,
+    DeviceConnectionError,
+    RawDeviceUser,
+)
 from devices.device_manager import DeviceManager
 from models.attendance import AttendancePunch
 from models.audit_log import AuditLog
@@ -32,6 +40,7 @@ from repositories.audit_log_repository import AuditLogRepository
 from repositories.branch_repository import BranchRepository
 from repositories.device_repository import DeviceRepository
 from repositories.employee_repository import EmployeeRepository
+from services.employee_service import EmployeeService, EmployeeValidationError
 from utils.logger import logger
 from utils.validators import is_valid_host, is_valid_port, is_within_length
 
@@ -40,8 +49,79 @@ _UPDATABLE_FIELDS = frozenset(
 )
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class DeviceValidationError(Exception):
     """Raised when device input fails validation or a uniqueness check."""
+
+
+class FaceEnrollmentOutcome(str, Enum):
+    """Why a face-enrollment step ended the way it did.
+
+    Deliberately returned as data (see :class:`FaceEnrollmentResult`)
+    rather than raised as distinct exception types — a controller's
+    generic exception boundary
+    (:meth:`~controllers.base_controller.BaseController._run`) would
+    otherwise collapse every one of these into one indistinguishable
+    string, but the UI genuinely needs to react differently to each
+    (see ``ui/employees.py``'s face-enrollment dialog).
+    """
+
+    UNSUPPORTED_DEVICE = "unsupported_device"
+    DISCONNECTED = "disconnected"
+    INVALID_EMPLOYEE_NUMBER = "invalid_employee_number"
+    STARTED = "started"
+    CONFIRMED = "confirmed"
+    NOT_DETECTED = "not_detected"
+    CANCELLED = "cancelled"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class FaceEnrollmentSession:
+    """State the caller must hold onto between :meth:`DeviceService.begin_face_enrollment`
+    and :meth:`DeviceService.confirm_face_enrollment` — the UI passes
+    this back in once the employee has completed (or the operator has
+    cancelled) enrollment on the physical device.
+
+    Attributes:
+        device_id: The device enrollment was started on.
+        employee_id: The employee enrollment was started for.
+        before_face_count: The device's device-wide enrolled-face count
+            captured right before enrollment started — the only signal
+            this project's ZKTeco integration can use to detect that
+            *something* new was enrolled (see
+            :meth:`DeviceService.confirm_face_enrollment`'s own
+            docstring for why this can never be attributed to a
+            specific employee by the device itself).
+        started_at: When enrollment was started.
+    """
+
+    device_id: int
+    employee_id: int
+    before_face_count: int | None
+    started_at: datetime
+
+
+@dataclass(frozen=True)
+class FaceEnrollmentResult:
+    """The outcome of one face-enrollment step, with bilingual user-facing messages.
+
+    Attributes:
+        outcome: Which of :class:`FaceEnrollmentOutcome` this is.
+        message_ar: Arabic message to show the operator.
+        message_en: English message, for logs.
+        session: Present only when :attr:`outcome` is :attr:`~FaceEnrollmentOutcome.STARTED`
+            — the caller must hold onto it and pass it back into
+            :meth:`DeviceService.confirm_face_enrollment`.
+    """
+
+    outcome: FaceEnrollmentOutcome
+    message_ar: str
+    message_en: str
+    session: FaceEnrollmentSession | None = None
 
 
 class DeviceService:
@@ -85,20 +165,41 @@ class DeviceService:
         self.audit_repo = AuditLogRepository(session)
         self.device_manager = device_manager or DeviceManager()
 
-    def test_connection(self, device: Device) -> bool:
-        """Test connectivity to a device and update its recorded status.
+    def test_connection(self, device: Device) -> ConnectionTestResult:
+        """Test connectivity to a device, update its recorded status, and diagnose any failure.
+
+        Validates the address format locally first (no attempt is made
+        to reach a syntactically invalid host), then attempts a real
+        connection through :meth:`~devices.device_interface.DeviceConnector.test_connection_detailed`,
+        which classifies the failure precisely (network unreachable,
+        port closed, wrong communication key, timeout, unsupported
+        protocol) rather than collapsing every reason into one generic
+        message. On success, the device's reported model/serial/
+        firmware are persisted onto ``device`` (columns that exist but
+        are otherwise never populated).
 
         Args:
             device: The device to test (must belong to this service's
                 company).
 
         Returns:
-            ``True`` if the connection succeeded.
+            The diagnostic :class:`~devices.device_interface.ConnectionTestResult`.
         """
+        if not is_valid_host(device.host):
+            device.mark_error()
+            self.session.flush()
+            return ConnectionTestResult(success=False, message_ar="عنوان IP غير صحيح.")
+        if not is_valid_port(device.port):
+            device.mark_error()
+            self.session.flush()
+            return ConnectionTestResult(
+                success=False, message_ar=f"المنفذ {device.port} غير صحيح."
+            )
+
         connector = self.device_manager.get_connector(device)
         try:
-            success = connector.test_connection()
-        except Exception as exc:
+            result = connector.test_connection_detailed()
+        except Exception as exc:  # noqa: BLE001 - any unexpected connector failure is still a diagnostic result
             device.mark_error()
             self.session.flush()
             logger.warning(
@@ -106,16 +207,25 @@ class DeviceService:
                 name=device.name,
                 error=str(exc),
             )
-            return False
+            return ConnectionTestResult(
+                success=False, message_ar="تعذر الاتصال بالجهاز.", detail=str(exc)
+            )
         finally:
             connector.disconnect()
 
-        if success:
+        if result.success:
             device.mark_online()
+            if result.capabilities is not None:
+                if result.capabilities.serial_number:
+                    device.serial_number = result.capabilities.serial_number
+                if result.capabilities.device_model:
+                    device.device_model = result.capabilities.device_model
+                if result.capabilities.firmware_version:
+                    device.firmware_version = result.capabilities.firmware_version
         else:
             device.mark_offline()
         self.session.flush()
-        return success
+        return result
 
     def sync_attendance_logs(self, device: Device) -> list[AttendancePunch]:
         """Download and persist a device's attendance logs.
@@ -246,6 +356,460 @@ class DeviceService:
                 ),
             )
         )
+
+    def pull_employees_from_device(self, device: Device) -> list[Employee]:
+        """Download every user enrolled on the device and import unmatched ones as employees.
+
+        The download counterpart to :meth:`push_employee_to_device`.
+        Matches each device user against an existing employee by
+        :attr:`~models.employee.Employee.employee_number` (the same
+        convention every other device-mapping operation uses); a
+        device user whose reference does not match any existing
+        employee's number is created as a new, minimal employee record
+        (only ``employee_number``/``full_name`` are known from the
+        device — every other field an administrator can fill in
+        afterward from the Employees screen). A device user that
+        already matches an employee is left untouched, never
+        overwritten.
+
+        Args:
+            device: The device to pull from (must belong to this
+                service's company).
+
+        Returns:
+            The newly created employees (already-matched device users
+            are not included).
+
+        Raises:
+            Exception: Whatever the underlying connector raises on a
+                communication failure, after marking the device's
+                status as errored.
+        """
+        connector = self.device_manager.get_connector(device)
+        try:
+            raw_users = connector.fetch_users()
+        except Exception as exc:
+            device.mark_error()
+            self.session.flush()
+            logger.error(
+                "Device {name} employee download failed: {error}",
+                name=device.name,
+                error=str(exc),
+            )
+            raise
+        finally:
+            connector.disconnect()
+
+        employee_service = EmployeeService(
+            self.session, company_id=self.company_id, actor_user_id=self.actor_user_id
+        )
+        employee_repo = EmployeeRepository(self.session, company_id=self.company_id)
+
+        created: list[Employee] = []
+        for raw_user in raw_users:
+            if not raw_user.device_user_reference:
+                continue
+            if employee_repo.get_by_employee_number(raw_user.device_user_reference) is not None:
+                continue
+            try:
+                employee = employee_service.create_employee(
+                    employee_number=raw_user.device_user_reference,
+                    full_name=raw_user.name or raw_user.device_user_reference,
+                )
+            except EmployeeValidationError as exc:
+                logger.warning(
+                    "Skipped importing device user {reference!r} from {name}: {error}",
+                    reference=raw_user.device_user_reference,
+                    name=device.name,
+                    error=str(exc),
+                )
+                continue
+            created.append(employee)
+
+        device.record_sync()
+        self.session.flush()
+
+        if created:
+            self.audit_repo.add(
+                AuditLog(
+                    company_id=self.company_id,
+                    user_id=self.actor_user_id,
+                    action=AuditAction.DEVICE_SYNC,
+                    entity_type="Device",
+                    entity_id=device.id,
+                    description=(
+                        f"Imported {len(created)} employee(s) from device {device.name!r}."
+                    ),
+                )
+            )
+        return created
+
+    def get_device_capabilities(self, device: Device) -> DeviceCapabilities:
+        """Read a device's identity, capacity, and biometric support, updating its status.
+
+        Args:
+            device: The device to query.
+
+        Returns:
+            The device's capabilities.
+
+        Raises:
+            DeviceConnectionError: If the device could not be reached.
+        """
+        connector = self.device_manager.get_connector(device)
+        try:
+            capabilities = connector.get_capabilities()
+        except Exception:
+            device.mark_error()
+            self.session.flush()
+            raise
+        finally:
+            connector.disconnect()
+
+        device.mark_online()
+        if capabilities.serial_number and not device.serial_number:
+            device.serial_number = capabilities.serial_number
+        self.session.flush()
+        return capabilities
+
+    def refresh_employee_biometric_status(self, device: Device, employee: Employee) -> Employee:
+        """Refresh one employee's fingerprint-count/card-assignment from a device.
+
+        Never touches :attr:`~models.employee.Employee.face_enrolled`
+        — that field is only ever set by
+        :meth:`confirm_face_enrollment`/:meth:`reset_face_enrollment_status`,
+        since (unlike fingerprint count and card) it cannot be
+        re-derived from a fresh device read at all (see
+        :meth:`confirm_face_enrollment`'s own docstring).
+
+        Args:
+            device: The device to read from.
+            employee: The employee to refresh; must have already been
+                pushed to this device (see :meth:`push_employee_to_device`)
+                for a meaningful, non-zero result.
+
+        Returns:
+            The updated employee.
+
+        Raises:
+            DeviceConnectionError: If the device could not be reached.
+        """
+        connector = self.device_manager.get_connector(device)
+        try:
+            status = connector.get_user_biometric_status(employee.employee_number)
+        finally:
+            connector.disconnect()
+
+        employee.fingerprint_count = status.fingerprint_count
+        employee.card_assigned = status.card_assigned
+        employee.biometric_last_synced_at = _utc_now()
+        self.session.flush()
+        return employee
+
+    def begin_face_enrollment(self, device: Device, employee: Employee) -> FaceEnrollmentResult:
+        """Start the on-device face-enrollment workflow for one employee.
+
+        This project's ZKTeco integration (``pyzk``) has no protocol
+        command to remotely trigger face enrollment (verified directly
+        against the installed library — see
+        :mod:`devices.zkteco_device`'s own module docstring), so
+        "starting" enrollment here means exactly two things: (1)
+        pushing the employee's record to the device using their
+        (already UID-stable — see
+        :meth:`~devices.zkteco_device.ZKTecoConnector.push_users`)
+        device user reference, and (2) capturing the device's current
+        enrolled-face count as a baseline for
+        :meth:`confirm_face_enrollment` to compare against later. The
+        actual face capture only ever happens when a person walks up
+        to the physical device and enrolls through its own on-device
+        menu — this method cannot make that happen, only prepare for
+        it and report that preparation succeeded.
+
+        Args:
+            device: The device to enroll on; must be a ZKTeco device
+                that reports face support (see
+                :meth:`get_device_capabilities`).
+            employee: The employee to enroll; their
+                :attr:`~models.employee.Employee.employee_number` must
+                be numeric (ZKTeco device user IDs are numeric).
+
+        Returns:
+            :attr:`~FaceEnrollmentOutcome.UNSUPPORTED_DEVICE` if the
+            device is not a face-capable ZKTeco device;
+            :attr:`~FaceEnrollmentOutcome.INVALID_EMPLOYEE_NUMBER` if
+            the employee number is not numeric;
+            :attr:`~FaceEnrollmentOutcome.DISCONNECTED` if the device
+            could not be reached; :attr:`~FaceEnrollmentOutcome.STARTED`
+            (with a :class:`FaceEnrollmentSession` to pass into
+            :meth:`confirm_face_enrollment`) on success.
+        """
+        if not device.uses_zkteco_protocol:
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.UNSUPPORTED_DEVICE,
+                message_ar="بصمة الوجه غير مدعومة إلا على أجهزة ZKTeco.",
+                message_en="Face enrollment is only supported on ZKTeco devices.",
+            )
+        if not employee.employee_number.isdigit():
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.INVALID_EMPLOYEE_NUMBER,
+                message_ar=(
+                    "يجب أن يتكون الرقم الوظيفي من أرقام فقط لدعم التسجيل على "
+                    "جهاز البصمة."
+                ),
+                message_en="The employee number must be numeric to support the biometric device.",
+            )
+
+        connector = self.device_manager.get_connector(device)
+        try:
+            capabilities = connector.get_capabilities()
+        except DeviceConnectionError as exc:
+            connector.disconnect()
+            device.mark_error()
+            self.session.flush()
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر الاتصال بالجهاز.",
+                message_en=f"Could not reach the device: {exc}",
+            )
+
+        if not capabilities.supports_face:
+            connector.disconnect()
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.UNSUPPORTED_DEVICE,
+                message_ar="هذا الجهاز لا يدعم تسجيل بصمة الوجه.",
+                message_en="This device does not support face enrollment.",
+            )
+
+        try:
+            connector.push_users(
+                [
+                    RawDeviceUser(
+                        device_user_reference=employee.employee_number,
+                        name=employee.full_name,
+                    )
+                ]
+            )
+        except DeviceConnectionError as exc:
+            device.mark_error()
+            self.session.flush()
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر إرسال بيانات الموظف إلى الجهاز.",
+                message_en=f"Failed to push employee data to the device: {exc}",
+            )
+        finally:
+            connector.disconnect()
+
+        device.mark_online()
+        self.session.flush()
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.DEVICE_SYNC,
+                entity_type="Employee",
+                entity_id=employee.id,
+                description=(
+                    f"Started face-enrollment workflow for employee "
+                    f"{employee.employee_number!r} on device {device.name!r}."
+                ),
+            )
+        )
+        return FaceEnrollmentResult(
+            outcome=FaceEnrollmentOutcome.STARTED,
+            message_ar=(
+                "تم إرسال بيانات الموظف إلى الجهاز. يرجى من الموظف الوقوف أمام "
+                "جهاز البصمة وإكمال تسجيل الوجه."
+            ),
+            message_en=(
+                "Employee data sent to the device. Ask the employee to stand in "
+                "front of the device and complete face enrollment there."
+            ),
+            session=FaceEnrollmentSession(
+                device_id=device.id,
+                employee_id=employee.id,
+                before_face_count=capabilities.face_template_count,
+                started_at=_utc_now(),
+            ),
+        )
+
+    def check_face_enrollment_progress(self, device: Device) -> int | None:
+        """Read the device's current enrolled-face count, for a non-blocking progress poll.
+
+        Deliberately returns only a bare count (device-wide, exactly
+        like :meth:`begin_face_enrollment`'s baseline) rather than any
+        per-employee signal — no such signal exists (see
+        :meth:`confirm_face_enrollment`'s own docstring). Callers
+        should compare this against
+        :attr:`FaceEnrollmentSession.before_face_count` themselves.
+
+        Raises:
+            DeviceConnectionError: If the device could not be reached.
+        """
+        connector = self.device_manager.get_connector(device)
+        try:
+            return connector.get_capabilities().face_template_count
+        finally:
+            connector.disconnect()
+
+    def confirm_face_enrollment(
+        self,
+        device: Device,
+        employee: Employee,
+        enrollment_session: FaceEnrollmentSession,
+        *,
+        operator_confirmed: bool,
+    ) -> FaceEnrollmentResult:
+        """Verify and record the outcome of a face-enrollment attempt.
+
+        "Verify" here means exactly what this project's ZKTeco
+        integration can actually check: whether the device's
+        device-wide enrolled-face count increased since
+        :meth:`begin_face_enrollment` captured
+        :attr:`~FaceEnrollmentSession.before_face_count`. ``pyzk`` has
+        no per-employee face-enrollment query — a rising count is
+        *consistent with* this employee's enrollment having succeeded,
+        it does not *prove* it (another enrollment happening on the
+        same device around the same time is indistinguishable). That
+        is why this method requires ``operator_confirmed=True`` before
+        it will actually set
+        :attr:`~models.employee.Employee.face_enrolled` — the human
+        who was watching the device is the only party who can
+        genuinely attribute the new enrollment to this specific
+        employee.
+
+        Args:
+            device: The device enrollment was attempted on.
+            employee: The employee enrollment was attempted for.
+            enrollment_session: The session
+                :meth:`begin_face_enrollment` returned.
+            operator_confirmed: Whether the operator has confirmed the
+                newly-detected enrollment belongs to this employee.
+                Ignored (no-op) if no new enrollment was actually
+                detected.
+
+        Returns:
+            :attr:`~FaceEnrollmentOutcome.DISCONNECTED` if the device
+            could not be reached; :attr:`~FaceEnrollmentOutcome.NOT_DETECTED`
+            if the face count did not increase, or increased but the
+            operator has not (yet) confirmed it;
+            :attr:`~FaceEnrollmentOutcome.CONFIRMED` once recorded.
+        """
+        connector = self.device_manager.get_connector(device)
+        try:
+            capabilities = connector.get_capabilities()
+        except DeviceConnectionError as exc:
+            connector.disconnect()
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر الاتصال بالجهاز للتحقق من التسجيل.",
+                message_en=f"Could not reach the device to verify enrollment: {exc}",
+            )
+        finally:
+            connector.disconnect()
+
+        after_count = capabilities.face_template_count
+        before_count = enrollment_session.before_face_count
+        detected = before_count is not None and after_count is not None and after_count > before_count
+
+        if not detected:
+            employee.biometric_last_verification_result = "not_detected"
+            self.session.flush()
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.NOT_DETECTED,
+                message_ar="لم يتم اكتشاف تسجيل بصمة وجه جديد على الجهاز بعد.",
+                message_en="No new face enrollment has been detected on the device yet.",
+            )
+
+        if not operator_confirmed:
+            return FaceEnrollmentResult(
+                outcome=FaceEnrollmentOutcome.NOT_DETECTED,
+                message_ar=(
+                    "تم اكتشاف تسجيل جديد على الجهاز. يرجى تأكيد أن هذا التسجيل "
+                    "يخص هذا الموظف بالتحديد."
+                ),
+                message_en=(
+                    "A new enrollment was detected on the device. Please confirm "
+                    "it belongs to this specific employee."
+                ),
+            )
+
+        employee.face_enrolled = True
+        employee.face_enrolled_device_id = device.id
+        employee.face_enrolled_at = _utc_now()
+        employee.biometric_last_verification_result = "confirmed"
+        self.session.flush()
+
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.DEVICE_SYNC,
+                entity_type="Employee",
+                entity_id=employee.id,
+                description=(
+                    f"Confirmed face enrollment for employee "
+                    f"{employee.employee_number!r} on device {device.name!r}."
+                ),
+            )
+        )
+        return FaceEnrollmentResult(
+            outcome=FaceEnrollmentOutcome.CONFIRMED,
+            message_ar="تم تأكيد تسجيل بصمة الوجه بنجاح.",
+            message_en="Face enrollment confirmed successfully.",
+        )
+
+    def cancel_face_enrollment(self, employee: Employee) -> None:
+        """Record that an in-progress face-enrollment attempt was cancelled.
+
+        Args:
+            employee: The employee whose enrollment attempt was
+                cancelled.
+        """
+        employee.biometric_last_verification_result = "cancelled"
+        self.session.flush()
+
+    def reset_face_enrollment_status(self, employee: Employee) -> Employee:
+        """Locally clear an employee's cached face-enrollment status.
+
+        This does **not** delete anything from the device — ``pyzk``
+        has no command to delete a face template specifically (only
+        an entire user, or a fingerprint template by slot); deleting
+        the whole device user would also drop their fingerprint
+        templates and attendance-log association, which this method
+        deliberately avoids doing silently. Use this when the local
+        record has drifted from reality (e.g. the face was removed
+        directly on the device, or was mistakenly attributed to this
+        employee) and needs to be corrected here without touching the
+        device at all.
+
+        Args:
+            employee: The employee to reset.
+
+        Returns:
+            The updated employee.
+        """
+        employee.face_enrolled = False
+        employee.face_enrolled_device_id = None
+        employee.face_enrolled_at = None
+        employee.biometric_last_verification_result = "local_reset"
+        self.session.flush()
+
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.DEVICE_SYNC,
+                entity_type="Employee",
+                entity_id=employee.id,
+                description=(
+                    f"Locally reset face-enrollment status for employee "
+                    f"{employee.employee_number!r} (device template, if any, "
+                    f"is unchanged -- unsupported by this project's ZKTeco library)."
+                ),
+            )
+        )
+        return employee
 
     def create_device(
         self,

@@ -1,40 +1,18 @@
-"""Login screen: company code (first run only) + username/password authentication.
-
-This server is multi-tenant, so this screen never lists or lets a user
-pick from other companies (see
-:meth:`~services.subscription_check_service.SubscriptionCheckService.resolve_company_code`'s
-own docstring) — instead, a brand-new installation asks for a company
-code (handed to that company's employees by their administrator, out
-of band) alongside the usual username/password. That code is resolved
-against the Attendance Server *before* local authentication runs (only
-the server knows which company a code belongs to); only once local
-authentication then succeeds does this installation permanently bind
-itself to that company, and every later login skips the code prompt
-entirely (see :func:`_load_bound_company`).
+"""Login screen: company selection + username/password authentication.
 
 Usernames are unique per company, not globally (see
-:class:`~models.user.User`), so local authentication is always scoped
-to one company id — resolved either from the bound company (repeat
-logins) or from the just-resolved company code's name (first login).
-This window queries the local company/binding state directly through
-:func:`~database.database.session_scope` (there is deliberately no
-company-scoped controller for this — it is the one screen in the app
-that runs *before* a company is known), then delegates the actual
-login attempt to a freshly-constructed
+:class:`~models.user.User`), so a user must pick their company before
+entering credentials. In practice a standalone installation only ever
+has the one company the first-run wizard created (see
+:mod:`ui.first_run_wizard`), so the picker is hidden whenever there is
+exactly one; it only becomes visible again if an administrator ever
+sets up more than one local company. This window queries the company
+list directly through :func:`~database.database.session_scope` (there
+is deliberately no company-scoped controller for this — it is the one
+screen in the app that runs *before* a company is known), then
+delegates the actual login attempt to a freshly-constructed
 :class:`~controllers.auth_controller.AuthController` bound to the
-resolved company.
-
-The Attendance Client never creates a company's first administrator
-itself. On a company's first-ever enrollment (no local ``Company`` row
-yet matches the resolved company code), :meth:`LoginWindow._bootstrap_company_and_admin`
-creates the local company and materializes the one initial
-administrator the Developer Suite already created for it (downloaded
-via :meth:`~services.subscription_check_service.SubscriptionCheckService.download_initial_admin`)
-as this installation's first local user — see
-:mod:`server.models.initial_admin`'s own docstring for why. The
-username/password typed into this screen on that first run must match
-that administrator's; local authentication then proceeds exactly as
-on every later login.
+chosen company.
 """
 
 from __future__ import annotations
@@ -44,6 +22,7 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -56,37 +35,22 @@ from PySide6.QtWidgets import (
 
 from controllers.auth_controller import AuthController
 from database.database import session_scope
-from models.enums import UserRole
-from repositories.role_repository import RoleRepository
-from repositories.sync_repository import ClientSyncCredentialRepository
 from services.company_service import CompanyService
-from services.subscription_check_service import SubscriptionCheckService
-from services.user_service import UserService
-from sync.client import SyncClientError
-from ui.support_info_dialog import SupportInfoDialog
 from ui.widgets import make_heading_label, make_primary_button, make_secondary_label
 from utils.security import SessionManager
 
 
-def _load_bound_company() -> dict[str, Any] | None:
-    """Return this installation's permanently bound company, if any.
+def _load_active_companies() -> list[dict[str, Any]]:
+    """Fetch every active company as plain dicts, for the company picker.
 
-    ``None`` before this installation's first-ever successful login
-    -driven enrollment (see
-    :meth:`~services.subscription_check_service.SubscriptionCheckService.confirm_local_binding`,
-    driven by this window's own :meth:`LoginWindow._attempt_login`) —
-    from that point on, this device serves exactly one company, so the
-    company code is never asked for again.
+    Returns:
+        ``{"id": ..., "name": ...}`` dicts, ordered by name; an empty
+        list if the database has no active companies yet.
     """
     with session_scope() as session:
-        bound_company_id = ClientSyncCredentialRepository(session).get_bound_company_id()
-        if bound_company_id is None:
-            return None
         service = CompanyService(session)
-        company = service.company_repo.get_by_id(bound_company_id)
-        if company is None:
-            return None
-        return {"id": company.id, "name": company.name}
+        companies = service.list_companies(active_only=True)
+        return [{"id": company.id, "name": company.name} for company in companies]
 
 
 class LoginWindow(QWidget):
@@ -101,21 +65,11 @@ class LoginWindow(QWidget):
     """Emitted with ``(user_dict, company_id)`` on a successful login."""
 
     def __init__(
-        self,
-        *,
-        subscription_check_service: SubscriptionCheckService,
-        session_manager: SessionManager | None = None,
-        parent: QWidget | None = None,
+        self, *, session_manager: SessionManager | None = None, parent: QWidget | None = None
     ) -> None:
-        """Build the login screen, showing the company code field only if not yet bound.
+        """Build the login screen and populate the company picker.
 
         Args:
-            subscription_check_service: Resolves a typed company code
-                with the Attendance Server (first login only) and, on
-                a subsequent successful local login, permanently binds
-                this installation to the resolved company — see
-                :meth:`SubscriptionCheckService.resolve_company_code`/
-                :meth:`SubscriptionCheckService.confirm_local_binding`.
             session_manager: The desktop session tracker to authenticate
                 into; defaults to a new, private
                 :class:`~utils.security.SessionManager` (fine for
@@ -131,12 +85,9 @@ class LoginWindow(QWidget):
         self.setMinimumSize(920, 560)
 
         self.session_manager = session_manager or SessionManager()
-        self._subscription_check_service = subscription_check_service
         self._auth_controller: AuthController | None = None
         self._password_visible = False
         self._did_succeed = False
-        self._pending_company_code: str | None = None
-        self._bound_company: dict[str, Any] | None = None
 
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -145,7 +96,7 @@ class LoginWindow(QWidget):
         root_layout.addWidget(self._build_branding_panel(), stretch=1)
         root_layout.addWidget(self._build_form_panel(), stretch=1)
 
-        self._apply_bound_state()
+        self._populate_companies()
 
     # ------------------------------------------------------------------
     # Layout construction
@@ -186,11 +137,10 @@ class LoginWindow(QWidget):
         heading = make_heading_label("تسجيل الدخول")
         layout.addWidget(heading)
 
-        self.company_code_label = make_secondary_label("رمز الشركة")
-        layout.addWidget(self.company_code_label)
-        self.company_code_edit = QLineEdit(panel)
-        self.company_code_edit.setPlaceholderText("مثال: FUTURELINE-7X4K9P")
-        layout.addWidget(self.company_code_edit)
+        self.company_label = make_secondary_label("الشركة")
+        layout.addWidget(self.company_label)
+        self.company_combo = QComboBox(panel)
+        layout.addWidget(self.company_combo)
 
         username_label = make_secondary_label("اسم المستخدم")
         layout.addWidget(username_label)
@@ -224,13 +174,6 @@ class LoginWindow(QWidget):
         self.login_button.clicked.connect(self._attempt_login)
         layout.addWidget(self.login_button)
 
-        self.support_button = QToolButton(panel)
-        self.support_button.setText("هل تحتاج مساعدة؟")
-        self.support_button.setCursor(Qt.PointingHandCursor)
-        self.support_button.setAutoRaise(True)
-        self.support_button.clicked.connect(self._on_support_clicked)
-        layout.addWidget(self.support_button, alignment=Qt.AlignCenter)
-
         layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         return panel
@@ -239,18 +182,27 @@ class LoginWindow(QWidget):
     # Behavior
     # ------------------------------------------------------------------
 
-    def _apply_bound_state(self) -> None:
-        """Hide the company code field once this installation is already bound.
+    def _populate_companies(self) -> None:
+        """Load active companies into :attr:`company_combo`.
 
-        This application's central-server model is one device
-        permanently serving one company — see :func:`_load_bound_company`.
-        A never-bound installation instead shows the company code field
-        (this screen never lists or offers a choice of companies).
+        The picker is only shown when there is more than one local
+        company — the common case (one company, from the first-run
+        wizard) skips straight past it so the login screen doesn't ask
+        a question with only one possible answer.
         """
-        self._bound_company = _load_bound_company()
-        is_bound = self._bound_company is not None
-        self.company_code_label.setVisible(not is_bound)
-        self.company_code_edit.setVisible(not is_bound)
+        companies = _load_active_companies()
+        self.company_combo.clear()
+        for company in companies:
+            self.company_combo.addItem(company["name"], userData=company["id"])
+
+        has_companies = bool(companies)
+        show_picker = len(companies) > 1
+        self.company_label.setVisible(show_picker)
+        self.company_combo.setVisible(show_picker)
+        self.company_combo.setEnabled(has_companies)
+        self.login_button.setEnabled(has_companies)
+        if not has_companies:
+            self._show_error("لا توجد شركات مسجلة في النظام بعد.")
 
     def _toggle_password_visibility(self) -> None:
         """Flip the password field between hidden and plain-text display."""
@@ -269,107 +221,21 @@ class LoginWindow(QWidget):
         self.error_label.clear()
         self.error_label.hide()
 
-    def _on_support_clicked(self) -> None:
-        """Show this company's cached Support Information (see :class:`~ui.support_info_dialog.SupportInfoDialog`).
-
-        Works whether or not this installation is bound yet, and
-        whether or not the Attendance Server is currently reachable —
-        it only ever reads the local cache populated by the last
-        successful :meth:`~services.subscription_check_service.SubscriptionCheckService.check`,
-        never contacts the server itself.
-        """
-        cached = self._subscription_check_service.get_cached()
-        SupportInfoDialog(cached=cached, parent=self).exec()
-
     def _attempt_login(self) -> None:
-        """Validate input and attempt authentication, resolving a company code first if needed."""
+        """Validate input and attempt authentication against the selected company."""
         self._clear_error()
 
+        company_id = self.company_combo.currentData()
         username = self.username_edit.text().strip()
         password = self.password_edit.text()
+
+        if company_id is None:
+            self._show_error("الرجاء اختيار الشركة.")
+            return
         if not username or not password:
             self._show_error("الرجاء إدخال اسم المستخدم وكلمة المرور.")
             return
 
-        if self._bound_company is not None:
-            self._authenticate_locally(self._bound_company["id"], username, password)
-            return
-
-        company_code = self.company_code_edit.text().strip()
-        if not company_code:
-            self._show_error("الرجاء إدخال رمز الشركة.")
-            return
-
-        self.login_button.setEnabled(False)
-        try:
-            resolution = self._subscription_check_service.resolve_company_code(
-                company_code=company_code
-            )
-        finally:
-            self.login_button.setEnabled(True)
-
-        if resolution.blocked is not None:
-            self._show_error(resolution.blocked.message_ar)
-            return
-
-        with session_scope() as session:
-            company = CompanyService(session).company_repo.get_by_name(resolution.company_name)
-
-        if company is None:
-            company_id = self._bootstrap_company_and_admin(resolution.company_name)
-            if company_id is None:
-                return
-        else:
-            company_id = company.id
-
-        self._pending_company_code = company_code
-        self._authenticate_locally(company_id, username, password)
-
-    def _bootstrap_company_and_admin(self, company_name: str) -> int | None:
-        """First-ever enrollment for this company: create it locally and materialize its initial administrator.
-
-        Called only when no local ``Company`` row matches
-        ``company_name`` yet — this installation's very first
-        successful company-code resolution. Never creates the
-        administrator account itself: downloads the one the Developer
-        Suite already created (see
-        :meth:`~services.subscription_check_service.SubscriptionCheckService.download_initial_admin`)
-        and stores it as-is.
-
-        Returns:
-            The newly created local company's id, or ``None`` if
-            bootstrapping could not proceed (an inline error is
-            already shown in that case).
-        """
-        try:
-            admin = self._subscription_check_service.download_initial_admin()
-        except SyncClientError:
-            self._show_error(
-                "تعذر تنزيل حساب المسؤول الأولي من خادم الحضور. يرجى التحقق من الاتصال والمحاولة مرة أخرى."
-            )
-            return None
-
-        if not admin.configured:
-            self._show_error(
-                "لم يتم إعداد مسؤول أولي لهذه الشركة بعد من قبل مزوّد الخدمة. يرجى التواصل معه."
-            )
-            return None
-
-        with session_scope() as session:
-            company = CompanyService(session).create_company(name=company_name)
-            role = RoleRepository(session, company_id=company.id).get_by_code(
-                UserRole.SYSTEM_ADMIN.value
-            )
-            UserService(session, company_id=company.id).create_bootstrap_admin(
-                username=admin.username,
-                full_name=admin.full_name,
-                password_hash=admin.password_hash,
-                role_id=role.id,
-            )
-            return company.id
-
-    def _authenticate_locally(self, company_id: int, username: str, password: str) -> None:
-        """Attempt local username/password authentication against a resolved company."""
         self.login_button.setEnabled(False)
         try:
             controller = AuthController(
@@ -385,12 +251,7 @@ class LoginWindow(QWidget):
             self.login_button.setEnabled(True)
 
     def _on_login_succeeded(self, user: dict[str, Any], company_id: int) -> None:
-        """Confirm this installation's company binding (first login only), then relay success."""
-        if self._pending_company_code is not None:
-            self._subscription_check_service.confirm_local_binding(
-                company_id=company_id, company_code=self._pending_company_code
-            )
-            self._pending_company_code = None
+        """Relay a successful authentication to :attr:`login_successful`."""
         self.password_edit.clear()
         self._did_succeed = True
         self.login_successful.emit(user, company_id)
@@ -417,9 +278,7 @@ class LoginWindow(QWidget):
         successful login (see ``main.py``'s ``ApplicationController``),
         which must not be mistaken for the user closing it via the
         window manager - the ``_did_succeed`` flag distinguishes the
-        two, exactly like
-        :class:`~ui.subscription_blocked_window.SubscriptionBlockedWindow`'s
-        ``_did_pass`` does for the same reason.
+        two.
         """
         super().closeEvent(event)
         if not self._did_succeed:

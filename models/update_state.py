@@ -1,11 +1,9 @@
 """Local software-update-check bookkeeping for the Attendance Client's own installation.
 
-Mirrors :mod:`models.sync_state`'s shape and reasoning exactly: an
-infrastructure-primitive table, extending :class:`~models.base.Base`
+An infrastructure-primitive table, extending :class:`~models.base.Base`
 directly rather than :class:`~models.base.BaseModel`, since this is
-not company-scoped business data (see that module's own docstring for
-the identical argument applied to
-:class:`~models.sync_state.ClientSyncCredential`/:class:`~models.sync_state.ClientSyncCursor`).
+not company-scoped business data — the same reasoning
+:class:`~models.update_credential.UpdateServerCredential` applies.
 
 :class:`ClientUpdateState` holds one row per software update version
 this installation has ever discovered — never deleted, so a small

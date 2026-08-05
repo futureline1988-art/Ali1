@@ -1,15 +1,12 @@
 """HTTP client for the Attendance Server's device-facing update-check and download endpoints.
 
-Mirrors :mod:`sync.client`'s shape and error hierarchy — reusing its
-:class:`~sync.client.SyncConnectionError`/:class:`~sync.client.SyncAuthError`/
-:class:`~sync.client.SyncServerError` directly rather than duplicating
-three near-identical exception classes, since both modules describe
-exactly the same generic HTTP-transport failure modes against the same
-authenticated Attendance Server, just for a different endpoint group
-(see this package's own ``__init__.py``). Authenticated the same way
-every sync pull already is (``X-Device-Id``/``X-Device-Api-Key``,
-see :mod:`sync.coordinator`) — this is a second endpoint group on the
-*same* device credential, not a second authentication mechanism.
+Fully self-contained: this application no longer requires a central
+Attendance Server for normal operation (see :mod:`updates`'s own
+docstring), so this module carries its own small exception hierarchy
+rather than depending on the retired ``sync`` package. An installation
+only ever calls this client if an administrator has manually configured
+an update-server credential (see :mod:`repositories.update_credential_repository`)
+— optional, off by default, never required.
 """
 
 from __future__ import annotations
@@ -20,15 +17,14 @@ from typing import Callable
 
 import httpx
 
-from sync.client import SyncAuthError, SyncConnectionError, SyncServerError
-
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _DOWNLOAD_CHUNK_SIZE = 256 * 1024
 
 __all__ = [
-    "SyncConnectionError",
-    "SyncAuthError",
-    "SyncServerError",
+    "UpdateClientError",
+    "UpdateConnectionError",
+    "UpdateAuthError",
+    "UpdateServerError",
     "UpdatePackageInfo",
     "UpdateVersionInfo",
     "AssignedUpdate",
@@ -36,12 +32,28 @@ __all__ = [
 ]
 
 
+class UpdateClientError(Exception):
+    """Base class for every failure this module raises."""
+
+
+class UpdateConnectionError(UpdateClientError):
+    """The update server could not be reached at all (DNS, refused, timed out, ...)."""
+
+
+class UpdateAuthError(UpdateClientError):
+    """The server rejected the supplied device credential (401)."""
+
+
+class UpdateServerError(UpdateClientError):
+    """The server reached the request but returned an unexpected error status."""
+
+
 def _raise_for_response(response: httpx.Response) -> None:
-    """Translate a non-2xx response into the appropriate error (mirrors :mod:`sync.client`'s own)."""
+    """Translate a non-2xx response into the appropriate error."""
     if response.status_code == 401:
-        raise SyncAuthError(f"Authentication rejected: {response.text}")
+        raise UpdateAuthError(f"Authentication rejected: {response.text}")
     if response.status_code >= 400:
-        raise SyncServerError(f"{response.status_code} from {response.request.url}: {response.text}")
+        raise UpdateServerError(f"{response.status_code} from {response.request.url}: {response.text}")
 
 
 @dataclass(frozen=True)
@@ -113,9 +125,9 @@ class UpdatesApiClient:
         Args:
             base_url: The Attendance Server's base URL.
             device_public_id: This device's UUID (``X-Device-Id``).
-            device_api_key: This device's plaintext sync credential
-                (``X-Device-Api-Key``) — the same credential
-                :class:`~sync.client.SyncClient` uses.
+            device_api_key: This device's plaintext update-server
+                credential (``X-Device-Api-Key``), from
+                :class:`~repositories.update_credential_repository.UpdateCredentialRepository`.
             transport: Optional ``httpx`` transport override, for
                 tests.
             timeout: Request timeout in seconds.
@@ -179,7 +191,7 @@ class UpdatesApiClient:
                 },
             )
         except httpx.TransportError as exc:
-            raise SyncConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
+            raise UpdateConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
         _raise_for_response(response)
 
     def download_package(
@@ -213,9 +225,9 @@ class UpdatesApiClient:
                 chunk written.
 
         Raises:
-            SyncConnectionError: The server could not be reached.
-            SyncAuthError: This device's credential was rejected.
-            SyncServerError: Any other non-2xx response.
+            UpdateConnectionError: The server could not be reached.
+            UpdateAuthError: This device's credential was rejected.
+            UpdateServerError: Any other non-2xx response.
         """
         partial_path = dest_path.with_name(dest_path.name + ".partial")
         existing_size = partial_path.stat().st_size if resume and partial_path.exists() else 0
@@ -255,7 +267,7 @@ class UpdatesApiClient:
                         if progress_callback is not None:
                             progress_callback(downloaded, total)
         except httpx.TransportError as exc:
-            raise SyncConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
+            raise UpdateConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
 
         partial_path.replace(dest_path)
 
@@ -263,6 +275,6 @@ class UpdatesApiClient:
         try:
             response = self._client.get(path)
         except httpx.TransportError as exc:
-            raise SyncConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
+            raise UpdateConnectionError(f"Could not reach the Attendance Server: {exc}") from exc
         _raise_for_response(response)
         return response

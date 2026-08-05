@@ -69,9 +69,12 @@ from developer_suite.services.customer_group_service import CustomerGroupService
 from developer_suite.services.customer_service import CustomerService
 from developer_suite.services.update_manager_service import UpdateManagerService, UpdateManagerServiceError
 
+import httpx
+
 from licensing.crypto.signing import generate_keypair, save_private_key
 
-from sync.coordinator import ClientSyncCoordinator
+from repositories.update_credential_repository import UpdateCredentialRepository
+from server.models.device import DeviceType
 from updates.checker import CannotPostponeMandatoryUpdateError, UpdateCheckService, is_newer_version
 from updates.checker import _version_key as client_version_key
 from server.services.update_service import _version_key as server_version_key
@@ -272,6 +275,31 @@ def _standalone_attendance_database(tmp_path, name: str) -> Database:
     return database
 
 
+def _register_device_credential(
+    server_url: str, admin_bearer_token: str, *, name: str
+) -> tuple[str, str]:
+    """Register a new device against the running test server and return its credential.
+
+    Direct replacement for the retired ``sync.client.register_device`` —
+    same request, same response shape — since this application no
+    longer ships a client-side sync package, but this test still needs
+    a real, server-issued device credential to exercise
+    :class:`~updates.checker.UpdateCheckService` end-to-end.
+
+    Returns:
+        ``(device_public_id, api_key)``.
+    """
+    with httpx.Client(base_url=server_url, timeout=15.0) as client:
+        response = client.post(
+            "/api/v1/devices/register",
+            json={"name": name, "device_type": DeviceType.ATTENDANCE_CLIENT.value, "company_name": None},
+            headers={"Authorization": f"Bearer {admin_bearer_token}"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["device"]["public_id"], data["api_key"]
+
+
 def _make_client(
     tmp_path,
     name: str,
@@ -283,12 +311,11 @@ def _make_client(
     current_version: str = "1.0.0",
 ) -> ClientInstallation:
     database = _standalone_attendance_database(tmp_path, name)
-    coordinator = ClientSyncCoordinator(database, server_url)
-    coordinator.enroll(admin_bearer_token=admin_bearer_token, name=name)
+    device_public_id, api_key = _register_device_credential(server_url, admin_bearer_token, name=name)
     with database.session_scope() as session:
-        from repositories.sync_repository import ClientSyncCredentialRepository
-
-        device_public_id = ClientSyncCredentialRepository(session).get().device_public_id
+        UpdateCredentialRepository(session).save(
+            device_public_id=device_public_id, api_key=api_key, server_url=server_url
+        )
 
     downloads_dir = tmp_path / f"{name}_downloads"
     checker = UpdateCheckService(
@@ -634,11 +661,10 @@ def _report_status(
     reaches on its own - this application never auto-installs (see
     :mod:`updates.checker`'s own docstring).
     """
-    from repositories.sync_repository import ClientSyncCredentialRepository
     from updates.client import UpdatesApiClient
 
     with client.database.session_scope() as session:
-        credential = ClientSyncCredentialRepository(session).get()
+        credential = UpdateCredentialRepository(session).get()
         server_url = credential.server_url
         device_public_id = credential.device_public_id
         device_api_key = credential.api_key
@@ -765,18 +791,3 @@ class TestZeroImpactOnOtherApplications:
         import updates.checker  # noqa: F401
 
         assert developer_suite_config_module._config_instance is None
-
-    def test_sync_scheduler_still_works_with_update_checking_disabled(self, tmp_path) -> None:
-        """Regression guard: Phase 14's scheduler hook must not affect a plain sync cycle."""
-        from database.database import Database as AttendanceDatabase
-        from sync.coordinator import ClientSyncCoordinator
-        from sync.scheduler import ClientSyncSchedulerService
-
-        database = _standalone_attendance_database(tmp_path, "scheduler_regression")
-        coordinator = ClientSyncCoordinator(database, "http://127.0.0.1:1")
-        scheduler = ClientSyncSchedulerService(
-            coordinator, database, sync_enabled=True, sync_interval_seconds=3600, update_check_service=None
-        )
-        status = scheduler.sync_now()
-        assert status.state.value == "idle"
-        database.dispose()

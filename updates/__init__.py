@@ -1,23 +1,25 @@
-"""Remote software update distribution for the Attendance Client (Phase 14).
+"""Optional software update distribution for the Attendance Client.
 
 The customer-facing counterpart to
-:mod:`developer_suite.services.update_manager_service`: periodically
-checks the Attendance Server for an update targeted at this
+:mod:`developer_suite.services.update_manager_service`, kept as a
+genuinely optional feature: this application no longer requires a
+central Attendance Server for normal operation, so nothing here runs
+automatically. A caller (e.g. a manual "Check for Updates" action)
+asks a configured update server for an update targeted at this
 installation, downloads it in the background (resumable — see
 :mod:`updates.client`), verifies its checksum and digital signature
 (:mod:`updates.verifier`) before ever considering it safe, and reports
 progress back. Nothing here imports :mod:`developer_suite` or
-``server`` (see :mod:`updates.protocol`'s docstring) — the same
-replicate-not-import doctrine :mod:`sync` already established for
-Phase 13, reused here rather than invented anew.
+``server`` directly (see :mod:`updates.protocol`'s docstring).
 
-This package only ever *reads* from the Attendance Server; nothing
-here ever changes what data a version represents. It reuses
-:mod:`sync`'s existing device credential (see
-:mod:`sync.coordinator`) and its existing background scheduler (see
-:mod:`sync.scheduler`) rather than introducing a second credential
-store or a second periodic job — an update check is simply one more
-thing the same scheduled sync cycle does.
+This package only ever *reads* from the configured update server;
+nothing here ever changes what data a version represents. It uses its
+own, self-contained device credential
+(:mod:`repositories.update_credential_repository`) — separate from any
+other application concern — which is unset (``None``) for every
+installation until an administrator manually configures one; until
+then, every check simply reports "not configured" rather than
+fabricating a connection that does not exist.
 """
 
 from __future__ import annotations

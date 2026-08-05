@@ -1,14 +1,21 @@
 """Check for, download, verify, and report on software updates.
 
-Owns the whole client-side update lifecycle: ask the Attendance Server
-what is assigned to this device, compare it against the running
+Owns the whole client-side update lifecycle: ask a configured update
+server what is assigned to this device, compare it against the running
 version, download the matching package (resumable, with progress
 reported back to the server), and verify it before ever marking it
-safe to install. Reuses this installation's existing sync device
-credential (:mod:`sync.coordinator`) rather than a second enrollment
-concept, and is driven by the existing background scheduler (see
-:mod:`sync.scheduler`) rather than a second periodic job — see this
-package's own ``__init__.py``.
+safe to install.
+
+Entirely optional and off by default: this application no longer
+requires a central Attendance Server for normal operation, so there is
+no automatic background scheduler driving this anymore (contrast the
+retired ``sync.scheduler``) — a caller invokes
+:meth:`UpdateCheckService.check_for_update` manually (e.g. a "Check for
+Updates" action), and it raises :class:`DeviceNotEnrolledError`
+whenever no :class:`~repositories.update_credential_repository.UpdateCredentialRepository`
+row exists yet, which is the case for every installation until an
+administrator manually configures one — see this package's own
+``__init__.py``.
 """
 
 from __future__ import annotations
@@ -22,10 +29,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from database.database import Database
 from models.update_state import ClientUpdateState, ClientUpdateStatus
-from repositories.sync_repository import ClientSyncCredentialRepository
+from repositories.update_credential_repository import UpdateCredentialRepository
 from repositories.update_state_repository import ClientUpdateStateRepository
-from sync.coordinator import DeviceNotEnrolledError
-from updates.client import SyncConnectionError, UpdatesApiClient
+from updates.client import UpdateConnectionError, UpdatesApiClient
 from updates.protocol import UpdateType
 from updates.verifier import verify_checksum, verify_signature
 
@@ -34,6 +40,10 @@ __all__ = [
     "CannotPostponeMandatoryUpdateError",
     "UpdateCheckService",
 ]
+
+
+class DeviceNotEnrolledError(Exception):
+    """Raised when no update-server credential has been configured for this installation yet."""
 
 
 class CannotPostponeMandatoryUpdateError(Exception):
@@ -46,8 +56,7 @@ def _version_key(version: str) -> tuple[int, ...]:
     Byte-for-byte the same algorithm
     :func:`server.services.update_service._version_key` uses — this
     client replicates it rather than importing across the HTTP
-    boundary, the same doctrine :mod:`sync.protocol` already
-    documents for the checksum algorithm.
+    boundary.
     """
     return tuple(int(part) if part.isdigit() else 0 for part in re.split(r"[.\-]", version))
 
@@ -99,10 +108,10 @@ class UpdateCheckService:
 
     def _build_client(self) -> UpdatesApiClient:
         with self._database.session_scope() as session:
-            credential = ClientSyncCredentialRepository(session).get()
+            credential = UpdateCredentialRepository(session).get()
             if credential is None:
                 raise DeviceNotEnrolledError(
-                    "This installation has not enrolled with the Attendance Server yet."
+                    "No update-server credential has been configured for this installation."
                 )
             device_public_id = credential.device_public_id
             device_api_key = credential.api_key
@@ -127,7 +136,7 @@ class UpdateCheckService:
         Raises:
             DeviceNotEnrolledError: This installation has not enrolled
                 yet.
-            SyncConnectionError: The server could not be reached.
+            UpdateConnectionError: The server could not be reached.
         """
         client = self._build_client()
         try:
@@ -205,7 +214,7 @@ class UpdateCheckService:
         try:
             self._downloads_dir.mkdir(parents=True, exist_ok=True)
             client.download_package(package_id, dest_path, progress_callback=_on_progress)
-        except SyncConnectionError:
+        except UpdateConnectionError:
             self._fail(update_version_id, "تعذّر الاتصال بخادم الحضور أثناء التنزيل.")
             return False
         except Exception as exc:  # noqa: BLE001 - any download failure must not corrupt local state
@@ -279,7 +288,7 @@ class UpdateCheckService:
         """
         try:
             client = self._build_client()
-        except (DeviceNotEnrolledError, SyncConnectionError):
+        except (DeviceNotEnrolledError, UpdateConnectionError):
             return
         try:
             client.report_status(

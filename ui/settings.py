@@ -19,12 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import get_config
 from controllers.settings_controller import SettingsController
-from database.database import get_database
-from services.subscription_check_service import SubscriptionCheckService
-from sync.coordinator import ClientSyncCoordinator
-from ui.subscription_info_window import SubscriptionInfoWindow
 from ui.widgets import ConfirmDialog, make_primary_button, make_secondary_label, make_status_label
 
 
@@ -391,21 +386,10 @@ class SettingsPage(QTabWidget):
         self.company_info_tab = CompanyInfoTab(controller=controller, parent=self)
         self.preferences_tab = PreferencesTab(controller=controller, parent=self)
         self.backup_tab = BackupTab(controller=controller, parent=self)
-        config = get_config()
-        sync_coordinator = ClientSyncCoordinator(get_database(), config.sync.server_url)
-        subscription_check_service = SubscriptionCheckService(
-            get_database(), sync_coordinator, device_name=config.sync.device_name
-        )
-        self.subscription_tab = SubscriptionInfoWindow(
-            check_service=subscription_check_service,
-            can_change_company_code="settings.manage" in permission_codes,
-            parent=self,
-        )
 
         self.addTab(self.company_info_tab, "معلومات الشركة")
         self.addTab(self.preferences_tab, "التفضيلات")
         self.addTab(self.backup_tab, "النسخ الاحتياطي")
-        self.addTab(self.subscription_tab, "الاشتراك")
 
     def _on_operation_failed(self, message: str) -> None:
         """Surface a controller failure on whichever tab is currently visible."""

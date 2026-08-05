@@ -1,11 +1,9 @@
 """The wire-level contract the Attendance Client's update-check code must honor.
 
-Mirrors :mod:`sync.protocol`'s own docstring and reasoning exactly:
-this module intentionally imports nothing from ``server`` or
-``developer_suite`` (see that module's docstring for the full
-argument), only replicating the small, stable vocabulary
+This module intentionally imports nothing from ``server`` or
+``developer_suite``, only replicating the small, stable vocabulary
 (:class:`UpdateType`, :class:`PackageType`) a client must reproduce to
-interpret the Attendance Server's update-management API responses.
+interpret an update server's update-management API responses.
 """
 
 from __future__ import annotations

@@ -14,7 +14,14 @@ from datetime import datetime, timezone
 import requests
 from requests.auth import HTTPDigestAuth
 
-from devices.device_interface import DeviceConnectionError, RawAttendanceLog, RawDeviceUser
+from devices.device_interface import (
+    ConnectionTestResult,
+    DeviceCapabilities,
+    DeviceConnectionError,
+    RawAttendanceLog,
+    RawDeviceUser,
+    UserBiometricStatus,
+)
 from models.enums import PunchType
 
 #: ISAPI AcsEvent "major" event category for access-control events
@@ -59,6 +66,40 @@ class HikvisionConnector:
             return response.status_code == 200
         except requests.RequestException:
             return False
+
+    def test_connection_detailed(self) -> ConnectionTestResult:
+        """Attempt to reach the device's ISAPI and classify any failure precisely."""
+        try:
+            response = self._get_session().get(
+                f"{self._base_url}/ISAPI/System/deviceInfo", timeout=self._timeout
+            )
+        except requests.exceptions.ConnectTimeout:
+            return ConnectionTestResult(success=False, message_ar="انتهت مهلة الاتصال.")
+        except requests.exceptions.ConnectionError as exc:
+            detail = str(exc)
+            if "refused" in detail.lower():
+                return ConnectionTestResult(
+                    success=False, message_ar="المنفذ غير متاح على الجهاز.", detail=detail
+                )
+            return ConnectionTestResult(
+                success=False, message_ar="الجهاز غير متصل بالشبكة.", detail=detail
+            )
+        except requests.RequestException as exc:
+            return ConnectionTestResult(
+                success=False, message_ar="تعذر الاتصال بالجهاز.", detail=str(exc)
+            )
+
+        if response.status_code == 401:
+            return ConnectionTestResult(success=False, message_ar="مفتاح الاتصال غير صحيح.")
+        if response.status_code != 200:
+            return ConnectionTestResult(
+                success=False,
+                message_ar="الجهاز لا يدعم البروتوكول المحدد.",
+                detail=f"HTTP {response.status_code}",
+            )
+        return ConnectionTestResult(
+            success=True, message_ar="تم الاتصال بنجاح.", capabilities=self.get_capabilities()
+        )
 
     def fetch_attendance_logs(self) -> list[RawAttendanceLog]:
         """Download and map recent access-control events from the device.
@@ -164,6 +205,36 @@ class HikvisionConnector:
                 raise DeviceConnectionError(
                     f"Failed to push user {user.device_user_reference!r}: {exc}"
                 ) from exc
+
+    def get_capabilities(self) -> DeviceCapabilities:
+        """Report device identity only — biometric fields are conservatively unsupported.
+
+        This connector does not implement any of Hikvision ISAPI's
+        biometric (face/fingerprint template) endpoints today, even
+        though some Hikvision terminals support face recognition at
+        the protocol level — reporting ``supports_face=True`` here
+        without any actual template/enrollment code behind it would be
+        exactly the kind of unsupported-capability simulation this
+        project avoids; a real Hikvision face integration would need
+        its own connector methods added deliberately, not a capability
+        flag flipped without implementation to back it.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        session = self._get_session()
+        try:
+            response = session.get(
+                f"{self._base_url}/ISAPI/System/deviceInfo", timeout=self._timeout
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise DeviceConnectionError(f"Failed to read device capabilities: {exc}") from exc
+        return DeviceCapabilities(supports_face=False, supports_fingerprint=False)
+
+    def get_user_biometric_status(self, device_user_reference: str) -> UserBiometricStatus:
+        """Always reports no biometric enrollment — see :meth:`get_capabilities`."""
+        return UserBiometricStatus(fingerprint_count=0, card_assigned=False)
 
     def disconnect(self) -> None:
         """Close the underlying HTTP session, if one is open."""

@@ -10,24 +10,120 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
     QWidget,
 )
 
 from controllers.branch_controller import BranchController
-from controllers.device_controller import DeviceController
+from controllers.device_controller import DeviceController, _connection_test_result_to_dict
 from controllers.employee_controller import EmployeeController
+from devices.device_manager import DeviceManager
+from models.device import Device
 from models.enums import DeviceProtocol
 from ui.table_page import TablePage
-from ui.widgets import ConfirmDialog, make_danger_button
+from ui.widgets import ConfirmDialog, make_danger_button, make_primary_button, make_secondary_label
 
 _PROTOCOL_LABELS_AR = {
     DeviceProtocol.ZKTECO_TCP: "ZKTeco (TCP/IP)",
     DeviceProtocol.ZKTECO_UDP: "ZKTeco (UDP)",
     DeviceProtocol.HIKVISION: "Hikvision",
 }
+
+
+class ConnectionDiagnosticDialog(QDialog):
+    """Shows a :class:`~devices.device_interface.ConnectionTestResult` in detail.
+
+    Displays the precise Arabic message, device info on success
+    (model/serial/firmware/user count/log count/fingerprint/face
+    capability), and a copyable raw technical detail block.
+    """
+
+    def __init__(self, *, result: dict[str, Any], parent: QWidget | None = None) -> None:
+        """Build the dialog from a controller-serialized diagnostic result.
+
+        Args:
+            result: The dict returned by
+                :meth:`~controllers.device_controller.DeviceController.test_connection`.
+            parent: Optional parent widget.
+        """
+        super().__init__(parent)
+        self.setWindowTitle("نتيجة اختبار الاتصال")
+        self.setMinimumWidth(440)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(12)
+
+        message_label = make_secondary_label(result.get("message_ar") or "")
+        message_label.setProperty("status", "success" if result.get("success") else "danger")
+        message_label.setWordWrap(True)
+        layout.addWidget(message_label)
+
+        capabilities = result.get("capabilities")
+        if capabilities:
+            info_lines = []
+            if capabilities.get("device_model"):
+                info_lines.append(f"الطراز: {capabilities['device_model']}")
+            if capabilities.get("serial_number"):
+                info_lines.append(f"الرقم التسلسلي: {capabilities['serial_number']}")
+            if capabilities.get("firmware_version"):
+                info_lines.append(f"إصدار البرنامج الثابت: {capabilities['firmware_version']}")
+            if capabilities.get("user_count") is not None:
+                info_lines.append(f"عدد المستخدمين: {capabilities['user_count']}")
+            if capabilities.get("attendance_log_count") is not None:
+                info_lines.append(f"عدد سجلات الحضور: {capabilities['attendance_log_count']}")
+            info_lines.append(
+                "يدعم البصمة: " + ("نعم" if capabilities.get("supports_fingerprint") else "لا")
+            )
+            info_lines.append(
+                "يدعم بصمة الوجه: " + ("نعم" if capabilities.get("supports_face") else "لا")
+            )
+            layout.addWidget(make_secondary_label("\n".join(info_lines)))
+
+        detail = result.get("detail")
+        if detail:
+            layout.addWidget(make_secondary_label("تفاصيل تقنية (قابلة للنسخ):"))
+            detail_edit = QTextEdit(self)
+            detail_edit.setPlainText(str(detail))
+            detail_edit.setReadOnly(True)
+            detail_edit.setFixedHeight(80)
+            layout.addWidget(detail_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok, parent=self)
+        buttons.button(QDialogButtonBox.Ok).setText("موافق")
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+
+def _probe_connection(values: dict[str, Any]) -> dict[str, Any]:
+    """Test a device configuration before it has been saved.
+
+    Builds a throwaway, never-persisted :class:`~models.device.Device`
+    from the form's current values and runs the same diagnostic
+    connection test the saved-device "اختبار الاتصال" button uses.
+
+    Returns:
+        The same dict shape :class:`ConnectionDiagnosticDialog` expects.
+    """
+    probe = Device(
+        name=values["name"] or "probe",
+        protocol=values["protocol"],
+        host=values["host"],
+        port=values["port"],
+        communication_key=values["communication_key"],
+        timeout_seconds=values.get("timeout_seconds"),
+    )
+    connector = DeviceManager().get_connector(probe)
+    try:
+        result = connector.test_connection_detailed()
+    finally:
+        connector.disconnect()
+    return _connection_test_result_to_dict(result)
 
 
 class DeviceFormDialog(QDialog):
@@ -101,6 +197,12 @@ class DeviceFormDialog(QDialog):
         if existing is not None:
             self._apply_existing(existing)
 
+        self._last_test_succeeded = False
+
+        test_button = make_primary_button("اختبار الاتصال", parent=self)
+        test_button.clicked.connect(self._on_test_connection_clicked)
+        form.addRow(test_button)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self
         )
@@ -109,6 +211,25 @@ class DeviceFormDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+
+    def _on_test_connection_clicked(self) -> None:
+        """Test the form's current (unsaved) configuration and show the result."""
+        values = self.values()
+        if not values["name"] or not values["host"]:
+            QMessageBox.warning(self, "بيانات ناقصة", "الرجاء إدخال اسم الجهاز وعنوانه أولاً.")
+            return
+        result = _probe_connection(values)
+        self._last_test_succeeded = bool(result.get("success"))
+        ConnectionDiagnosticDialog(result=result, parent=self).exec()
+
+    def last_test_succeeded(self) -> bool:
+        """Whether the most recent in-dialog connection test succeeded.
+
+        ``False`` both when a test failed and when no test was ever
+        run — the caller (``DevicesPage``) treats both the same way:
+        confirm before saving an unverified configuration.
+        """
+        return self._last_test_succeeded
 
     def _apply_existing(self, existing: dict[str, Any]) -> None:
         """Pre-fill every field from an existing device's data."""
@@ -251,6 +372,10 @@ class DevicesPage(TablePage):
         self.push_button.clicked.connect(self._on_push_clicked)
         self.toolbar_layout.addWidget(self.push_button)
 
+        self.pull_button = _toolbar_button("تنزيل الموظفين")
+        self.pull_button.clicked.connect(self._on_pull_clicked)
+        self.toolbar_layout.addWidget(self.pull_button)
+
         self.delete_button = make_danger_button("حذف", parent=self)
         self.delete_button.clicked.connect(self._on_delete_clicked)
         self.toolbar_layout.addWidget(self.delete_button)
@@ -315,6 +440,7 @@ class DevicesPage(TablePage):
         self.test_button.setEnabled(has_selection)
         self.sync_button.setEnabled(has_selection)
         self.push_button.setEnabled(has_selection)
+        self.pull_button.setEnabled(has_selection)
         self.delete_button.setEnabled(has_selection)
 
     # ------------------------------------------------------------------
@@ -334,6 +460,16 @@ class DevicesPage(TablePage):
         if not values["name"] or not values["host"]:
             self.show_error("اسم الجهاز وعنوانه حقلان إلزاميان.")
             return
+        if not dialog.last_test_succeeded():
+            confirmed = ConfirmDialog.confirm(
+                self,
+                "لم يُتحقق من الاتصال بالجهاز",
+                "لم يتم اختبار الاتصال بنجاح لهذا الجهاز. هل تريد حفظه كإعداد غير متصل؟ "
+                "يمكن اختبار الاتصال والتحقق منه لاحقاً من شاشة الأجهزة.",
+                danger=True,
+            )
+            if not confirmed:
+                return
         result = self._controller.create_device(**values)
         if result is not None:
             self.refresh()
@@ -384,12 +520,14 @@ class DevicesPage(TablePage):
     # ------------------------------------------------------------------
 
     def _on_test_clicked(self) -> None:
-        """Test connectivity to the selected device."""
+        """Test connectivity to the selected device and show a diagnostic dialog."""
         row = self.selected_row()
         if row is None:
             return
-        self._controller.test_connection(row["id"])
+        result = self._controller.test_connection(row["id"])
         self.refresh()
+        if result is not None:
+            ConnectionDiagnosticDialog(result=result, parent=self).exec()
 
     def _on_sync_clicked(self) -> None:
         """Sync the selected device's attendance logs."""
@@ -415,6 +553,26 @@ class DevicesPage(TablePage):
         if employee_id is None:
             return
         self._controller.push_employee_to_device(device_id=row["id"], employee_id=employee_id)
+
+    def _on_pull_clicked(self) -> None:
+        """Download the selected device's enrolled users and import unmatched ones as employees."""
+        row = self.selected_row()
+        if row is None:
+            return
+        created_count = self._controller.pull_employees_from_device(row["id"])
+        self.refresh()
+        if created_count > 0:
+            QMessageBox.information(
+                self,
+                "تنزيل الموظفين",
+                f"تم استيراد {created_count} موظف جديد من الجهاز.",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "تنزيل الموظفين",
+                "لا يوجد موظفون جدد لاستيرادهم من الجهاز.",
+            )
 
 
 def _toolbar_button(text: str) -> QPushButton:

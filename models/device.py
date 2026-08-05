@@ -39,7 +39,10 @@ class Device(CompanyScopedMixin, BaseModel):
             speaks.
         host: IP address or hostname used to reach the device.
         port: TCP/UDP port used to reach the device.
-        serial_number: Manufacturer serial number, if known.
+        serial_number: Manufacturer serial number, learned automatically
+            from a successful connection test/capability read.
+        device_model: Platform/model identifier, learned the same way.
+        firmware_version: Firmware version string, learned the same way.
         communication_key: A device-level shared secret/password some
             protocols require (e.g. a ZKTeco "comm key"). Encrypted at
             rest by :class:`~models.encrypted_types.EncryptedString`
@@ -79,6 +82,8 @@ class Device(CompanyScopedMixin, BaseModel):
     host: Mapped[str] = mapped_column(String(255), nullable=False)
     port: Mapped[int] = mapped_column(Integer, nullable=False)
     serial_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    device_model: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    firmware_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     communication_key: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
 
     status: Mapped[DeviceStatus] = mapped_column(

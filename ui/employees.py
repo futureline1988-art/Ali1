@@ -16,12 +16,16 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLineEdit,
     QPlainTextEdit,
+    QPushButton,
     QWidget,
 )
 
 from controllers.branch_controller import BranchController
 from controllers.department_controller import DepartmentController
+from controllers.device_controller import DeviceController
 from controllers.employee_controller import EmployeeController
+from models.enums import DeviceProtocol
+from ui.face_enrollment_dialog import BiometricStatusDialog, FaceEnrollmentDialog, SelectDeviceDialog
 from ui.table_page import TablePage
 from ui.widgets import ConfirmDialog, make_danger_button
 
@@ -225,6 +229,27 @@ class EmployeesPage(TablePage):
             actor_user_id=current_user_id,
             permission_codes=permission_codes,
         )
+        self._device_controller = DeviceController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
+        self._device_controller.operation_failed.connect(self.show_error)
+
+        self.push_to_device_button = QPushButton("إرسال إلى جهاز البصمة", self)
+        self.push_to_device_button.setEnabled(False)
+        self.push_to_device_button.clicked.connect(self._on_push_to_device_clicked)
+        self.toolbar_layout.addWidget(self.push_to_device_button)
+
+        self.register_face_button = QPushButton("تسجيل بصمة الوجه", self)
+        self.register_face_button.setEnabled(False)
+        self.register_face_button.clicked.connect(self._on_register_face_clicked)
+        self.toolbar_layout.addWidget(self.register_face_button)
+
+        self.biometric_status_button = QPushButton("الحالة البيومترية", self)
+        self.biometric_status_button.setEnabled(False)
+        self.biometric_status_button.clicked.connect(self._on_biometric_status_clicked)
+        self.toolbar_layout.addWidget(self.biometric_status_button)
 
         self.delete_button = make_danger_button("حذف", parent=self)
         self.delete_button.setEnabled(False)
@@ -276,8 +301,12 @@ class EmployeesPage(TablePage):
         self._on_selection_changed()
 
     def _on_selection_changed(self) -> None:
-        """Enable/disable the delete button based on the current selection."""
-        self.delete_button.setEnabled(self.selected_row() is not None)
+        """Enable/disable selection-dependent buttons based on the current selection."""
+        has_selection = self.selected_row() is not None
+        self.delete_button.setEnabled(has_selection)
+        self.push_to_device_button.setEnabled(has_selection)
+        self.register_face_button.setEnabled(has_selection)
+        self.biometric_status_button.setEnabled(has_selection)
 
     # ------------------------------------------------------------------
     # Add / edit / delete
@@ -341,3 +370,107 @@ class EmployeesPage(TablePage):
             return
         if self._controller.delete_employee(row["id"]):
             self.refresh()
+
+    # ------------------------------------------------------------------
+    # Device / biometric operations
+    # ------------------------------------------------------------------
+
+    def _select_device(self, *, face_capable_only: bool) -> dict[str, Any] | None:
+        """Prompt for an active device, optionally restricted to ZKTeco protocols.
+
+        Args:
+            face_capable_only: Restrict the choices to ZKTeco devices —
+                the only protocol this project's face-enrollment
+                workflow supports (see
+                :mod:`devices.zkteco_device`'s own module docstring).
+
+        Returns:
+            The chosen device's dict, or ``None`` if the user
+            cancelled or no eligible device exists (an inline error is
+            already shown in that case).
+        """
+        devices = self._device_controller.list_devices(active_only=True)
+        if face_capable_only:
+            devices = [
+                device
+                for device in devices
+                if device["protocol"] in (DeviceProtocol.ZKTECO_TCP.value, DeviceProtocol.ZKTECO_UDP.value)
+            ]
+        if not devices:
+            self.show_error(
+                "لا يوجد جهاز ZKTeco نشط متاح."
+                if face_capable_only
+                else "لا يوجد جهاز نشط متاح."
+            )
+            return None
+        dialog = SelectDeviceDialog(devices=devices, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        device_id = dialog.selected_device_id()
+        if device_id is None:
+            return None
+        return next((device for device in devices if device["id"] == device_id), None)
+
+    def _on_push_to_device_clicked(self) -> None:
+        """Send the selected employee's record to a chosen device (no biometric action)."""
+        row = self.selected_row()
+        if row is None:
+            return
+        device = self._select_device(face_capable_only=False)
+        if device is None:
+            return
+        self._device_controller.push_employee_to_device(device_id=device["id"], employee_id=row["id"])
+
+    def _on_register_face_clicked(self) -> None:
+        """Run the full on-device face-enrollment workflow for the selected employee.
+
+        This application can never capture or upload a face itself —
+        see :mod:`ui.face_enrollment_dialog`'s own module docstring for
+        why the workflow is "push the employee, then wait for a human
+        to enroll them on the physical device."
+        """
+        row = self.selected_row()
+        if row is None:
+            return
+        device = self._select_device(face_capable_only=True)
+        if device is None:
+            return
+
+        begin_result = self._device_controller.begin_face_enrollment(
+            device_id=device["id"], employee_id=row["id"]
+        )
+        if begin_result is None:
+            return
+        if begin_result["outcome"] != "started":
+            self.show_error(begin_result["message_ar"])
+            return
+
+        dialog = FaceEnrollmentDialog(
+            controller=self._device_controller,
+            device_id=device["id"],
+            employee_id=row["id"],
+            enrollment_session=begin_result["session"],
+            parent=self,
+        )
+        dialog.exec()
+        final_result = dialog.final_result()
+        if final_result is not None and final_result["outcome"] == "confirmed":
+            self.refresh()
+
+    def _on_biometric_status_clicked(self) -> None:
+        """Show the selected employee's cached biometric status, with refresh/reset actions."""
+        row = self.selected_row()
+        if row is None:
+            return
+        status = self._device_controller.get_employee_biometric_status(row["id"])
+        if status is None:
+            return
+        devices = self._device_controller.list_devices(active_only=True)
+        dialog = BiometricStatusDialog(
+            controller=self._device_controller,
+            employee_id=row["id"],
+            status=status,
+            devices=devices,
+            parent=self,
+        )
+        dialog.exec()
