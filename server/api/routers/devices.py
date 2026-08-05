@@ -88,24 +88,37 @@ def register_device(
     return {"device": _device_dict(device, subscription_service), "api_key": api_key}
 
 
+#: The single, identical message for every "this company code is not
+#: usable right now" case (no such code, or a real code whose
+#: subscription is suspended/expired). Deliberately generic and
+#: deliberately the *same* string/status for both cases — this
+#: endpoint is unauthenticated and this server is multi-tenant, so a
+#: caller must never be able to tell "not a real code" apart from
+#: "real code, just inactive" by comparing error messages, which would
+#: let company codes be enumerated one guess at a time.
+_INVALID_COMPANY_CODE_DETAIL = "Invalid or inactive company code."
+
+
 @router.post("/self-register", status_code=201)
 def self_register_device(body: SelfRegisterDeviceRequest, request: Request) -> dict:
     """Fully-automatic device registration — no bearer token required.
 
     The onboarding path a fresh Attendance Client installation drives
-    at first startup, entirely on its own: given only its configured
-    ``company_name``, this either links the new device to that
-    company's active subscription immediately (if it has capacity) or
-    rejects the request with a clear reason. No administrator action,
-    and no manual subscription-to-device linking in the Developer
-    Suite, is ever involved.
+    at first startup, entirely on its own: given only a ``company_code``
+    (see :class:`~server.models.subscription.Subscription`), this
+    either links the new device to that company's active subscription
+    immediately (if it has capacity) or rejects the request with a
+    generic reason. No administrator action, and no manual
+    subscription-to-device linking in the Developer Suite, is ever
+    involved.
 
     Returns:
         Same shape as :func:`register_device`.
 
     Raises:
-        HTTPException: 422 if no subscription exists for
-            ``company_name`` or it exists but is suspended/expired;
+        HTTPException: 422 (identical message/status for both) if no
+            subscription exists for ``company_code`` or it exists but
+            is suspended/expired — see :data:`_INVALID_COMPANY_CODE_DETAIL`;
             403 ("Maximum allowed devices reached.") if that
             subscription's device cap is already reached.
     """
@@ -113,12 +126,12 @@ def self_register_device(body: SelfRegisterDeviceRequest, request: Request) -> d
     subscription_service: SubscriptionService = request.app.state.container.subscription_service
     try:
         device, api_key = device_service.self_register_device(
-            name=body.name, company_name=body.company_name
+            name=body.name, company_code=body.company_code
         )
-    except SubscriptionRequiredError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    except SubscriptionNotActiveError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except (SubscriptionRequiredError, SubscriptionNotActiveError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_INVALID_COMPANY_CODE_DETAIL
+        ) from exc
     except MaxDevicesReachedError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Maximum allowed devices reached."

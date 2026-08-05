@@ -72,15 +72,25 @@ class ClientSyncCredentialRepository:
         credential = self.get()
         return credential.bound_company_id if credential is not None else None
 
-    def set_bound_company(self, company_id: int) -> None:
+    def get_company_code(self) -> str | None:
+        """Return the company code this device is currently bound with, or ``None``."""
+        credential = self.get()
+        return credential.company_code if credential is not None else None
+
+    def set_bound_company(self, company_id: int, *, company_code: str) -> None:
         """Permanently bind this already-enrolled device to a local company.
 
         Called once, right after this device's first-ever successful
         login-driven self-registration completes (see
-        :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`)
-        — every future login skips the company picker (see
-        :meth:`~ui.login_window.LoginWindow._populate_companies`) and
-        every future subscription check assumes this company.
+        :meth:`~services.subscription_check_service.SubscriptionCheckService.resolve_company_code`)
+        — every future login skips asking for a company code (see
+        :mod:`ui.login_window`) and every future subscription check
+        assumes this company.
+
+        Args:
+            company_id: The local company this device is now bound to.
+            company_code: The company code that resolved to it, kept
+                for display in the administrator settings screen.
 
         Raises:
             RuntimeError: This device has not enrolled yet (no
@@ -92,7 +102,26 @@ class ClientSyncCredentialRepository:
                 "Cannot bind a company before this installation has enrolled with the Attendance Server."
             )
         credential.bound_company_id = company_id
+        credential.company_code = company_code
         self.session.flush()
+
+    def clear(self) -> None:
+        """Forget this installation's enrollment entirely (device credential and company binding).
+
+        The only way a company code is ever changed (see
+        ``ui.settings``'s administrator-only "reset enrollment"
+        action) — there is no in-place "switch to a different
+        company" operation, since that would mean re-registering a
+        new device against a different subscription mid-session. After
+        this call, :meth:`get` returns ``None`` again, so the next
+        application startup goes through the full first-run
+        enrollment flow (company code + username + password) exactly
+        like a brand-new installation.
+        """
+        credential = self.get()
+        if credential is not None:
+            self.session.delete(credential)
+            self.session.flush()
 
 
 class ClientSyncCursorRepository:

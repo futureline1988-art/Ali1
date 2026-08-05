@@ -41,11 +41,16 @@ class SelfRegisterDeviceRequest(BaseModel):
     No bearer token accompanies this request -- see
     :func:`server.api.routers.devices.self_register_device`. Always an
     ``attendance_client`` device; there is no self-service registration
-    for ``developer_suite`` installations.
+    for ``developer_suite`` installations. Identifies the company by
+    its opaque, system-generated ``company_code`` (see
+    :class:`~server.models.subscription.Subscription`) rather than its
+    name -- this server is multi-tenant and this endpoint is
+    unauthenticated, so a company name (guessable, and the whole point
+    of the company) must never be usable to look anything up here.
     """
 
     name: str = Field(min_length=1, max_length=200)
-    company_name: str = Field(min_length=1, max_length=200)
+    company_code: str = Field(min_length=1, max_length=64)
 
 
 class CreateSubscriptionRequest(BaseModel):

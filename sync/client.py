@@ -39,12 +39,16 @@ class SyncServerError(SyncClientError):
 
 
 class DeviceRegistrationRejectedError(SyncClientError):
-    """Self-registration was rejected: no subscription exists for this company, or it is not active.
+    """Self-registration was rejected: the company code is invalid, or its subscription is not active.
 
     Raised only by :func:`self_register_device` (422 response) — the
     admin-driven :func:`register_device` surfaces the equivalent
     condition as a plain :class:`SyncServerError` instead, since it
     predates this distinction and callers already handle it generically.
+    The server deliberately returns the identical message/status for
+    "no such code" and "code exists but inactive" (see
+    :mod:`server.api.routers.devices`'s own docstring), so this
+    exception alone cannot be used to tell the two apart either.
     """
 
 
@@ -189,7 +193,7 @@ def self_register_device(
     base_url: str,
     *,
     name: str,
-    company_name: str,
+    company_code: str,
     transport: httpx.BaseTransport | None = None,
     timeout: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> tuple[str, str]:
@@ -198,15 +202,20 @@ def self_register_device(
     The onboarding path this installation drives entirely on its own
     at first startup (see
     :meth:`~sync.coordinator.ClientSyncCoordinator.self_enroll`):
-    given only ``company_name``, the server immediately links this new
-    device to that company's active subscription if it has capacity,
-    or rejects the request with a clear reason.
+    given only a ``company_code`` (handed to this company's
+    administrator by the vendor — see
+    :class:`~server.models.subscription.Subscription`), the server
+    immediately links this new device to that company's active
+    subscription if it has capacity, or rejects the request with a
+    generic reason. Never a company name or any other company-listing
+    input — this server is multi-tenant and this call is
+    unauthenticated.
 
     Args:
         base_url: The Attendance Server's base URL.
         name: A human-readable label for this installation.
-        company_name: The exact ``Subscription.company_name`` this
-            installation belongs to.
+        company_code: This installation's company code, exactly as
+            given by the administrator.
         transport: Optional ``httpx`` transport override, for tests.
         timeout: Request timeout in seconds.
 
@@ -216,9 +225,8 @@ def self_register_device(
 
     Raises:
         SyncConnectionError: The server could not be reached.
-        DeviceRegistrationRejectedError: No subscription exists for
-            ``company_name``, or it exists but is suspended/expired
-            (422).
+        DeviceRegistrationRejectedError: The company code is invalid,
+            or its subscription is suspended/expired (422).
         MaxDevicesReachedError: That subscription's device cap is
             already reached (403).
         SyncServerError: Any other non-2xx response.
@@ -228,7 +236,7 @@ def self_register_device(
         try:
             response = client.post(
                 "/api/v1/devices/self-register",
-                json={"name": name, "company_name": company_name},
+                json={"name": name, "company_code": company_code},
             )
         except httpx.TransportError as exc:
             raise SyncConnectionError(f"Could not reach {base_url}: {exc}") from exc

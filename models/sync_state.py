@@ -61,19 +61,26 @@ class ClientSyncCredential(Base):
         registered_at: When this installation enrolled.
         bound_company_id: The local :class:`~models.company.Company`
             id this device was permanently bound to, the first time a
-            login at that company drove this installation's
+            login using :attr:`company_code` drove this installation's
             first-ever enrollment (see
-            :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`).
+            :meth:`~services.subscription_check_service.SubscriptionCheckService.resolve_company_code`).
             ``None`` before that first successful login-driven
-            enrollment — once set, the login screen stops offering a
-            company choice at all (see
-            :meth:`~ui.login_window.LoginWindow._populate_companies`),
-            since this application's central-server model is one
-            device permanently serving one company. Not declared as a
-            foreign key: like :attr:`~models.subscription_state.ClientSubscriptionState.company_name`,
+            enrollment — once set, the login screen stops asking for a
+            company code at all (see :mod:`ui.login_window`), since
+            this application's central-server model is one device
+            permanently serving one company. Not declared as a foreign
+            key: like :attr:`~models.subscription_state.ClientSubscriptionState.company_name`,
             this is a plain reference into business data from this
             infrastructure-bookkeeping table, not a joinable
             relationship this package ever navigates.
+        company_code: The company code this device was bound with (see
+            :attr:`bound_company_id`) -- kept alongside it purely so
+            an administrator can see which code is currently in effect
+            (see ``ui.settings``) and so resetting enrollment (to
+            change it) has a value to show before the change, without
+            calling the server. Never used to look anything up locally
+            -- :attr:`bound_company_id` is what every other query
+            filters by.
     """
 
     __tablename__ = "client_sync_credential"
@@ -84,6 +91,7 @@ class ClientSyncCredential(Base):
     server_url: Mapped[str] = mapped_column(String(500), nullable=False)
     registered_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=_utc_now)
     bound_company_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    company_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ClientSyncCursor(Base):

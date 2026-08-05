@@ -264,6 +264,7 @@ class _FakeSubscriptionService:
         record = SubscriptionInfo(
             id=subscription_id,
             company_name=company_name,
+            company_code=f"{company_name.upper().replace(' ', '')}-TEST01",
             subscription_start_date=subscription_start_date,
             subscription_end_date=subscription_end_date,
             status="active",

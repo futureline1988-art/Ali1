@@ -3,6 +3,51 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 1.2.3 / Developer Suite 1.1.2 / Server 1.1.2] - 2026-08-05
+
+### Changed — Company Code replaces any company list or selection
+
+The Attendance Server is multi-tenant, so the Attendance Client must
+never display, list, or let a user pick from other companies. The
+1.2.2 login screen still resolved a company via its exact name (no
+list was shown, but a name is guessable and not secret). This replaces
+that with an opaque, unique Company Code:
+
+- **Attendance Server**: `Subscription` gains a unique, system
+  -generated `company_code` (e.g. `FUTURELINE-7X4K9P`), created
+  automatically the moment a subscription is created — never entered
+  manually anywhere. `POST /api/v1/devices/self-register` now takes
+  `company_code` instead of `company_name`. Its two "this code doesn't
+  work" cases — no subscription exists for the code, or one exists but
+  is suspended/expired — now return the *exact same* response (422,
+  `"Invalid or inactive company code."`) so a caller can never tell
+  "not a real code" apart from "real code, just inactive" by comparing
+  error messages, which would otherwise let codes be enumerated one
+  guess at a time. `GET /api/v1/subscriptions` and its create response
+  include `company_code` for the Developer Suite to display; nothing
+  else about the admin-token device/subscription endpoints changed.
+- **Attendance Client**: the login screen's company field is now a
+  plain Company Code text box, shown only on an installation's first
+  -ever login — never a list or picker. The typed code is resolved
+  with the server *before* local username/password authentication
+  even runs (only the server knows which company a code belongs to);
+  local authentication then proceeds exactly as before, against
+  whichever local company the resolved name matches. Only once that
+  local login succeeds is the device permanently bound to that company
+  and the code saved locally (`ClientSyncCredential.company_code`) —
+  every later login skips the code field entirely. The Settings
+  screen's Subscription tab now shows the current company code and,
+  for an administrator (`settings.manage`) only, a "Change Company
+  Code" action — the sole way to change it, since there is no in-place
+  "switch companies" flow: it resets this installation's enrollment
+  entirely and requires restarting the application to re-enroll with a
+  new code.
+- **Developer Suite**: the Subscription Manager's table gained a
+  Company Code column, and creating a subscription now shows the
+  generated code in a confirmation dialog immediately, since it is
+  never shown to the client on its own and must be handed to that
+  company's administrator out of band.
+
 ## [Client 1.2.2] - 2026-08-05
 
 ### Changed — Company is now established by the first login, not preconfigured

@@ -19,7 +19,6 @@ from config import get_config
 from database.database import DatabaseConnectionError, get_database, session_scope
 from models.permission import Permission
 from models.update_state import ClientUpdateStatus
-from repositories.company_repository import CompanyRepository
 from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.permission_repository import PermissionRepository
 from repositories.update_state_repository import ClientUpdateStateRepository
@@ -154,19 +153,6 @@ def _install_exception_hook() -> None:
     sys.excepthook = _log_uncaught
 
 
-def _local_company_name(company_id: int) -> str:
-    """Look up a local company's display name, for :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`.
-
-    A plain local lookup (this installation's own database already
-    has the company row a user just authenticated into) — never
-    ``None``/missing in practice, since ``company_id`` always comes
-    from a login that just succeeded against that exact row.
-    """
-    with session_scope() as session:
-        company = CompanyRepository(session).get_by_id(company_id)
-        return company.name if company is not None else ""
-
-
 def _show_remote_configuration_restart_notice(parent, company_id: int) -> None:
     """Show and clear a pending "restart required" notice for this company, if any.
 
@@ -290,26 +276,30 @@ class ApplicationController:
             self._main_window.close_for_transition()
             self._main_window = None
 
-        self._login_window = LoginWindow(session_manager=self._session_manager)
+        self._login_window = LoginWindow(
+            subscription_check_service=self._subscription_check_service,
+            session_manager=self._session_manager,
+        )
         self._login_window.login_successful.connect(self._on_login_successful)
         self._login_window.show()
 
     def _on_login_successful(self, user: dict, company_id: int) -> None:
-        """Run this device's subscription/enrollment check, then proceed or block.
+        """Verify this device's live subscription status, then proceed or block.
 
-        A new device cannot be expected to already know its company in
-        this application's multi-tenant, central-server deployment —
-        this successful local login is what establishes it (see
-        :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`).
+        A fresh device's company/subscription enrollment already
+        happened inside :class:`~ui.login_window.LoginWindow` itself
+        (before local authentication even ran — see
+        :meth:`~services.subscription_check_service.SubscriptionCheckService.resolve_company_code`),
+        so this is always a plain, already-enrolled status check
+        (:meth:`~services.subscription_check_service.SubscriptionCheckService.check`)
+        — the last thing standing between a successful local login and
+        the main window.
 
         Args:
             user: The authenticated user's data.
             company_id: The company they logged into.
         """
-        company_name = _local_company_name(company_id)
-        result = self._subscription_check_service.check_for_login(
-            company_id=company_id, company_name=company_name
-        )
+        result = self._subscription_check_service.check()
         if not result.allowed:
             self._pending_login = (user, company_id)
             self._perform_logout()
@@ -323,20 +313,12 @@ class ApplicationController:
 
     def _show_blocked_window(self, message_ar: str) -> None:
         """Show the subscription-blocked screen for the login just denied."""
-        blocked = SubscriptionBlockedWindow(recheck=self._retry_pending_login)
+        blocked = SubscriptionBlockedWindow(recheck=self._subscription_check_service.check)
         blocked.show_result(message_ar)
         blocked.passed.connect(self._on_blocked_passed)
         blocked.dismissed.connect(self._on_blocked_dismissed)
         self._blocked_window = blocked
         blocked.show()
-
-    def _retry_pending_login(self):
-        """Re-run the subscription/enrollment check for the pending denied login."""
-        user, company_id = self._pending_login
-        company_name = _local_company_name(company_id)
-        return self._subscription_check_service.check_for_login(
-            company_id=company_id, company_name=company_name
-        )
 
     def _on_blocked_passed(self) -> None:
         """A retry succeeded: close the blocked screen and proceed into the app."""

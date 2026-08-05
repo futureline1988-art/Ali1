@@ -31,6 +31,27 @@ class SubscriptionRepository(BaseRepository[Subscription]):
         )
         return self.session.execute(statement).scalar_one_or_none()
 
+    def get_by_company_code(self, company_code: str) -> Subscription | None:
+        """Fetch a single, non-deleted subscription by its exact company code.
+
+        The lookup an Attendance Client's self-registration uses (see
+        :meth:`~server.services.device_service.DeviceService.self_register_device`)
+        — unlike :meth:`get_by_company_name`, this is reachable from an
+        unauthenticated request, so callers must not let a caller
+        distinguish "no such code" from "code exists but inactive"
+        (see that method's own docstring).
+
+        Args:
+            company_code: The subscription's :attr:`~server.models.subscription.Subscription.company_code`.
+
+        Returns:
+            The matching subscription, or ``None`` if not found.
+        """
+        statement = select(Subscription).where(
+            Subscription.company_code == company_code, Subscription.is_deleted.is_(False)
+        )
+        return self.session.execute(statement).scalar_one_or_none()
+
     def count_active_devices(self, subscription_id: int) -> int:
         """Count active, non-deleted Attendance Client devices linked to a subscription.
 

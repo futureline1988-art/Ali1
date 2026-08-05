@@ -10,12 +10,22 @@ verifies offline.
 
 from __future__ import annotations
 
+import re
+import secrets
 from datetime import date
 
 from database.database import Database
 from server.models.subscription import Subscription, SubscriptionStatus
 from server.repositories.subscription_repository import SubscriptionRepository
 from server.services.base_service import BaseService
+
+#: Excludes visually ambiguous characters (0/O, 1/I) -- a company code is
+#: read aloud or retyped by hand, unlike most other identifiers in this
+#: system.
+_COMPANY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_COMPANY_CODE_SUFFIX_LENGTH = 6
+_COMPANY_CODE_PREFIX_MAX_LENGTH = 12
+_COMPANY_CODE_GENERATION_ATTEMPTS = 20
 
 
 class SubscriptionServiceError(Exception):
@@ -28,6 +38,25 @@ class SubscriptionNotFoundError(SubscriptionServiceError):
 
 class DuplicateCompanyNameError(SubscriptionServiceError):
     """A subscription already exists for this company name."""
+
+
+class CompanyCodeGenerationFailedError(SubscriptionServiceError):
+    """Could not generate a unique company code after several attempts (astronomically unlikely)."""
+
+
+def generate_company_code(company_name: str) -> str:
+    """Build one candidate company code for ``company_name`` (e.g. ``FUTURELINE-7X4K9P``).
+
+    Not itself guaranteed unique -- see :meth:`SubscriptionService.create`,
+    which retries this on collision. Deterministic prefix (so the code
+    stays recognizable to the vendor) plus a random, unambiguous
+    -alphabet suffix (so it cannot be guessed or brute-forced from the
+    company name alone).
+    """
+    slug = re.sub(r"[^A-Za-z0-9]", "", company_name).upper()
+    prefix = (slug or "COMPANY")[:_COMPANY_CODE_PREFIX_MAX_LENGTH]
+    suffix = "".join(secrets.choice(_COMPANY_CODE_ALPHABET) for _ in range(_COMPANY_CODE_SUFFIX_LENGTH))
+    return f"{prefix}-{suffix}"
 
 
 class SubscriptionService(BaseService):
@@ -58,11 +87,17 @@ class SubscriptionService(BaseService):
                 installations; ``None`` for unlimited.
 
         Returns:
-            The newly created subscription.
+            The newly created subscription, with a fresh, unique
+            :attr:`~server.models.subscription.Subscription.company_code`
+            generated automatically -- the Developer Suite displays it
+            immediately so the vendor can hand it to the company's
+            administrator; it is never entered manually.
 
         Raises:
             DuplicateCompanyNameError: A subscription already exists
                 for ``company_name``.
+            CompanyCodeGenerationFailedError: A unique code could not
+                be generated (should not happen in practice).
         """
         with self._session_scope() as session:
             repo = SubscriptionRepository(session)
@@ -70,8 +105,19 @@ class SubscriptionService(BaseService):
                 raise DuplicateCompanyNameError(
                     f"A subscription already exists for company {company_name!r}."
                 )
+            company_code = None
+            for _ in range(_COMPANY_CODE_GENERATION_ATTEMPTS):
+                candidate = generate_company_code(company_name)
+                if repo.get_by_company_code(candidate) is None:
+                    company_code = candidate
+                    break
+            if company_code is None:
+                raise CompanyCodeGenerationFailedError(
+                    "Could not generate a unique company code; please try again."
+                )
             subscription = Subscription(
                 company_name=company_name,
+                company_code=company_code,
                 subscription_start_date=subscription_start_date,
                 subscription_end_date=subscription_end_date,
                 status=SubscriptionStatus.ACTIVE,
@@ -163,6 +209,11 @@ class SubscriptionService(BaseService):
         """Fetch a single subscription by company name, or ``None`` if not found."""
         with self._session_scope() as session:
             return SubscriptionRepository(session).get_by_company_name(company_name)
+
+    def get_by_company_code(self, company_code: str) -> Subscription | None:
+        """Fetch a single subscription by company code, or ``None`` if not found."""
+        with self._session_scope() as session:
+            return SubscriptionRepository(session).get_by_company_code(company_code)
 
     def list_all(self) -> list[Subscription]:
         """List every non-deleted subscription."""

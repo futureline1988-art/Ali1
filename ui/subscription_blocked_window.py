@@ -10,10 +10,14 @@ screen only displays the clear reason access was denied (e.g.
 reached") and offers a "Retry" button to re-check with the server.
 
 Shown by ``main.ApplicationController`` right after a *successful*
-local username/password login whose company-level subscription/device
--enrollment check then failed — never before login, since a fresh
-device has no way to know its company until a user actually logs in
-(see :meth:`~services.subscription_check_service.SubscriptionCheckService.check_for_login`).
+local username/password login whose live subscription status check
+(:meth:`~services.subscription_check_service.SubscriptionCheckService.check`)
+then failed — never before login, since this server is multi-tenant
+and a fresh device has no way to know its company until its company
+code is resolved (see
+:meth:`~services.subscription_check_service.SubscriptionCheckService.resolve_company_code`,
+driven by :mod:`ui.login_window` itself, before local authentication
+even runs).
 """
 
 from __future__ import annotations

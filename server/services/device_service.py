@@ -143,11 +143,11 @@ class DeviceService(BaseService):
             DeviceRepository(session).add(device)
             return device, api_key
 
-    def self_register_device(self, *, name: str, company_name: str) -> tuple[SyncDevice, str]:
+    def self_register_device(self, *, name: str, company_code: str) -> tuple[SyncDevice, str]:
         """Fully-automatic self-registration for a fresh Attendance Client installation.
 
         The no-administrator-action onboarding path: called with only
-        this installation's configured ``company_name`` (see
+        this installation's ``company_code`` (see
         :meth:`~sync.coordinator.ClientSyncCoordinator.self_enroll`) —
         no bearer token, no prior manual linking in the Developer
         Suite. Always :attr:`~server.models.device.DeviceType.ATTENDANCE_CLIENT`;
@@ -160,10 +160,18 @@ class DeviceService(BaseService):
         (not suspended, not expired) — a subscription not in good
         standing must not gain new devices, even automatically.
 
+        Callers (see :func:`~server.api.routers.devices.self_register_device`)
+        must map :class:`SubscriptionRequiredError` and
+        :class:`SubscriptionNotActiveError` to the *identical* response
+        — this endpoint is unauthenticated and this server is
+        multi-tenant, so a caller must never be able to distinguish
+        "no such code" from "code exists but inactive," which would
+        let company codes be enumerated by their error message alone.
+
         Args:
             name: A human-readable label for this device.
-            company_name: The exact
-                :attr:`~server.models.subscription.Subscription.company_name`
+            company_code: The exact
+                :attr:`~server.models.subscription.Subscription.company_code`
                 this installation belongs to.
 
         Returns:
@@ -171,7 +179,7 @@ class DeviceService(BaseService):
 
         Raises:
             SubscriptionRequiredError: No subscription exists for
-                ``company_name``.
+                ``company_code``.
             SubscriptionNotActiveError: A subscription exists but is
                 suspended or expired.
             MaxDevicesReachedError: The matched subscription has
@@ -182,20 +190,19 @@ class DeviceService(BaseService):
         api_key = generate_session_token()
         with self._session_scope() as session:
             subscription_repo = SubscriptionRepository(session)
-            subscription = subscription_repo.get_by_company_name(company_name)
+            subscription = subscription_repo.get_by_company_code(company_code)
             if subscription is None:
                 raise SubscriptionRequiredError(
-                    f"No subscription exists for company {company_name!r}. "
-                    "Ask your vendor to create one before registering this installation."
+                    "No subscription exists for this company code. Ask your vendor for a valid one."
                 )
             if not subscription.is_active:
                 raise SubscriptionNotActiveError(
-                    f"Company {company_name!r}'s subscription is not active "
-                    "(suspended or expired); new devices cannot register."
+                    "This company's subscription is not active (suspended or expired); "
+                    "new devices cannot register."
                 )
             if subscription_repo.count_active_devices(subscription.id) >= subscription.max_devices:
                 raise MaxDevicesReachedError(
-                    f"Company {company_name!r} has already reached its device limit "
+                    f"Company {subscription.company_name!r} has already reached its device limit "
                     f"({subscription.max_devices})."
                 )
 

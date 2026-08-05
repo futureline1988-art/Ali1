@@ -296,6 +296,7 @@ class SubscriptionInfo:
 
     id: int
     company_name: str
+    company_code: str
     subscription_start_date: date
     subscription_end_date: date
     status: str
@@ -313,6 +314,7 @@ class SubscriptionInfo:
         return cls(
             id=data["id"],
             company_name=data["company_name"],
+            company_code=data["company_code"],
             subscription_start_date=date.fromisoformat(data["subscription_start_date"]),
             subscription_end_date=date.fromisoformat(data["subscription_end_date"]),
             status=data["status"],

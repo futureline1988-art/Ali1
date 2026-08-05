@@ -397,7 +397,9 @@ class SettingsPage(QTabWidget):
             get_database(), sync_coordinator, device_name=config.sync.device_name
         )
         self.subscription_tab = SubscriptionInfoWindow(
-            check_service=subscription_check_service, parent=self
+            check_service=subscription_check_service,
+            can_change_company_code="settings.manage" in permission_codes,
+            parent=self,
         )
 
         self.addTab(self.company_info_tab, "معلومات الشركة")

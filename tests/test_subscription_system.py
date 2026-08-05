@@ -153,6 +153,20 @@ class TestSubscriptionApi:
         assert body["max_devices"] == 5
         assert body["max_users"] is None
 
+    def test_create_generates_a_unique_company_code_automatically(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        first = _create_subscription(client, admin_headers, company_name="Acme Co")
+        second = _create_subscription(client, admin_headers, company_name="Widgets Inc")
+
+        assert first["company_code"]
+        assert second["company_code"]
+        assert first["company_code"] != second["company_code"]
+        # Never manually entered -- see SubscriptionFormDialog/CreateSubscriptionRequest,
+        # neither of which accepts a company_code field at all.
+        assert first["company_code"].startswith("ACMECO-")
+        assert second["company_code"].startswith("WIDGETSINC-")
+
     def test_create_duplicate_company_name_conflicts(self, client: TestClient, admin_headers) -> None:
         _create_subscription(client, admin_headers, company_name="Acme Co")
         response = client.post(
@@ -648,17 +662,17 @@ class TestSubscriptionCheckServiceEndToEnd:
 
 
 class TestSelfRegistrationApi:
-    def _self_register(self, client: TestClient, *, name: str, company_name: str):
+    def _self_register(self, client: TestClient, *, name: str, company_code: str):
         return client.post(
-            "/api/v1/devices/self-register", json={"name": name, "company_name": company_name}
+            "/api/v1/devices/self-register", json={"name": name, "company_code": company_code}
         )
 
     def test_succeeds_with_no_authorization_header_at_all(
         self, client: TestClient, admin_headers
     ) -> None:
-        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        subscription = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
 
-        response = self._self_register(client, name="Client 1", company_name="Acme Co")
+        response = self._self_register(client, name="Client 1", company_code=subscription["company_code"])
 
         assert response.status_code == 201
         body = response.json()
@@ -666,19 +680,19 @@ class TestSelfRegistrationApi:
         assert body["device"]["device_type"] == "attendance_client"
         assert len(body["api_key"]) > 20
 
-    def test_unknown_company_is_422(self, client: TestClient) -> None:
-        response = self._self_register(client, name="Client 1", company_name="Nonexistent Co")
+    def test_unknown_company_code_is_422(self, client: TestClient) -> None:
+        response = self._self_register(client, name="Client 1", company_code="NOPE-000000")
         assert response.status_code == 422
 
     def test_suspended_subscription_rejects_new_devices(self, client: TestClient, admin_headers) -> None:
         created = _create_subscription(client, admin_headers, company_name="Acme Co")
         client.patch(f"/api/v1/subscriptions/{created['id']}", json={"action": "suspend"}, headers=admin_headers)
 
-        response = self._self_register(client, name="Client 1", company_name="Acme Co")
+        response = self._self_register(client, name="Client 1", company_code=created["company_code"])
         assert response.status_code == 422
 
     def test_expired_subscription_rejects_new_devices(self, client: TestClient, admin_headers) -> None:
-        _create_subscription(
+        created = _create_subscription(
             client,
             admin_headers,
             company_name="Acme Co",
@@ -686,25 +700,39 @@ class TestSelfRegistrationApi:
             end=_today() - timedelta(days=1),
         )
 
-        response = self._self_register(client, name="Client 1", company_name="Acme Co")
+        response = self._self_register(client, name="Client 1", company_code=created["company_code"])
         assert response.status_code == 422
+
+    def test_invalid_and_inactive_company_codes_return_the_identical_response(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        """Anti-enumeration: a caller must not tell "no such code" apart from "code exists but inactive"."""
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        client.patch(f"/api/v1/subscriptions/{created['id']}", json={"action": "suspend"}, headers=admin_headers)
+
+        unknown_response = self._self_register(client, name="Client 1", company_code="NOPE-000000")
+        inactive_response = self._self_register(client, name="Client 2", company_code=created["company_code"])
+
+        assert unknown_response.status_code == inactive_response.status_code == 422
+        assert unknown_response.json()["detail"] == inactive_response.json()["detail"]
+        assert unknown_response.json()["detail"] == "Invalid or inactive company code."
 
     def test_max_devices_reached_is_403_with_the_exact_required_message(
         self, client: TestClient, admin_headers
     ) -> None:
-        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=1)
-        first = self._self_register(client, name="Client 1", company_name="Acme Co")
+        created = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=1)
+        first = self._self_register(client, name="Client 1", company_code=created["company_code"])
         assert first.status_code == 201
 
-        second = self._self_register(client, name="Client 2", company_name="Acme Co")
+        second = self._self_register(client, name="Client 2", company_code=created["company_code"])
         assert second.status_code == 403
         assert second.json()["detail"] == "Maximum allowed devices reached."
 
     def test_second_device_registers_when_capacity_allows(self, client: TestClient, admin_headers) -> None:
-        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=2)
+        created = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=2)
 
-        first = self._self_register(client, name="Client 1", company_name="Acme Co")
-        second = self._self_register(client, name="Client 2", company_name="Acme Co")
+        first = self._self_register(client, name="Client 1", company_code=created["company_code"])
+        second = self._self_register(client, name="Client 2", company_code=created["company_code"])
 
         assert first.status_code == 201
         assert second.status_code == 201
@@ -713,8 +741,8 @@ class TestSelfRegistrationApi:
     def test_device_list_shows_company_name_for_a_self_registered_device(
         self, client: TestClient, admin_headers
     ) -> None:
-        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
-        self._self_register(client, name="Client 1", company_name="Acme Co")
+        created = _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        self._self_register(client, name="Client 1", company_code=created["company_code"])
 
         response = client.get("/api/v1/devices", headers=admin_headers)
         assert response.status_code == 200
@@ -732,72 +760,76 @@ class TestAutomaticEnrollmentEndToEnd:
         self, client_database: Database, running_server_url: str, admin_bearer_token: str
     ) -> None:
         """The full requested flow: create company -> create subscription -> install client -> login succeeds."""
-        _create_subscription_via_admin_api(running_server_url, admin_bearer_token, company_name="Acme Co")
+        subscription = _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co"
+        )
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         assert coordinator.is_enrolled() is False
 
         service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
-        result = service.check_for_login(company_id=1, company_name="Acme Co")
+        resolution = service.resolve_company_code(company_code=subscription["company_code"])
 
+        assert resolution.blocked is None
+        assert resolution.company_name == "Acme Co"
+        assert coordinator.is_enrolled() is True
+
+        # The composition root would now authenticate username/password
+        # locally against company_id=1 (the local Company matching
+        # "Acme Co") before ever calling this -- see ui.login_window.
+        service.confirm_local_binding(company_id=1, company_code=subscription["company_code"])
+
+        result = service.check()
         assert result.allowed is True
         assert result.outcome is SubscriptionCheckOutcome.VALID
         assert result.company_name == "Acme Co"
-        assert coordinator.is_enrolled() is True
 
     def test_second_login_does_not_ask_or_re_register_and_just_checks(
         self, client_database: Database, running_server_url: str, admin_bearer_token: str
     ) -> None:
-        """Future logins must not ask for the company again — see check_for_login's docstring."""
-        _create_subscription_via_admin_api(running_server_url, admin_bearer_token, company_name="Acme Co")
+        """Future logins must not ask for the company code again — see resolve_company_code's docstring."""
+        subscription = _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co"
+        )
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
-        first_result = service.check_for_login(company_id=1, company_name="Acme Co")
-        assert first_result.allowed is True
+        first_resolution = service.resolve_company_code(company_code=subscription["company_code"])
+        assert first_resolution.blocked is None
+        service.confirm_local_binding(company_id=1, company_code=subscription["company_code"])
 
         with client_database.session_scope() as session:
             device_public_id_after_first_login = ClientSyncCredentialRepository(session).get().device_public_id
 
-        # A different (bogus) company_id/company_name this time -- ignored,
-        # since this device is already bound; it must not attempt to
+        # A different (bogus) code this time -- ignored, since this
+        # device is already enrolled; it must not attempt to
         # re-register or change which company it belongs to.
-        second_result = service.check_for_login(company_id=999, company_name="Some Other Co")
+        second_resolution = service.resolve_company_code(company_code="Some-Bogus-Code")
 
-        assert second_result.allowed is True
-        assert second_result.outcome is SubscriptionCheckOutcome.VALID
-        assert second_result.company_name == "Acme Co"
+        assert second_resolution.blocked is None
+        assert second_resolution.company_name == "Acme Co"
         with client_database.session_scope() as session:
             credential_repo = ClientSyncCredentialRepository(session)
             assert credential_repo.get().device_public_id == device_public_id_after_first_login
             assert credential_repo.get_bound_company_id() == 1
+            assert credential_repo.get_company_code() == subscription["company_code"]
 
-    def test_no_company_resolved_blocks_without_contacting_the_server(
+    def test_unknown_company_code_blocks_with_a_generic_reason(
         self, client_database: Database, running_server_url: str
     ) -> None:
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         service = SubscriptionCheckService(client_database, coordinator)
 
-        result = service.check_for_login(company_id=1, company_name="")
+        resolution = service.resolve_company_code(company_code="NOPE-000000")
 
-        assert result.allowed is False
-        assert result.outcome is SubscriptionCheckOutcome.NOT_REGISTERED
-        assert coordinator.is_enrolled() is False
-
-    def test_unknown_company_blocks_with_a_clear_reason(
-        self, client_database: Database, running_server_url: str
-    ) -> None:
-        coordinator = ClientSyncCoordinator(client_database, running_server_url)
-        service = SubscriptionCheckService(client_database, coordinator)
-
-        result = service.check_for_login(company_id=1, company_name="Nonexistent Co")
-
-        assert result.allowed is False
-        assert result.outcome is SubscriptionCheckOutcome.NO_SUBSCRIPTION_FOR_COMPANY
+        assert resolution.company_name is None
+        assert resolution.blocked is not None
+        assert resolution.blocked.allowed is False
+        assert resolution.blocked.outcome is SubscriptionCheckOutcome.INVALID_COMPANY_CODE
         assert coordinator.is_enrolled() is False
 
     def test_second_pc_also_registers_automatically_when_capacity_allows(
         self, tmp_path, running_server_url: str, admin_bearer_token: str
     ) -> None:
-        _create_subscription_via_admin_api(
+        subscription = _create_subscription_via_admin_api(
             running_server_url, admin_bearer_token, company_name="Acme Co", max_devices=2
         )
 
@@ -813,11 +845,11 @@ class TestAutomaticEnrollmentEndToEnd:
             second_database, ClientSyncCoordinator(second_database, running_server_url), device_name="PC 2"
         )
 
-        first_result = first_service.check_for_login(company_id=1, company_name="Acme Co")
-        second_result = second_service.check_for_login(company_id=1, company_name="Acme Co")
+        first_resolution = first_service.resolve_company_code(company_code=subscription["company_code"])
+        second_resolution = second_service.resolve_company_code(company_code=subscription["company_code"])
 
-        assert first_result.allowed is True
-        assert second_result.allowed is True
+        assert first_resolution.blocked is None
+        assert second_resolution.blocked is None
 
         first_database.dispose()
         second_database.dispose()
@@ -825,7 +857,7 @@ class TestAutomaticEnrollmentEndToEnd:
     def test_device_limit_reached_rejects_with_the_required_message(
         self, tmp_path, running_server_url: str, admin_bearer_token: str
     ) -> None:
-        _create_subscription_via_admin_api(
+        subscription = _create_subscription_via_admin_api(
             running_server_url, admin_bearer_token, company_name="Acme Co", max_devices=1
         )
 
@@ -834,18 +866,20 @@ class TestAutomaticEnrollmentEndToEnd:
         first_service = SubscriptionCheckService(
             first_database, ClientSyncCoordinator(first_database, running_server_url), device_name="PC 1"
         )
-        assert first_service.check_for_login(company_id=1, company_name="Acme Co").allowed is True
+        assert first_service.resolve_company_code(company_code=subscription["company_code"]).blocked is None
 
         second_database = Database(DatabaseConfig(sqlite_path=tmp_path / "second.db"))
         second_database.initialize()
         second_service = SubscriptionCheckService(
             second_database, ClientSyncCoordinator(second_database, running_server_url), device_name="PC 2"
         )
-        second_result = second_service.check_for_login(company_id=1, company_name="Acme Co")
+        second_resolution = second_service.resolve_company_code(company_code=subscription["company_code"])
 
-        assert second_result.allowed is False
-        assert second_result.outcome is SubscriptionCheckOutcome.MAX_DEVICES_REACHED
-        assert second_result.message_en == "Maximum allowed devices reached."
+        assert second_resolution.company_name is None
+        assert second_resolution.blocked is not None
+        assert second_resolution.blocked.allowed is False
+        assert second_resolution.blocked.outcome is SubscriptionCheckOutcome.MAX_DEVICES_REACHED
+        assert second_resolution.blocked.message_en == "Maximum allowed devices reached."
 
         first_database.dispose()
         second_database.dispose()
@@ -858,7 +892,9 @@ class TestAutomaticEnrollmentEndToEnd:
         )
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         service = SubscriptionCheckService(client_database, coordinator, device_name="New PC")
-        assert service.check_for_login(company_id=1, company_name="Acme Co").allowed is True
+        assert service.resolve_company_code(company_code=subscription["company_code"]).blocked is None
+        service.confirm_local_binding(company_id=1, company_code=subscription["company_code"])
+        assert service.check().allowed is True
 
         _patch_subscription_via_admin_api(
             running_server_url, admin_bearer_token, subscription["id"], action="suspend"
@@ -876,8 +912,8 @@ class TestAutomaticEnrollmentEndToEnd:
         coordinator = ClientSyncCoordinator(client_database, running_server_url)
         coordinator.enroll(admin_bearer_token=admin_bearer_token, name="Legacy Client", company_name="Acme Co")
 
-        # Never bound via a login-driven check_for_login call -- check()
-        # must still work fine for this already-enrolled installation.
+        # Never bound via a login-driven resolve_company_code call --
+        # check() must still work fine for this already-enrolled installation.
         service = SubscriptionCheckService(client_database, coordinator)
         result = service.check()
 

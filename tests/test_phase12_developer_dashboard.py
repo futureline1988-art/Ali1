@@ -191,6 +191,7 @@ def _make_subscription(
     return SubscriptionInfo(
         id=id,
         company_name=company_name,
+        company_code=f"{company_name.upper().replace(' ', '')}-TEST01",
         subscription_start_date=today - timedelta(days=30),
         subscription_end_date=today + timedelta(days=days_remaining),
         status=status,

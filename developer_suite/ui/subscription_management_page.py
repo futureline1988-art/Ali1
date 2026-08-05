@@ -42,6 +42,7 @@ from developer_suite.ui.subscription_form_dialog import SubscriptionFormDialog
 
 _COLUMN_LABELS = (
     "الشركة",
+    "رمز الشركة",
     "الحالة",
     "تاريخ البدء",
     "تاريخ الانتهاء",
@@ -199,12 +200,13 @@ class SubscriptionManagementPage(QWidget):
         self.table.setRowCount(len(subscriptions))
         for row, record in enumerate(subscriptions):
             self.table.setItem(row, 0, QTableWidgetItem(record.company_name))
-            self.table.setItem(row, 1, QTableWidgetItem(_status_label(record)))
-            self.table.setItem(row, 2, QTableWidgetItem(record.subscription_start_date.isoformat()))
-            self.table.setItem(row, 3, QTableWidgetItem(record.subscription_end_date.isoformat()))
-            self.table.setItem(row, 4, QTableWidgetItem(str(record.days_remaining)))
-            self.table.setItem(row, 5, QTableWidgetItem(_device_count_label(record)))
-            self.table.setItem(row, 6, QTableWidgetItem(_max_users_label(record)))
+            self.table.setItem(row, 1, QTableWidgetItem(record.company_code))
+            self.table.setItem(row, 2, QTableWidgetItem(_status_label(record)))
+            self.table.setItem(row, 3, QTableWidgetItem(record.subscription_start_date.isoformat()))
+            self.table.setItem(row, 4, QTableWidgetItem(record.subscription_end_date.isoformat()))
+            self.table.setItem(row, 5, QTableWidgetItem(str(record.days_remaining)))
+            self.table.setItem(row, 6, QTableWidgetItem(_device_count_label(record)))
+            self.table.setItem(row, 7, QTableWidgetItem(_max_users_label(record)))
 
     def _selected_subscription(self) -> SubscriptionInfo | None:
         """The subscription backing the currently selected row, if any."""
@@ -226,11 +228,22 @@ class SubscriptionManagementPage(QWidget):
             QMessageBox.information(self, "إنشاء اشتراك", "الرجاء إدخال اسم الشركة.")
             return
         try:
-            self._subscription_service.create_subscription(**values)
+            created = self._subscription_service.create_subscription(**values)
         except SubscriptionServiceError as exc:
             QMessageBox.warning(self, "تعذّر إنشاء الاشتراك", str(exc))
             return
         self.reload()
+        # The one moment this code must be captured -- it is never shown
+        # to the Attendance Client again except as this row's own column,
+        # and the whole point of this migration is that the vendor hands
+        # it to the company out of band, not that the client ever lists
+        # or discovers it on its own.
+        QMessageBox.information(
+            self,
+            "تم إنشاء الاشتراك",
+            f"تم إنشاء الاشتراك بنجاح.\n\nرمز الشركة: {created.company_code}\n\n"
+            "يرجى تسليم هذا الرمز لمسؤول الشركة لاستخدامه عند أول تشغيل لبرنامج الحضور.",
+        )
 
     def _on_renew_clicked(self) -> None:
         subscription = self._selected_subscription()
