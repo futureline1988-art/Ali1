@@ -71,6 +71,11 @@ class DeviceInfo:
     is_active: bool
     last_seen_at: datetime | None
     created_at: datetime
+    company_name: str | None = None
+    """The subscription this device is automatically linked to, if any
+    (``None`` for a Developer Suite device, or an Attendance Client
+    device registered before subscriptions existed) -- set once at
+    registration, never edited here; there is no manual linking UI."""
 
     def is_online(self, *, now: datetime | None = None) -> bool:
         """Whether this device has been seen recently enough to consider it online.
@@ -99,6 +104,7 @@ class DeviceInfo:
             is_active=data["is_active"],
             last_seen_at=_parse_datetime(data["last_seen_at"]),
             created_at=_parse_datetime(data["created_at"]),
+            company_name=data.get("company_name"),
         )
 
 

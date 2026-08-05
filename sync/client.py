@@ -38,6 +38,20 @@ class SyncServerError(SyncClientError):
     """The server reached the request but returned an unexpected error status."""
 
 
+class DeviceRegistrationRejectedError(SyncClientError):
+    """Self-registration was rejected: no subscription exists for this company, or it is not active.
+
+    Raised only by :func:`self_register_device` (422 response) — the
+    admin-driven :func:`register_device` surfaces the equivalent
+    condition as a plain :class:`SyncServerError` instead, since it
+    predates this distinction and callers already handle it generically.
+    """
+
+
+class MaxDevicesReachedError(SyncClientError):
+    """Self-registration was rejected: the subscription's device cap is already reached (403)."""
+
+
 @dataclass(frozen=True)
 class PulledChange:
     """One applied change returned by ``GET /sync/pull``."""
@@ -164,6 +178,64 @@ def register_device(
             )
         except httpx.TransportError as exc:
             raise SyncConnectionError(f"Could not reach {base_url}: {exc}") from exc
+        _raise_for_response(response)
+        data = response.json()
+        return data["device"]["public_id"], data["api_key"]
+    finally:
+        client.close()
+
+
+def self_register_device(
+    base_url: str,
+    *,
+    name: str,
+    company_name: str,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> tuple[str, str]:
+    """Fully-automatic self-registration — no bearer token, no administrator action.
+
+    The onboarding path this installation drives entirely on its own
+    at first startup (see
+    :meth:`~sync.coordinator.ClientSyncCoordinator.self_enroll`):
+    given only ``company_name``, the server immediately links this new
+    device to that company's active subscription if it has capacity,
+    or rejects the request with a clear reason.
+
+    Args:
+        base_url: The Attendance Server's base URL.
+        name: A human-readable label for this installation.
+        company_name: The exact ``Subscription.company_name`` this
+            installation belongs to.
+        transport: Optional ``httpx`` transport override, for tests.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        ``(device_public_id, api_key)`` — ``api_key`` is shown exactly
+        once and must be persisted by the caller.
+
+    Raises:
+        SyncConnectionError: The server could not be reached.
+        DeviceRegistrationRejectedError: No subscription exists for
+            ``company_name``, or it exists but is suspended/expired
+            (422).
+        MaxDevicesReachedError: That subscription's device cap is
+            already reached (403).
+        SyncServerError: Any other non-2xx response.
+    """
+    client = httpx.Client(base_url=base_url, transport=transport, timeout=timeout)
+    try:
+        try:
+            response = client.post(
+                "/api/v1/devices/self-register",
+                json={"name": name, "company_name": company_name},
+            )
+        except httpx.TransportError as exc:
+            raise SyncConnectionError(f"Could not reach {base_url}: {exc}") from exc
+        if response.status_code == 422:
+            raise DeviceRegistrationRejectedError(f"Registration rejected: {response.text}")
+        if response.status_code == 403:
+            raise MaxDevicesReachedError("Maximum allowed devices reached.")
         _raise_for_response(response)
         data = response.json()
         return data["device"]["public_id"], data["api_key"]

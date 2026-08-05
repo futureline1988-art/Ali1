@@ -23,8 +23,7 @@ from repositories.company_settings_repository import CompanySettingsRepository
 from repositories.permission_repository import PermissionRepository
 from repositories.update_state_repository import ClientUpdateStateRepository
 from services.scheduler_service import SchedulerService
-from services.subscription_check_service import SubscriptionCheckResult, SubscriptionCheckService
-from sync.client import SyncClientError
+from services.subscription_check_service import SubscriptionCheckService
 from sync.coordinator import ClientSyncCoordinator
 from sync.scheduler import ClientSyncSchedulerService
 from updates.checker import UpdateCheckService
@@ -128,35 +127,6 @@ def _seed_default_permissions() -> None:
         for code, module, name_ar, name_en in _DEFAULT_PERMISSIONS:
             repo.add(Permission(code=code, module=module, name_ar=name_ar, name_en=name_en))
     logger.info("Seeded {count} default permissions", count=len(_DEFAULT_PERMISSIONS))
-
-
-def _bootstrap_remote_configuration_sync(coordinator: ClientSyncCoordinator, config) -> None:
-    """Enroll this installation with the Attendance Server, if configured to.
-
-    A one-time action: a no-op once already enrolled, and a no-op if
-    no bootstrap token is configured at all (an installation that has
-    never been given one simply never enrolls, and keeps working fully
-    offline forever — see :mod:`sync` package docstring). Mirrors
-    Phase 10's now-retired ``ConfiguredAdminTokenProvider`` env-var
-    -bootstrap shape (see :class:`~config.SyncConfig`'s docstring).
-
-    Failures (server unreachable, token rejected) are logged, never
-    raised — enrollment is best-effort background setup, not something
-    that should ever block or fail application startup.
-    """
-    if not config.sync.bootstrap_admin_token:
-        return
-    if coordinator.is_enrolled():
-        return
-    try:
-        coordinator.enroll(
-            admin_bearer_token=config.sync.bootstrap_admin_token,
-            name=config.sync.device_name,
-            company_name=config.sync.company_name or None,
-        )
-        logger.info("Enrolled this installation for remote configuration sync.")
-    except SyncClientError as exc:
-        logger.warning("Could not enroll for remote configuration sync yet: {error}", error=str(exc))
 
 
 def _install_exception_hook() -> None:
@@ -435,8 +405,12 @@ def main() -> int:
         scheduler.start()
 
         sync_coordinator = ClientSyncCoordinator(database, config.sync.server_url)
-        _bootstrap_remote_configuration_sync(sync_coordinator, config)
-        subscription_check_service = SubscriptionCheckService(database, sync_coordinator)
+        subscription_check_service = SubscriptionCheckService(
+            database,
+            sync_coordinator,
+            company_name=config.sync.company_name,
+            device_name=config.sync.device_name,
+        )
 
         def _continue_after_subscription_check() -> None:
             update_checker = (
@@ -468,11 +442,6 @@ def main() -> int:
             run_state["controller"] = ApplicationController()
             QTimer.singleShot(config.ui.splash_screen_duration_ms, splash.close)
 
-        def _recheck_subscription() -> SubscriptionCheckResult:
-            """Re-attempt enrollment (in case it failed earlier) and re-check the subscription."""
-            _bootstrap_remote_configuration_sync(sync_coordinator, config)
-            return subscription_check_service.check()
-
         result = subscription_check_service.check()
         if result.allowed:
             _continue_after_subscription_check()
@@ -483,7 +452,10 @@ def main() -> int:
             outcome=result.outcome.value,
             message=result.message_en,
         )
-        blocked_window = SubscriptionBlockedWindow(recheck=_recheck_subscription)
+        # subscription_check_service.check() itself re-attempts automatic
+        # enrollment on every call (see SubscriptionCheckService._auto_enroll),
+        # so a straight re-check is also the correct retry action.
+        blocked_window = SubscriptionBlockedWindow(recheck=subscription_check_service.check)
         blocked_window.show_result(result.message_ar)
 
         def _on_subscription_passed() -> None:

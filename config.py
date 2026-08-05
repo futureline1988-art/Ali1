@@ -430,38 +430,29 @@ class SyncConfig:
     the same generic sync API.
 
     ``company_name`` is also this installation's subscription identity
+    and the sole input its fully-automatic first-run enrollment needs
     (see :mod:`services.subscription_check_service`): the exact
     ``Subscription.company_name`` created for this customer in the
-    Developer Suite, sent at enrollment so the server can link this
-    device to the right subscription.
+    Developer Suite. No administrator token or manual device-to
+    -subscription linking is involved — a fresh installation
+    self-registers with only this value (see
+    :meth:`~sync.coordinator.ClientSyncCoordinator.self_enroll`).
     """
 
     enabled: bool = True
     server_url: str = "http://127.0.0.1:8000"
     interval_seconds: int = 300
     device_name: str = "Attendance Client"
-    bootstrap_admin_token: str = ""
     company_name: str = ""
 
     @classmethod
     def from_env(cls) -> "SyncConfig":
-        """Build a :class:`SyncConfig` from environment variables.
-
-        ``bootstrap_admin_token``, if set, is used exactly once: at
-        startup, if this installation has not enrolled yet, ``main.py``
-        uses it to call
-        :meth:`~sync.coordinator.ClientSyncCoordinator.enroll` — the
-        same "read a token from the environment to perform a one-time
-        bootstrap action" shape Phase 10's now-retired
-        ``ConfiguredAdminTokenProvider`` established, here scoped to a
-        single enrollment call rather than an ongoing token source.
-        """
+        """Build a :class:`SyncConfig` from environment variables."""
         return cls(
             enabled=_env_bool("SYNC_ENABLED", True),
             server_url=os.getenv("SYNC_ATTENDANCE_SERVER_URL", cls.server_url),
             interval_seconds=_env_int("SYNC_INTERVAL_SECONDS", 300),
             device_name=os.getenv("SYNC_DEVICE_NAME", cls.device_name),
-            bootstrap_admin_token=os.getenv("SYNC_BOOTSTRAP_ADMIN_TOKEN", ""),
             company_name=os.getenv("SYNC_COMPANY_NAME", ""),
         )
 
@@ -545,7 +536,7 @@ class AppConfig:
 
     app_name: str = "Attendance Management System"
     app_name_ar: str = "نظام إدارة الحضور والانصراف"
-    app_version: str = "1.2.0"
+    app_version: str = "1.2.1"
     organization_name: str = "Attendance Systems"
     environment: Environment = Environment.PRODUCTION
 

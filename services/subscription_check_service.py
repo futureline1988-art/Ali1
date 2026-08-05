@@ -8,6 +8,14 @@ and caches the last *server-confirmed* answer locally (see
 :mod:`models.subscription_state`) purely so a temporarily unreachable
 server does not lock a paying customer out.
 
+Also owns this installation's fully-automatic first-run enrollment
+(see :meth:`SubscriptionCheckService._auto_enroll`): if not yet
+enrolled, :meth:`check` self-registers with only a configured
+``company_name`` — no admin bearer token, no manual linking anywhere
+in the Developer Suite. A freshly-registered installation falls
+straight through to a live status check in the same call, so "register
+-> allowed" is one seamless step from the caller's point of view.
+
 Grace period: if the server cannot be reached, this installation is
 allowed to keep running for a bounded window (:data:`DEFAULT_GRACE_PERIOD`,
 7 days) since the last successful check. The moment the server answers
@@ -26,7 +34,12 @@ from enum import Enum
 from database.database import Database
 from models.subscription_state import ClientSubscriptionState
 from repositories.subscription_state_repository import ClientSubscriptionStateRepository
-from sync.client import SubscriptionStatusResult, SyncClientError
+from sync.client import (
+    DeviceRegistrationRejectedError,
+    MaxDevicesReachedError,
+    SubscriptionStatusResult,
+    SyncClientError,
+)
 from sync.coordinator import ClientSyncCoordinator, DeviceNotEnrolledError
 
 #: How long this installation may keep running on a cached, previously
@@ -42,6 +55,8 @@ class SubscriptionCheckOutcome(str, Enum):
     EXPIRED = "expired"
     SUSPENDED = "suspended"
     NOT_REGISTERED = "not_registered"
+    MAX_DEVICES_REACHED = "max_devices_reached"
+    NO_SUBSCRIPTION_FOR_COMPANY = "no_subscription_for_company"
     UNREACHABLE_WITHIN_GRACE = "unreachable_within_grace"
     UNREACHABLE_BLOCKED = "unreachable_blocked"
 
@@ -86,6 +101,8 @@ class SubscriptionCheckService:
         database: Database,
         sync_coordinator: ClientSyncCoordinator,
         *,
+        company_name: str = "",
+        device_name: str = "Attendance Client",
         grace_period: timedelta = DEFAULT_GRACE_PERIOD,
     ) -> None:
         """Create a check service bound to ``database`` and ``sync_coordinator``.
@@ -93,16 +110,25 @@ class SubscriptionCheckService:
         Args:
             database: The Attendance Client's own database, where the
                 last server-confirmed status is cached.
-            sync_coordinator: Already-enrolled (or not yet) sync
-                coordinator; used only for
-                :meth:`~sync.coordinator.ClientSyncCoordinator.is_enrolled`
-                and :meth:`~sync.coordinator.ClientSyncCoordinator.get_subscription_status`.
+            sync_coordinator: Sync coordinator, enrolled or not — if
+                not yet enrolled, :meth:`check` enrolls it
+                automatically (see :meth:`_auto_enroll`).
+            company_name: This installation's configured company name
+                (``config.sync.company_name``), used only for
+                automatic first-run enrollment. Left empty, a
+                not-yet-enrolled installation simply reports
+                :attr:`SubscriptionCheckOutcome.NOT_REGISTERED` without
+                contacting the server.
+            device_name: A human-readable label for this installation,
+                used only for automatic first-run enrollment.
             grace_period: How long a cached, previously-confirmed
                 status remains valid once the server becomes
                 unreachable.
         """
         self._database = database
         self._sync_coordinator = sync_coordinator
+        self._company_name = company_name
+        self._device_name = device_name
         self._grace_period = grace_period
 
     def get_cached(self) -> ClientSubscriptionState | None:
@@ -118,23 +144,17 @@ class SubscriptionCheckService:
     def check(self) -> SubscriptionCheckResult:
         """Check this installation's subscription status.
 
-        Always reaches out to the server first; only falls back to the
-        cached, last-confirmed status (subject to the grace period) if
-        the server cannot be reached at all.
+        If not yet enrolled, first attempts fully-automatic
+        self-registration (see :meth:`_auto_enroll`) — on success,
+        falls straight through to a live status check below in the
+        same call. Otherwise always reaches out to the server first;
+        only falls back to the cached, last-confirmed status (subject
+        to the grace period) if the server cannot be reached at all.
         """
         if not self._sync_coordinator.is_enrolled():
-            return SubscriptionCheckResult(
-                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
-                allowed=False,
-                message_ar=(
-                    "هذا الجهاز غير مسجَّل لدى خادم الحضور بعد. "
-                    "يرجى التحقق من إعدادات الاتصال بالخادم."
-                ),
-                message_en=(
-                    "This installation is not registered with the Attendance Server yet. "
-                    "Please check the server connection settings."
-                ),
-            )
+            enrollment_failure = self._auto_enroll()
+            if enrollment_failure is not None:
+                return enrollment_failure
 
         try:
             status = self._sync_coordinator.get_subscription_status()
@@ -151,6 +171,57 @@ class SubscriptionCheckService:
             )
 
         return self._result_from_live_status(status)
+
+    def _auto_enroll(self) -> SubscriptionCheckResult | None:
+        """Attempt fully-automatic first-run self-registration.
+
+        Returns:
+            ``None`` on success (the caller falls through to a live
+            status check); a blocking :class:`SubscriptionCheckResult`
+            explaining why not, otherwise.
+        """
+        if not self._company_name:
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.NOT_REGISTERED,
+                allowed=False,
+                message_ar=(
+                    "لم يتم إعداد اسم الشركة لهذا الجهاز؛ يتعذر التسجيل التلقائي. "
+                    "يرجى التحقق من إعدادات التثبيت."
+                ),
+                message_en=(
+                    "No company name is configured for this installation; automatic "
+                    "registration cannot proceed. Please check the installation settings."
+                ),
+            )
+        try:
+            self._sync_coordinator.self_enroll(name=self._device_name, company_name=self._company_name)
+            return None
+        except MaxDevicesReachedError:
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.MAX_DEVICES_REACHED,
+                allowed=False,
+                message_ar="تم الوصول إلى الحد الأقصى للأجهزة المسموح بها. (Maximum allowed devices reached.)",
+                message_en="Maximum allowed devices reached.",
+                company_name=self._company_name,
+            )
+        except DeviceRegistrationRejectedError:
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.NO_SUBSCRIPTION_FOR_COMPANY,
+                allowed=False,
+                message_ar=(
+                    "لا يوجد اشتراك نشط لهذه الشركة على الخادم. يرجى التواصل مع مزوّد الخدمة."
+                ),
+                message_en="No active subscription exists for this company. Please contact your provider.",
+                company_name=self._company_name,
+            )
+        except SyncClientError:
+            return SubscriptionCheckResult(
+                outcome=SubscriptionCheckOutcome.UNREACHABLE_BLOCKED,
+                allowed=False,
+                message_ar="تعذر الاتصال بخادم الحضور لتسجيل هذا الجهاز تلقائيًا.",
+                message_en="Could not reach the Attendance Server to automatically register this installation.",
+                company_name=self._company_name,
+            )
 
     def _result_from_live_status(self, status: SubscriptionStatusResult) -> SubscriptionCheckResult:
         if status.status == "active":

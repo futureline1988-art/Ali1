@@ -18,7 +18,7 @@
 ; ==============================================================================
 
 #define MyAppName "Developer Suite"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "Attendance Systems"
 #define MyAppExeName "DeveloperSuite.exe"
 #define MyAppDataFolder "DeveloperSuite"

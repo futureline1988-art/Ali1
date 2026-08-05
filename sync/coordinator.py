@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from database.database import Database
 from repositories.sync_repository import ClientSyncCredentialRepository, ClientSyncCursorRepository
-from sync.client import SubscriptionStatusResult, SyncClient, register_device
+from sync.client import SubscriptionStatusResult, SyncClient, register_device, self_register_device
 from sync.protocol import DeviceType
 
 
@@ -100,6 +100,42 @@ class ClientSyncCoordinator:
             admin_bearer_token,
             name=name,
             device_type=DeviceType.ATTENDANCE_CLIENT,
+            company_name=company_name,
+            transport=self._transport,
+        )
+        with self._database.session_scope() as session:
+            ClientSyncCredentialRepository(session).save(
+                device_public_id=device_public_id, api_key=api_key, server_url=self._server_url
+            )
+
+    def self_enroll(self, *, name: str, company_name: str) -> None:
+        """Fully-automatic enrollment — no admin bearer token, no administrator action.
+
+        The onboarding path this installation drives entirely on its
+        own at first startup (see
+        :mod:`services.subscription_check_service`): given only
+        ``company_name``, the server immediately links this device to
+        that company's active subscription if it has capacity, or
+        rejects the request with a clear reason (see
+        :func:`~sync.client.self_register_device`).
+
+        Args:
+            name: A human-readable label for this installation.
+            company_name: The exact ``Subscription.company_name`` this
+                installation belongs to.
+
+        Raises:
+            ~sync.client.SyncConnectionError: The server could not be
+                reached.
+            ~sync.client.DeviceRegistrationRejectedError: No
+                subscription exists for ``company_name``, or it exists
+                but is suspended/expired.
+            ~sync.client.MaxDevicesReachedError: That subscription's
+                device cap is already reached.
+        """
+        device_public_id, api_key = self_register_device(
+            self._server_url,
+            name=name,
             company_name=company_name,
             transport=self._transport,
         )

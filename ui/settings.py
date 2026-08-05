@@ -393,7 +393,12 @@ class SettingsPage(QTabWidget):
         self.backup_tab = BackupTab(controller=controller, parent=self)
         config = get_config()
         sync_coordinator = ClientSyncCoordinator(get_database(), config.sync.server_url)
-        subscription_check_service = SubscriptionCheckService(get_database(), sync_coordinator)
+        subscription_check_service = SubscriptionCheckService(
+            get_database(),
+            sync_coordinator,
+            company_name=config.sync.company_name,
+            device_name=config.sync.device_name,
+        )
         self.subscription_tab = SubscriptionInfoWindow(
             check_service=subscription_check_service, parent=self
         )

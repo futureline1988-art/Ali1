@@ -35,6 +35,19 @@ class DeviceRegisterRequest(BaseModel):
     )
 
 
+class SelfRegisterDeviceRequest(BaseModel):
+    """POST /api/v1/devices/self-register request body.
+
+    No bearer token accompanies this request -- see
+    :func:`server.api.routers.devices.self_register_device`. Always an
+    ``attendance_client`` device; there is no self-service registration
+    for ``developer_suite`` installations.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    company_name: str = Field(min_length=1, max_length=200)
+
+
 class CreateSubscriptionRequest(BaseModel):
     """POST /api/v1/subscriptions request body."""
 

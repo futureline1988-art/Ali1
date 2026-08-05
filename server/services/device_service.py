@@ -49,6 +49,17 @@ class MaxDevicesReachedError(DeviceServiceError):
     """The company's subscription has already reached its device cap."""
 
 
+class SubscriptionNotActiveError(DeviceServiceError):
+    """The matched subscription exists but is suspended or expired.
+
+    Only raised by :meth:`DeviceService.self_register_device` — the
+    fully-automatic, no-admin-token onboarding path must not let a new
+    device join a subscription that is not currently in good standing;
+    :meth:`DeviceService.register_device` (the admin-driven path) is
+    unaffected, matching its existing, deliberately looser contract.
+    """
+
+
 class DeviceService(BaseService):
     """Register, authenticate, and manage devices."""
 
@@ -128,6 +139,72 @@ class DeviceService(BaseService):
                 api_key_hash=hash_password(api_key, rounds=self._config.security.bcrypt_rounds),
                 is_active=True,
                 subscription_id=subscription_id,
+            )
+            DeviceRepository(session).add(device)
+            return device, api_key
+
+    def self_register_device(self, *, name: str, company_name: str) -> tuple[SyncDevice, str]:
+        """Fully-automatic self-registration for a fresh Attendance Client installation.
+
+        The no-administrator-action onboarding path: called with only
+        this installation's configured ``company_name`` (see
+        :meth:`~sync.coordinator.ClientSyncCoordinator.self_enroll`) —
+        no bearer token, no prior manual linking in the Developer
+        Suite. Always :attr:`~server.models.device.DeviceType.ATTENDANCE_CLIENT`;
+        there is no self-service path for a Developer Suite
+        installation, which always registers through
+        :meth:`register_device` with an admin bearer token instead.
+
+        Stricter than :meth:`register_device`'s admin-driven path in
+        one way: the matched subscription must currently be *active*
+        (not suspended, not expired) — a subscription not in good
+        standing must not gain new devices, even automatically.
+
+        Args:
+            name: A human-readable label for this device.
+            company_name: The exact
+                :attr:`~server.models.subscription.Subscription.company_name`
+                this installation belongs to.
+
+        Returns:
+            A ``(device, api_key)`` pair, exactly like :meth:`register_device`.
+
+        Raises:
+            SubscriptionRequiredError: No subscription exists for
+                ``company_name``.
+            SubscriptionNotActiveError: A subscription exists but is
+                suspended or expired.
+            MaxDevicesReachedError: The matched subscription has
+                already reached its
+                :attr:`~server.models.subscription.Subscription.max_devices`
+                cap.
+        """
+        api_key = generate_session_token()
+        with self._session_scope() as session:
+            subscription_repo = SubscriptionRepository(session)
+            subscription = subscription_repo.get_by_company_name(company_name)
+            if subscription is None:
+                raise SubscriptionRequiredError(
+                    f"No subscription exists for company {company_name!r}. "
+                    "Ask your vendor to create one before registering this installation."
+                )
+            if not subscription.is_active:
+                raise SubscriptionNotActiveError(
+                    f"Company {company_name!r}'s subscription is not active "
+                    "(suspended or expired); new devices cannot register."
+                )
+            if subscription_repo.count_active_devices(subscription.id) >= subscription.max_devices:
+                raise MaxDevicesReachedError(
+                    f"Company {company_name!r} has already reached its device limit "
+                    f"({subscription.max_devices})."
+                )
+
+            device = SyncDevice(
+                name=name,
+                device_type=DeviceType.ATTENDANCE_CLIENT,
+                api_key_hash=hash_password(api_key, rounds=self._config.security.bcrypt_rounds),
+                is_active=True,
+                subscription_id=subscription.id,
             )
             DeviceRepository(session).add(device)
             return device, api_key

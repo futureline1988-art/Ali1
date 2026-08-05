@@ -30,8 +30,8 @@ from developer_suite.admin.client import (
     SyncActivityEntry,
 )
 
-_DEVICE_COLUMNS = ("الاسم", "النوع", "الحالة", "آخر ظهور")
-_REGISTRATION_COLUMNS = ("الاسم", "النوع", "الحالة", "تاريخ التسجيل")
+_DEVICE_COLUMNS = ("الاسم", "الشركة", "النوع", "الحالة", "آخر ظهور")
+_REGISTRATION_COLUMNS = ("الاسم", "الشركة", "النوع", "الحالة", "تاريخ التسجيل")
 _ACTIVITY_COLUMNS = ("المعرّف", "الكيان", "العملية", "الحالة", "التاريخ", "السبب")
 _FAILURE_STATUSES = ("conflict", "rejected")
 _MAX_REGISTRATIONS_SHOWN = 20
@@ -64,9 +64,10 @@ def _populate_devices(table: QTableWidget, devices: list[DeviceInfo]) -> None:
     table.setRowCount(len(devices))
     for row, device in enumerate(devices):
         table.setItem(row, 0, QTableWidgetItem(device.name))
-        table.setItem(row, 1, QTableWidgetItem(_device_type_label(device.device_type)))
-        table.setItem(row, 2, QTableWidgetItem("متصل" if device.is_online() else "غير متصل"))
-        table.setItem(row, 3, QTableWidgetItem(_format_datetime(device.last_seen_at)))
+        table.setItem(row, 1, QTableWidgetItem(device.company_name or "—"))
+        table.setItem(row, 2, QTableWidgetItem(_device_type_label(device.device_type)))
+        table.setItem(row, 3, QTableWidgetItem("متصل" if device.is_online() else "غير متصل"))
+        table.setItem(row, 4, QTableWidgetItem(_format_datetime(device.last_seen_at)))
 
 
 def _populate_registrations(table: QTableWidget, devices: list[DeviceInfo]) -> None:
@@ -74,9 +75,10 @@ def _populate_registrations(table: QTableWidget, devices: list[DeviceInfo]) -> N
     table.setRowCount(len(recent))
     for row, device in enumerate(recent):
         table.setItem(row, 0, QTableWidgetItem(device.name))
-        table.setItem(row, 1, QTableWidgetItem(_device_type_label(device.device_type)))
-        table.setItem(row, 2, QTableWidgetItem("متصل" if device.is_online() else "غير متصل"))
-        table.setItem(row, 3, QTableWidgetItem(_format_datetime(device.created_at)))
+        table.setItem(row, 1, QTableWidgetItem(device.company_name or "—"))
+        table.setItem(row, 2, QTableWidgetItem(_device_type_label(device.device_type)))
+        table.setItem(row, 3, QTableWidgetItem("متصل" if device.is_online() else "غير متصل"))
+        table.setItem(row, 4, QTableWidgetItem(_format_datetime(device.created_at)))
 
 
 def _populate_activity(table: QTableWidget, entries: list[SyncActivityEntry]) -> None:

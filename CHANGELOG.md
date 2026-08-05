@@ -3,6 +3,42 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 1.2.1 / Developer Suite 1.1.1 / Server 1.1.1] - 2026-08-05
+
+### Added — Fully automatic device enrollment
+
+A fresh Attendance Client installation now registers and links itself to
+its company's subscription on first startup, with no administrator action
+anywhere:
+
+- **Attendance Server**: new unauthenticated `POST /api/v1/devices/self-register`
+  endpoint (distinct from the existing admin-token-gated
+  `POST /api/v1/devices/register`), scoped narrowly to
+  `device_type=attendance_client` installations. Given only a device name
+  and `company_name`, it looks up that company's subscription, rejects the
+  request if none exists or it isn't currently active (422), rejects it if
+  the subscription's device cap is already reached (403, "Maximum allowed
+  devices reached."), and otherwise creates and links the device
+  immediately. `GET /api/v1/devices` and `POST /api/v1/devices/register`
+  responses now also include each device's linked `company_name`.
+- **Attendance Client**: `config.py`'s `SyncConfig.company_name`
+  (`SYNC_COMPANY_NAME`) is now the only input a fresh installation needs.
+  `SubscriptionCheckService` drives the entire first-run sequence itself —
+  connect, self-register if unknown, and check live subscription status —
+  so the same "Retry" action on the blocked-access screen also retries
+  enrollment. Clear, specific messages are shown when no subscription
+  exists for the configured company and when the device cap is reached.
+  The old admin-token bootstrap field (`SyncConfig.bootstrap_admin_token` /
+  `SYNC_BOOTSTRAP_ADMIN_TOKEN`) is removed, since it's no longer needed for
+  this flow.
+- **Developer Suite**: the Monitoring page's device and recent-registrations
+  tables gained a "الشركة" (Company) column, so a newly self-registered
+  device's subscription link is visible immediately with no separate
+  linking step.
+- Existing admin-token-based enrollment (`ClientSyncCoordinator.enroll`,
+  `POST /api/v1/devices/register`) is unchanged and continues to work
+  exactly as before; self-registration is a purely additive, parallel path.
+
 ## [Client 1.2.0 / Developer Suite 1.1.0 / Server 1.1.0] - 2026-08-04
 
 ### Changed — Replaced file-based licensing with server-managed subscriptions

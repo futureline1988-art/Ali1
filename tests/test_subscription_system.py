@@ -639,3 +639,237 @@ class TestSubscriptionCheckServiceEndToEnd:
         result = service.check()
         assert result.allowed is False
         assert result.outcome is SubscriptionCheckOutcome.SUSPENDED
+
+
+# ---------------------------------------------------------------------------
+# Server REST API: fully-automatic self-registration (no bearer token).
+# ---------------------------------------------------------------------------
+
+
+class TestSelfRegistrationApi:
+    def _self_register(self, client: TestClient, *, name: str, company_name: str):
+        return client.post(
+            "/api/v1/devices/self-register", json={"name": name, "company_name": company_name}
+        )
+
+    def test_succeeds_with_no_authorization_header_at_all(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+
+        response = self._self_register(client, name="Client 1", company_name="Acme Co")
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["device"]["company_name"] == "Acme Co"
+        assert body["device"]["device_type"] == "attendance_client"
+        assert len(body["api_key"]) > 20
+
+    def test_unknown_company_is_422(self, client: TestClient) -> None:
+        response = self._self_register(client, name="Client 1", company_name="Nonexistent Co")
+        assert response.status_code == 422
+
+    def test_suspended_subscription_rejects_new_devices(self, client: TestClient, admin_headers) -> None:
+        created = _create_subscription(client, admin_headers, company_name="Acme Co")
+        client.patch(f"/api/v1/subscriptions/{created['id']}", json={"action": "suspend"}, headers=admin_headers)
+
+        response = self._self_register(client, name="Client 1", company_name="Acme Co")
+        assert response.status_code == 422
+
+    def test_expired_subscription_rejects_new_devices(self, client: TestClient, admin_headers) -> None:
+        _create_subscription(
+            client,
+            admin_headers,
+            company_name="Acme Co",
+            start=_today() - timedelta(days=30),
+            end=_today() - timedelta(days=1),
+        )
+
+        response = self._self_register(client, name="Client 1", company_name="Acme Co")
+        assert response.status_code == 422
+
+    def test_max_devices_reached_is_403_with_the_exact_required_message(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=1)
+        first = self._self_register(client, name="Client 1", company_name="Acme Co")
+        assert first.status_code == 201
+
+        second = self._self_register(client, name="Client 2", company_name="Acme Co")
+        assert second.status_code == 403
+        assert second.json()["detail"] == "Maximum allowed devices reached."
+
+    def test_second_device_registers_when_capacity_allows(self, client: TestClient, admin_headers) -> None:
+        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=2)
+
+        first = self._self_register(client, name="Client 1", company_name="Acme Co")
+        second = self._self_register(client, name="Client 2", company_name="Acme Co")
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["device"]["public_id"] != second.json()["device"]["public_id"]
+
+    def test_device_list_shows_company_name_for_a_self_registered_device(
+        self, client: TestClient, admin_headers
+    ) -> None:
+        _create_subscription(client, admin_headers, company_name="Acme Co", max_devices=5)
+        self._self_register(client, name="Client 1", company_name="Acme Co")
+
+        response = client.get("/api/v1/devices", headers=admin_headers)
+        assert response.status_code == 200
+        devices = response.json()["devices"]
+        assert any(d["company_name"] == "Acme Co" for d in devices)
+
+
+# ---------------------------------------------------------------------------
+# Fully-automatic client enrollment: no administrator action anywhere.
+# ---------------------------------------------------------------------------
+
+
+class TestAutomaticEnrollmentEndToEnd:
+    def test_first_startup_registers_and_grants_access_in_one_call(
+        self, client_database: Database, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        """The full requested flow: create company -> create subscription -> install client -> login succeeds."""
+        _create_subscription_via_admin_api(running_server_url, admin_bearer_token, company_name="Acme Co")
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        assert coordinator.is_enrolled() is False
+
+        service = SubscriptionCheckService(
+            client_database, coordinator, company_name="Acme Co", device_name="New PC"
+        )
+        result = service.check()
+
+        assert result.allowed is True
+        assert result.outcome is SubscriptionCheckOutcome.VALID
+        assert result.company_name == "Acme Co"
+        assert coordinator.is_enrolled() is True
+
+    def test_no_company_name_configured_blocks_without_contacting_the_server(
+        self, client_database: Database, running_server_url: str
+    ) -> None:
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        service = SubscriptionCheckService(client_database, coordinator, company_name="")
+
+        result = service.check()
+
+        assert result.allowed is False
+        assert result.outcome is SubscriptionCheckOutcome.NOT_REGISTERED
+        assert coordinator.is_enrolled() is False
+
+    def test_unknown_company_blocks_with_a_clear_reason(
+        self, client_database: Database, running_server_url: str
+    ) -> None:
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        service = SubscriptionCheckService(client_database, coordinator, company_name="Nonexistent Co")
+
+        result = service.check()
+
+        assert result.allowed is False
+        assert result.outcome is SubscriptionCheckOutcome.NO_SUBSCRIPTION_FOR_COMPANY
+        assert coordinator.is_enrolled() is False
+
+    def test_second_pc_also_registers_automatically_when_capacity_allows(
+        self, tmp_path, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co", max_devices=2
+        )
+
+        first_database = Database(DatabaseConfig(sqlite_path=tmp_path / "first.db"))
+        first_database.initialize()
+        first_service = SubscriptionCheckService(
+            first_database,
+            ClientSyncCoordinator(first_database, running_server_url),
+            company_name="Acme Co",
+            device_name="PC 1",
+        )
+
+        second_database = Database(DatabaseConfig(sqlite_path=tmp_path / "second.db"))
+        second_database.initialize()
+        second_service = SubscriptionCheckService(
+            second_database,
+            ClientSyncCoordinator(second_database, running_server_url),
+            company_name="Acme Co",
+            device_name="PC 2",
+        )
+
+        first_result = first_service.check()
+        second_result = second_service.check()
+
+        assert first_result.allowed is True
+        assert second_result.allowed is True
+
+        first_database.dispose()
+        second_database.dispose()
+
+    def test_device_limit_reached_rejects_with_the_required_message(
+        self, tmp_path, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co", max_devices=1
+        )
+
+        first_database = Database(DatabaseConfig(sqlite_path=tmp_path / "first.db"))
+        first_database.initialize()
+        first_service = SubscriptionCheckService(
+            first_database,
+            ClientSyncCoordinator(first_database, running_server_url),
+            company_name="Acme Co",
+            device_name="PC 1",
+        )
+        assert first_service.check().allowed is True
+
+        second_database = Database(DatabaseConfig(sqlite_path=tmp_path / "second.db"))
+        second_database.initialize()
+        second_service = SubscriptionCheckService(
+            second_database,
+            ClientSyncCoordinator(second_database, running_server_url),
+            company_name="Acme Co",
+            device_name="PC 2",
+        )
+        second_result = second_service.check()
+
+        assert second_result.allowed is False
+        assert second_result.outcome is SubscriptionCheckOutcome.MAX_DEVICES_REACHED
+        assert second_result.message_en == "Maximum allowed devices reached."
+
+        first_database.dispose()
+        second_database.dispose()
+
+    def test_suspending_the_subscription_immediately_blocks_the_auto_registered_device(
+        self, client_database: Database, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        subscription = _create_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, company_name="Acme Co"
+        )
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        service = SubscriptionCheckService(
+            client_database, coordinator, company_name="Acme Co", device_name="New PC"
+        )
+        assert service.check().allowed is True
+
+        _patch_subscription_via_admin_api(
+            running_server_url, admin_bearer_token, subscription["id"], action="suspend"
+        )
+
+        result = service.check()
+        assert result.allowed is False
+        assert result.outcome is SubscriptionCheckOutcome.SUSPENDED
+
+    def test_existing_admin_registered_devices_continue_to_work_unaffected(
+        self, client_database: Database, running_server_url: str, admin_bearer_token: str
+    ) -> None:
+        """The pre-existing admin-token enrollment path is untouched by automatic enrollment."""
+        _create_subscription_via_admin_api(running_server_url, admin_bearer_token, company_name="Acme Co")
+        coordinator = ClientSyncCoordinator(client_database, running_server_url)
+        coordinator.enroll(admin_bearer_token=admin_bearer_token, name="Legacy Client", company_name="Acme Co")
+
+        # No company_name configured for auto-enrollment -- irrelevant,
+        # since this installation is already enrolled and check() must
+        # never attempt to re-register it.
+        service = SubscriptionCheckService(client_database, coordinator, company_name="")
+        result = service.check()
+
+        assert result.allowed is True
+        assert result.outcome is SubscriptionCheckOutcome.VALID
