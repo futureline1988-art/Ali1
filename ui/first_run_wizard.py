@@ -244,6 +244,12 @@ class _DevicePage(QWizardPage):
         self.host_edit.setPlaceholderText("192.168.1.201")
         form.addRow("عنوان الجهاز (IP)", self.host_edit)
 
+        host_hint = make_secondary_label(
+            "يظهر هذا العنوان على شاشة جهاز البصمة نفسه: القائمة ← الاتصال ← الشبكة/Ethernet."
+        )
+        host_hint.setWordWrap(True)
+        form.addRow("", host_hint)
+
         self.port_spin = QSpinBox(self)
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(4370)

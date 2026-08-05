@@ -167,6 +167,12 @@ class DeviceFormDialog(QDialog):
         self.host_edit.setPlaceholderText("192.168.1.201")
         form.addRow("عنوان الجهاز (IP) *", self.host_edit)
 
+        host_hint = make_secondary_label(
+            "يظهر هذا العنوان على شاشة جهاز البصمة نفسه: القائمة ← الاتصال ← الشبكة/Ethernet."
+        )
+        host_hint.setWordWrap(True)
+        form.addRow("", host_hint)
+
         self.branch_combo = QComboBox(self)
         self.branch_combo.addItem("بدون فرع", userData=None)
         for branch in branches or []:
@@ -534,8 +540,20 @@ class DevicesPage(TablePage):
         row = self.selected_row()
         if row is None:
             return
-        self._controller.sync_attendance_logs(row["id"])
+        new_count = self._controller.sync_attendance_logs(row["id"])
         self.refresh()
+        if new_count > 0:
+            QMessageBox.information(
+                self,
+                "مزامنة السجلات",
+                f"تم تنزيل {new_count} سجل حضور جديد من الجهاز.",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "مزامنة السجلات",
+                "لا توجد سجلات حضور جديدة على الجهاز.",
+            )
 
     def _on_push_clicked(self) -> None:
         """Open the employee picker and push the chosen employee to the selected device."""
@@ -552,7 +570,18 @@ class DevicesPage(TablePage):
         employee_id = dialog.selected_employee_id()
         if employee_id is None:
             return
-        self._controller.push_employee_to_device(device_id=row["id"], employee_id=employee_id)
+        selected_employee = next(
+            (employee for employee in employees if employee["id"] == employee_id), None
+        )
+        succeeded = self._controller.push_employee_to_device(
+            device_id=row["id"], employee_id=employee_id
+        )
+        if succeeded and selected_employee is not None:
+            QMessageBox.information(
+                self,
+                "إرسال إلى الجهاز",
+                f"تم إرسال بيانات الموظف \"{selected_employee['full_name']}\" إلى الجهاز بنجاح.",
+            )
 
     def _on_pull_clicked(self) -> None:
         """Download the selected device's enrolled users and import unmatched ones as employees."""

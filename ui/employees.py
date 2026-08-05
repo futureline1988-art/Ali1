@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QWidget,
@@ -419,7 +420,15 @@ class EmployeesPage(TablePage):
         device = self._select_device(face_capable_only=False)
         if device is None:
             return
-        self._device_controller.push_employee_to_device(device_id=device["id"], employee_id=row["id"])
+        succeeded = self._device_controller.push_employee_to_device(
+            device_id=device["id"], employee_id=row["id"]
+        )
+        if succeeded:
+            QMessageBox.information(
+                self,
+                "إرسال إلى الجهاز",
+                f"تم إرسال بيانات الموظف \"{row['full_name']}\" إلى جهاز \"{device['name']}\" بنجاح.",
+            )
 
     def _on_register_face_clicked(self) -> None:
         """Run the full on-device face-enrollment workflow for the selected employee.

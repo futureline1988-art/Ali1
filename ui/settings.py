@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -21,6 +24,37 @@ from PySide6.QtWidgets import (
 
 from controllers.settings_controller import SettingsController
 from ui.widgets import ConfirmDialog, make_primary_button, make_secondary_label, make_status_label
+
+#: Matches services/backup_service.py's own filename format:
+#: ``backup_YYYYMMDD_HHMMSS_ffffff[_label].db.enc``.
+_BACKUP_FILENAME_PATTERN = re.compile(
+    r"^backup_(\d{8})_(\d{6})_\d{6}(?:_(?P<label>.+))?\.db\.enc$"
+)
+
+
+def _friendly_backup_label(path_str: str) -> str:
+    """Turn a backup file's technical path into a plain Arabic date/time label.
+
+    Non-technical users should never have to read a raw filesystem
+    path to tell backups apart -- falls back to the bare filename if
+    the name doesn't match the expected pattern (e.g. a backup created
+    by an older version), so nothing is ever hidden, just made
+    friendlier when possible.
+    """
+    filename = Path(path_str).name
+    match = _BACKUP_FILENAME_PATTERN.match(filename)
+    if match is None:
+        return filename
+    date_part, time_part = match.group(1), match.group(2)
+    try:
+        moment = datetime.strptime(f"{date_part}{time_part}", "%Y%m%d%H%M%S")
+    except ValueError:
+        return filename
+    label = f"نسخة احتياطية بتاريخ {moment.strftime('%Y/%m/%d')} الساعة {moment.strftime('%I:%M %p')}"
+    extra = match.group("label")
+    if extra:
+        label += f" ({extra})"
+    return label
 
 
 class _StatusMixin:
@@ -303,7 +337,9 @@ class BackupTab(_StatusMixin, QWidget):
         self._hide_status()
         self.backups_list.clear()
         for path in self._controller.list_backups():
-            self.backups_list.addItem(QListWidgetItem(path))
+            item = QListWidgetItem(_friendly_backup_label(path))
+            item.setData(Qt.UserRole, path)
+            self.backups_list.addItem(item)
         self._on_selection_changed()
 
     def _on_selection_changed(self) -> None:
@@ -321,7 +357,9 @@ class BackupTab(_StatusMixin, QWidget):
         path = self._controller.create_backup()
         if path is not None:
             self.refresh()
-            self._show_status(f"تم إنشاء نسخة احتياطية: {path}", status="success")
+            self._show_status(
+                f"تم إنشاء {_friendly_backup_label(path)} بنجاح.", status="success"
+            )
 
     def _on_restore_clicked(self) -> None:
         """Confirm and restore the database from the selected backup.
@@ -334,7 +372,7 @@ class BackupTab(_StatusMixin, QWidget):
         items = self.backups_list.selectedItems()
         if not items:
             return
-        backup_path = items[0].text()
+        backup_path = items[0].data(Qt.UserRole)
         confirmed = ConfirmDialog.confirm(
             self,
             "تأكيد استعادة النسخة الاحتياطية",

@@ -478,3 +478,31 @@ class TestMigrationDataPreservation:
         assert company_name_restored == "شركة الترحيل"
         assert "client_subscription_state" in table_names_restored
         assert table_names_restored == table_names_before
+
+
+# ----------------------------------------------------------------------
+# Backup list friendliness (non-technical-user UX pass)
+# ----------------------------------------------------------------------
+
+
+class TestFriendlyBackupLabel:
+    def test_formats_a_well_formed_backup_filename_as_a_plain_arabic_label(self):
+        from ui.settings import _friendly_backup_label
+
+        label = _friendly_backup_label("/var/data/backups/backup_20260805_143000_123456.db.enc")
+        assert "2026/08/05" in label
+        assert "02:30 PM" in label
+        assert ".enc" not in label
+        assert "/" not in label.replace("2026/08/05", "")
+
+    def test_includes_an_optional_label_suffix(self):
+        from ui.settings import _friendly_backup_label
+
+        label = _friendly_backup_label("backup_20260805_143000_123456_pre_upgrade.db.enc")
+        assert "pre_upgrade" in label
+
+    def test_falls_back_to_the_bare_filename_for_an_unrecognized_pattern(self):
+        from ui.settings import _friendly_backup_label
+
+        label = _friendly_backup_label("/some/path/not_a_backup_file.db.enc")
+        assert label == "not_a_backup_file.db.enc"
