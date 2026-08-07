@@ -397,6 +397,8 @@ class DeviceConfig:
     zkteco_default_timeout_seconds: int = 8
     hikvision_default_port: int = 80
     hikvision_default_timeout_seconds: int = 8
+    deli_default_port: int = 80
+    deli_default_timeout_seconds: int = 8
     connection_retry_attempts: int = 3
     discovery_timeout_seconds: int = 5
     auto_sync_enabled: bool = True
@@ -410,6 +412,8 @@ class DeviceConfig:
             zkteco_default_timeout_seconds=_env_int("DEVICE_ZKTECO_TIMEOUT", 8),
             hikvision_default_port=_env_int("DEVICE_HIKVISION_PORT", 80),
             hikvision_default_timeout_seconds=_env_int("DEVICE_HIKVISION_TIMEOUT", 8),
+            deli_default_port=_env_int("DEVICE_DELI_PORT", 80),
+            deli_default_timeout_seconds=_env_int("DEVICE_DELI_TIMEOUT", 8),
             connection_retry_attempts=_env_int("DEVICE_RETRY_ATTEMPTS", 3),
             discovery_timeout_seconds=_env_int("DEVICE_DISCOVERY_TIMEOUT", 5),
             auto_sync_enabled=_env_bool("DEVICE_AUTO_SYNC_ENABLED", True),
@@ -502,7 +506,7 @@ class AppConfig:
 
     app_name: str = "Attendance Management System"
     app_name_ar: str = "نظام إدارة الحضور والانصراف"
-    app_version: str = "2.0.4"
+    app_version: str = "2.1.0"
     organization_name: str = "Attendance Systems"
     environment: Environment = Environment.PRODUCTION
 

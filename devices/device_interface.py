@@ -1,8 +1,8 @@
 """Device connector interface: the boundary between this application's
 domain and device-specific communication protocols.
 
-Every concrete connector (ZKTeco TCP/IP, ZKTeco UDP, Hikvision) speaks
-only the vocabulary defined here — :class:`RawAttendanceLog` /
+Every concrete connector (ZKTeco TCP/IP, ZKTeco UDP, Hikvision, DELI
+ES172) speaks only the vocabulary defined here — :class:`RawAttendanceLog` /
 :class:`RawDeviceUser` in and out — so ``services/device_service.py``
 never needs to know which protocol a given device actually uses, and a
 new protocol can be added later by implementing this interface once,

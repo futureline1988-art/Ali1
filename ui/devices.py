@@ -45,6 +45,7 @@ _PROTOCOL_LABELS_AR = {
     DeviceProtocol.ZKTECO_TCP: "ZKTeco (TCP/IP)",
     DeviceProtocol.ZKTECO_UDP: "ZKTeco (UDP)",
     DeviceProtocol.HIKVISION: "Hikvision",
+    DeviceProtocol.DELI_ES172: "DELI ES172",
 }
 
 
@@ -426,9 +427,18 @@ class DeviceFormDialog(QDialog):
 
         self.communication_key_edit = QLineEdit(self)
         self.communication_key_edit.setPlaceholderText(
-            "كلمة اتصال ZKTeco، أو اسم المستخدم:كلمة المرور لأجهزة Hikvision"
+            "كلمة اتصال ZKTeco، أو اسم المستخدم:كلمة المرور لأجهزة Hikvision، "
+            "أو مفتاح API لأجهزة DELI ES172"
         )
         form.addRow("مفتاح الاتصال", self.communication_key_edit)
+
+        deli_hint = make_secondary_label(
+            "لأجهزة DELI ES172: المنفذ الافتراضي 80. إذا كان حقل \"API Key for SDK\" على "
+            "شاشة الجهاز فارغاً، اترك مفتاح الاتصال هنا فارغاً أيضاً (الجهاز لم يُضبط له "
+            "مفتاح بعد ويقبل الأوامر بدون مفتاح)."
+        )
+        deli_hint.setWordWrap(True)
+        form.addRow("", deli_hint)
 
         self.timeout_spin = QSpinBox(self)
         self.timeout_spin.setRange(1, 120)

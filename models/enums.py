@@ -146,6 +146,7 @@ class DeviceProtocol(BilingualEnum):
     ZKTECO_TCP = ("zkteco_tcp", "ZKTeco TCP/IP", "ZKTeco TCP/IP")
     ZKTECO_UDP = ("zkteco_udp", "ZKTeco UDP", "ZKTeco UDP")
     HIKVISION = ("hikvision", "Hikvision", "Hikvision")
+    DELI_ES172 = ("deli_es172", "DELI ES172", "DELI ES172")
 
 
 class DeviceStatus(BilingualEnum):
