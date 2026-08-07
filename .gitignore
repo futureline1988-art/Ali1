@@ -13,6 +13,10 @@ developer_suite_data/
 # committed.
 attendance_server_data/
 
+# Field diagnostic reports from tools/diagnostics/deli_es172_diagnose.py
+# -- customer network data, never committed.
+tools/diagnostics/deli_diagnostic_output/
+
 # Local environment overrides (DB credentials, secret key, etc.)
 .env
 
