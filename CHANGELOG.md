@@ -3,6 +3,32 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.0.2] - 2026-08-07 — DELI ES172 HTTP development-interface investigation
+
+A real on-device diagnostic run (v2.0.1's in-app tool) confirmed port 4370
+closed, port 5005 open but neither HTTP nor WebSocket, and **port 80
+serving a real HTTP "Attendance & Access machine development test
+interface"** (Boost.Beast). This release extends the diagnostic to
+investigate that interface in detail -- still no connector is
+implemented yet, and no protocol is assumed.
+
+### Added
+
+- The in-app "تشخيص شبكة الجهاز" diagnostic now, for any port that
+  turns out to speak plain HTTP: fetches the full root page, parses its
+  HTML (links, forms/actions/inputs, buttons, `<script>`/`<link>`
+  references, inline scripts), and follows -- GET only, same-origin
+  only, never guessed -- every JS/CSS file the page itself references.
+  Extracts `fetch()`/`XMLHttpRequest`/WebSocket calls, endpoint-looking
+  path strings, and possible authentication/API-key clues from all of
+  it, and flags whether the page mentions port 5005 anywhere. Every
+  request is a read-only `GET`; nothing on the device is ever written,
+  enrolled, or reconfigured.
+- The saved `.json` report now includes the complete page HTML, the
+  complete content of every same-origin resource it fetched, and every
+  finding above; the `.txt` report summarizes counts and short excerpts
+  with a pointer to the full detail in the `.json` file.
+
 ## [Client 2.0.1] - 2026-08-07 — DELI ES172 network diagnostic, no Python required
 
 ### Added

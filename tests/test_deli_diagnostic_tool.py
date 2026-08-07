@@ -83,6 +83,76 @@ def closed_port(free_ports):
     return free_ports[2]
 
 
+_DEV_INTERFACE_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<title>Attendance &amp; Access machine development test interface</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js"></script>
+<script src="http://evil.example.com/cross-origin.js"></script>
+</head>
+<body>
+<a href="/api/employees">Employees</a>
+<form action="/set_wifi" method="POST">
+<input name="ssid" type="text">
+<input name="password" type="password">
+</form>
+<button id="enrollBtn" type="button">Enroll</button>
+<script>
+fetch('/api/status');
+var ws = new WebSocket('ws://192.168.1.28:5005/socket');
+var apiKey = "secret123";
+</script>
+</body>
+</html>
+"""
+
+_DEV_INTERFACE_JS = """var xhr = new XMLHttpRequest();
+xhr.open('GET', '/api/devices');
+xhr.send();
+var enrollEndpoint = "/api/enroll";
+"""
+
+_DEV_INTERFACE_CSS = "body { color: red; }\n"
+
+
+class _DevInterfaceRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Serves the crafted dev-interface fixture pages for TestInvestigateHttpDevInterface."""
+
+    _ROUTES = {
+        "/": ("text/html", _DEV_INTERFACE_HTML),
+        "/app.js": ("application/javascript", _DEV_INTERFACE_JS),
+        "/style.css": ("text/css", _DEV_INTERFACE_CSS),
+    }
+
+    def log_message(self, format, *args):  # noqa: A002 - matches BaseHTTPRequestHandler's signature
+        pass  # silence per-request logging in test output
+
+    def do_GET(self):
+        route = self._ROUTES.get(self.path)
+        if route is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        content_type, body_text = route
+        body = body_text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Server", "Boost.Beast/144")
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture
+def dev_interface_server():
+    server = http.server.HTTPServer(("127.0.0.1", 0), _DevInterfaceRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server.server_port
+    server.shutdown()
+
+
 class TestProbeTcpPort:
     def test_open_port_is_detected_as_open(self, http_test_server):
         result = diag.probe_tcp_port("127.0.0.1", http_test_server)
@@ -155,6 +225,159 @@ class TestFullDiagnoseFlow:
         serialized = json.dumps(report)
         assert "api_key" not in serialized.lower()
         assert "device_uid" not in serialized.lower()
+
+
+class TestDevInterfaceHTMLParser:
+    """_DevInterfaceHTMLParser -- pure HTML parsing, no network involved."""
+
+    def test_extracts_links_forms_inputs_buttons_scripts_and_stylesheets(self):
+        html = (
+            "<html><head>"
+            '<link rel="stylesheet" href="/style.css">'
+            '<script src="/app.js"></script>'
+            "</head><body>"
+            '<a href="/api/employees">Employees</a>'
+            '<form action="/set_wifi" method="POST">'
+            '<input name="ssid" type="text">'
+            "</form>"
+            '<button id="enrollBtn" type="button">Enroll</button>'
+            "<script>var x = 1;</script>"
+            "</body></html>"
+        )
+        parser = diag._DevInterfaceHTMLParser()
+        parser.feed(html)
+
+        assert parser.links == ["/api/employees"]
+        assert parser.stylesheets == ["/style.css"]
+        assert parser.script_srcs == ["/app.js"]
+        assert len(parser.forms) == 1
+        assert parser.forms[0]["action"] == "/set_wifi"
+        assert parser.forms[0]["method"] == "POST"
+        assert parser.forms[0]["inputs"] == [{"name": "ssid", "type": "text"}]
+        assert len(parser.buttons) == 1
+        assert parser.buttons[0]["id"] == "enrollBtn"
+        assert parser.inline_scripts == ["var x = 1;"]
+
+    def test_malformed_html_does_not_raise(self):
+        parser = diag._DevInterfaceHTMLParser()
+        parser.feed("<div><span>unclosed<script>var x = <>;")  # never raises
+
+
+class TestExtractionHelpers:
+    """The regex-based JS/HTML text extraction helpers, in isolation."""
+
+    def test_endpoint_like_strings(self):
+        text = "const a = \"/api/employees\"; const b = '/set_wifi'; const c = \"not-a-path\";"
+        result = diag._extract_endpoint_like_strings(text)
+        assert "/api/employees" in result
+        assert "/set_wifi" in result
+        assert "not-a-path" not in result
+
+    def test_fetch_calls(self):
+        text = "fetch('/api/status'); fetch(\"/api/other\");"
+        result = diag._extract_fetch_calls(text)
+        assert "/api/status" in result
+        assert "/api/other" in result
+
+    def test_xhr_calls(self):
+        text = "xhr.open('GET', '/api/devices'); xhr2.open(\"POST\", \"/api/enroll\");"
+        result = diag._extract_xhr_calls(text)
+        assert {"method": "GET", "url": "/api/devices"} in result
+        assert {"method": "POST", "url": "/api/enroll"} in result
+
+    def test_websocket_urls(self):
+        text = "var ws = new WebSocket('ws://192.168.1.28:5005/socket');"
+        result = diag._extract_websocket_urls(text)
+        assert "ws://192.168.1.28:5005/socket" in result
+
+    def test_auth_hints_surface_likely_credential_lines_only(self):
+        text = 'var apiKey = "secret123";\nvar normal = 1;\nheaders["Authorization"] = "Bearer x";'
+        hints = diag._extract_auth_hints(text)
+        assert any("apiKey" in h for h in hints)
+        assert any("Authorization" in h for h in hints)
+        assert not any("normal" in h for h in hints)
+
+
+class TestDechunk:
+    def test_passthrough_when_not_chunked(self):
+        body = b"hello world"
+        assert diag._dechunk_if_needed(["Content-Type: text/plain"], body) == body
+
+    def test_decodes_a_chunked_body(self):
+        chunked = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+        result = diag._dechunk_if_needed(["Transfer-Encoding: chunked"], chunked)
+        assert result == b"hello world"
+
+    def test_falls_back_to_raw_bytes_on_malformed_chunk_data(self):
+        headers = ["Transfer-Encoding: chunked"]
+        malformed = b"not-a-valid-chunk-body"
+        assert diag._dechunk_if_needed(headers, malformed) == malformed
+
+
+class TestSameOriginRequestPath:
+    def test_relative_path_is_same_origin(self):
+        assert diag._same_origin_request_path("/app.js") == "/app.js"
+
+    def test_relative_path_with_query_is_preserved(self):
+        assert diag._same_origin_request_path("/app.js?v=2") == "/app.js?v=2"
+
+    def test_absolute_cross_origin_url_is_rejected(self):
+        assert diag._same_origin_request_path("http://evil.example.com/x.js") is None
+
+    def test_protocol_relative_url_is_rejected(self):
+        assert diag._same_origin_request_path("//evil.example.com/x.js") is None
+
+    def test_none_is_rejected(self):
+        assert diag._same_origin_request_path(None) is None
+
+
+class TestInvestigateHttpDevInterface:
+    """End-to-end against a local server serving a crafted dev-interface
+    page -- proves the whole read-only investigation (fetch page, parse
+    HTML, follow same-origin resources, extract findings) against real
+    HTTP responses, not just the individual helpers."""
+
+    def test_full_investigation_of_the_crafted_dev_interface(self, dev_interface_server):
+        result = diag.investigate_http_dev_interface("127.0.0.1", dev_interface_server)
+
+        assert "error" not in result
+        assert "Attendance" in result["root_page"]["body_text"]
+        assert result["links"] == ["/api/employees"]
+        assert len(result["forms"]) == 1
+        assert result["forms"][0]["action"] == "/set_wifi"
+        assert len(result["buttons"]) == 1
+        assert result["buttons"][0]["id"] == "enrollBtn"
+
+        # Same-origin app.js and style.css are followed; the cross-origin
+        # script is not -- exactly two fetched resources, never three.
+        assert len(result["fetched_resources"]) == 2
+        fetched_paths = {r["path"] for r in result["fetched_resources"]}
+        assert fetched_paths == {"/app.js", "/style.css"}
+
+        app_js = next(r for r in result["fetched_resources"] if r["path"] == "/app.js")
+        assert {"method": "GET", "url": "/api/devices"} in app_js["findings"]["xhr_calls"]
+        assert "/api/enroll" in app_js["findings"]["endpoint_like_strings"]
+
+        assert "/api/status" in result["inline_script_findings"]["fetch_calls"]
+        assert "ws://192.168.1.28:5005/socket" in result["inline_script_findings"]["websocket_urls"]
+        assert result["mentions_port_5005"] is True
+        assert any("apiKey" in hint for hint in result["inline_script_findings"]["auth_hints"])
+
+    def test_never_follows_the_cross_origin_script(self, dev_interface_server):
+        result = diag.investigate_http_dev_interface("127.0.0.1", dev_interface_server)
+        referenced = {r["referenced_as"] for r in result["fetched_resources"]}
+        assert "http://evil.example.com/cross-origin.js" not in referenced
+
+    def test_wired_into_diagnose_for_an_http_port(self, dev_interface_server, monkeypatch):
+        monkeypatch.setattr(diag, "CANDIDATE_PORTS", [dev_interface_server])
+        monkeypatch.setattr(diag, "WEBSOCKET_PROBE_PORTS", set())
+
+        report = diag.diagnose("127.0.0.1")
+
+        entry = report["ports"][0]
+        assert entry["open"] is True
+        assert "dev_interface" in entry
+        assert entry["dev_interface"]["mentions_port_5005"] is True
 
 
 def test_write_reports_creates_both_json_and_txt(tmp_path, monkeypatch):

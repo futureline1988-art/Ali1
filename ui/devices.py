@@ -142,6 +142,16 @@ def _format_network_diagnostic_summary(report: dict[str, Any]) -> str:
         tls = entry.get("tls")
         if tls and tls.get("tls_handshake_ok"):
             lines.append("  - يدعم تشفير TLS على هذا المنفذ")
+        dev = entry.get("dev_interface")
+        if dev and not dev.get("error"):
+            lines.append(
+                "  - يحتوي على واجهة ويب للتطوير/الاختبار: "
+                f"{len(dev.get('links', []))} روابط، "
+                f"{len(dev.get('script_srcs', []))} ملفات JavaScript، "
+                f"{len(dev.get('fetched_resources', []))} ملفات تم تحميلها لفحصها"
+            )
+            if dev.get("mentions_port_5005"):
+                lines.append("  - الصفحة تشير إلى المنفذ 5005")
         lines.append("")
     return "\n".join(lines).strip()
 

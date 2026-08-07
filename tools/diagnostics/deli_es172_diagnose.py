@@ -23,6 +23,17 @@ What this does, and does not, do:
   see whether the response is a 101 Switching Protocols (WebSocket), a
   normal HTTP response (plain HTTP), or something else entirely (likely
   a proprietary binary protocol).
+- For any port that DOES turn out to speak plain HTTP, additionally
+  fetches the full "/" page and investigates it as a possible
+  development/test web interface: parses every link, form, script,
+  and inline script the page itself references, and follows -- GET
+  only, same-origin only, never guessed -- whatever JS/CSS files it
+  finds. See :func:`investigate_http_dev_interface`'s own docstring
+  for the exact, hard read-only boundary this respects. This step
+  exists because the real DELI ES172 was found to expose exactly such
+  an interface on port 80 ("Attendance & Access machine development
+  test interface", served by Boost.Beast) -- confirmed by a real
+  on-device diagnostic run, not assumed.
 
 This NEVER sends an API key, device UID, enrollment command, write
 request, or any device-specific proprietary payload -- there is
@@ -57,14 +68,17 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import socket
 import ssl
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 DEFAULT_TARGET_IP = "192.168.1.28"
 
@@ -81,6 +95,27 @@ BANNER_MAX_BYTES = 4096
 HTTP_PROBE_PATHS = ["/", "/api", "/api/info", "/info", "/status", "/version"]
 
 WEBSOCKET_PROBE_PORTS = {5005}
+
+#: Safety caps for the HTTP development-interface investigation -- large
+#: enough for any reasonable single-page dev/test UI, small enough that
+#: a misbehaving or hostile response can never make the diagnostic hang
+#: or blow up memory.
+DEV_INTERFACE_PAGE_MAX_BYTES = 2_000_000
+DEV_INTERFACE_RESOURCE_MAX_BYTES = 1_000_000
+DEV_INTERFACE_MAX_RESOURCES_FOLLOWED = 25
+
+#: Endpoint-/path-looking string literals in HTML or JavaScript source,
+#: e.g. "/api/employees" or '/set_wifi'. Deliberately conservative (must
+#: start with "/", quoted, short) to keep false positives low.
+_ENDPOINT_LIKE_PATTERN = re.compile(r"""["'](/[A-Za-z0-9_\-./]{1,120})["']""")
+_FETCH_CALL_PATTERN = re.compile(r"""fetch\s*\(\s*[`'"](.*?)[`'"]""", re.IGNORECASE)
+_XHR_OPEN_PATTERN = re.compile(
+    r"""\.open\s*\(\s*[`'"](\w+)[`'"]\s*,\s*[`'"](.*?)[`'"]""", re.IGNORECASE
+)
+_WEBSOCKET_URL_PATTERN = re.compile(r"""(wss?://[^\s"'`]+)""", re.IGNORECASE)
+_AUTH_KEYWORD_PATTERN = re.compile(
+    r"""(?i)(api[_-]?key|apikey|authorization|bearer|x-auth|access[_-]?token|device[_-]?uid)"""
+)
 
 
 def _now_utc_iso() -> str:
@@ -124,6 +159,38 @@ def _decode_snippet(raw: bytes) -> str:
     except UnicodeDecodeError:
         pass
     return raw.hex(" ")
+
+
+def _dechunk_if_needed(headers: list[str], body: bytes) -> bytes:
+    """Decode an HTTP chunked-transfer-encoded body back to plain bytes.
+
+    Reading a response until the server closes the connection (this
+    module's HTTP requests all send ``Connection: close``) is correct
+    for both ``Content-Length`` and chunked bodies, but a chunked body's
+    raw bytes still contain the hex chunk-size markers interleaved with
+    the actual content -- confusing for HTML parsing and grep-style
+    endpoint extraction. Falls back to the raw body unchanged if it does
+    not look chunked, or if parsing it as chunked fails for any reason.
+    """
+    header_text = "\n".join(headers).lower()
+    if "transfer-encoding" not in header_text or "chunked" not in header_text:
+        return body
+    out = bytearray()
+    pos = 0
+    try:
+        while pos < len(body):
+            line_end = body.index(b"\r\n", pos)
+            size_token = body[pos:line_end].split(b";", 1)[0].strip()
+            chunk_size = int(size_token, 16)
+            if chunk_size == 0:
+                break
+            chunk_start = line_end + 2
+            chunk_end = chunk_start + chunk_size
+            out.extend(body[chunk_start:chunk_end])
+            pos = chunk_end + 2
+        return bytes(out)
+    except (ValueError, IndexError):
+        return body
 
 
 def probe_tcp_port(ip: str, port: int) -> dict[str, Any]:
@@ -272,10 +339,281 @@ def try_websocket_handshake(ip: str, port: int) -> dict[str, Any]:
     return result
 
 
+def fetch_full_http_resource(
+    ip: str, port: int, path: str, *, max_bytes: int = DEV_INTERFACE_PAGE_MAX_BYTES
+) -> dict[str, Any]:
+    """A full (not 1KB-truncated) plain HTTP GET, for reading an entire page/script.
+
+    Unlike :func:`try_http_get` (used only for protocol fingerprinting,
+    hence its small body snippet), this is used to actually read a
+    development/test web interface's real content -- still one GET per
+    call, on a fresh connection, ``Connection: close``, capped at
+    ``max_bytes`` as a safety bound rather than left unbounded.
+    """
+    result: dict[str, Any] = {"path": path}
+    sock = None
+    try:
+        sock = socket.create_connection((ip, port), timeout=CONNECT_TIMEOUT_SECONDS)
+        sock.settimeout(BANNER_READ_TIMEOUT_SECONDS)
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {ip}\r\n"
+            f"User-Agent: Ali1-DELI-Diagnostic/1.0\r\n"
+            f"Connection: close\r\n\r\n"
+        ).encode("ascii")
+        sock.sendall(request)
+
+        chunks = []
+        total = 0
+        try:
+            while True:
+                chunk = sock.recv(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > max_bytes:
+                    result["truncated"] = True
+                    break
+        except socket.timeout:
+            pass
+        raw = b"".join(chunks)
+
+        result["response_bytes"] = len(raw)
+        looks_like_http = raw.startswith(b"HTTP/")
+        result["looks_like_http"] = looks_like_http
+        if looks_like_http:
+            head, _, body = raw.partition(b"\r\n\r\n")
+            lines = head.decode("iso-8859-1", errors="replace").split("\r\n")
+            result["status_line"] = lines[0] if lines else None
+            result["headers"] = lines[1:]
+            body = _dechunk_if_needed(result["headers"], body)
+            result["body_text"] = _decode_snippet(body)
+        else:
+            result["raw_snippet"] = _decode_snippet(raw[:1024])
+    except OSError as exc:
+        result["error"] = str(exc)
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return result
+
+
+class _DevInterfaceHTMLParser(HTMLParser):
+    """Extracts links/forms/inputs/buttons/scripts/stylesheets from one HTML page.
+
+    Deliberately lenient (``HTMLParser`` tolerates malformed HTML) and
+    purely observational -- it never executes anything, only records
+    what the page's own markup already contains.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: list[str] = []
+        self.stylesheets: list[str] = []
+        self.script_srcs: list[str] = []
+        self.inline_scripts: list[str] = []
+        self.forms: list[dict[str, Any]] = []
+        self.buttons: list[dict[str, Any]] = []
+        self._current_script_has_src = False
+        self._current_script_buffer: list[str] | None = None
+        self._current_form: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_dict = dict(attrs)
+        tag_lower = tag.lower()
+        if tag_lower == "a" and attr_dict.get("href"):
+            self.links.append(attr_dict["href"])
+        elif tag_lower == "link" and attr_dict.get("href"):
+            self.stylesheets.append(attr_dict["href"])
+        elif tag_lower == "script":
+            src = attr_dict.get("src")
+            if src:
+                self.script_srcs.append(src)
+                self._current_script_has_src = True
+                self._current_script_buffer = None
+            else:
+                self._current_script_has_src = False
+                self._current_script_buffer = []
+        elif tag_lower == "form":
+            self._current_form = {
+                "action": attr_dict.get("action"),
+                "method": (attr_dict.get("method") or "GET").upper(),
+                "inputs": [],
+            }
+        elif tag_lower == "input" and self._current_form is not None:
+            self._current_form["inputs"].append(
+                {"name": attr_dict.get("name"), "type": attr_dict.get("type")}
+            )
+        elif tag_lower == "button":
+            self.buttons.append(
+                {
+                    "name": attr_dict.get("name"),
+                    "type": attr_dict.get("type"),
+                    "id": attr_dict.get("id"),
+                    "onclick": attr_dict.get("onclick"),
+                }
+            )
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_lower = tag.lower()
+        if tag_lower == "script":
+            if not self._current_script_has_src and self._current_script_buffer:
+                self.inline_scripts.append("".join(self._current_script_buffer))
+            self._current_script_buffer = None
+        elif tag_lower == "form" and self._current_form is not None:
+            self.forms.append(self._current_form)
+            self._current_form = None
+
+    def handle_data(self, data: str) -> None:
+        if self._current_script_buffer is not None:
+            self._current_script_buffer.append(data)
+
+
+def _extract_endpoint_like_strings(text: str) -> list[str]:
+    return sorted(set(_ENDPOINT_LIKE_PATTERN.findall(text)))
+
+
+def _extract_fetch_calls(text: str) -> list[str]:
+    return sorted(set(_FETCH_CALL_PATTERN.findall(text)))
+
+
+def _extract_xhr_calls(text: str) -> list[dict[str, str]]:
+    seen = set()
+    calls = []
+    for method, url in _XHR_OPEN_PATTERN.findall(text):
+        key = (method.upper(), url)
+        if key not in seen:
+            seen.add(key)
+            calls.append({"method": method.upper(), "url": url})
+    return calls
+
+
+def _extract_websocket_urls(text: str) -> list[str]:
+    return sorted(set(_WEBSOCKET_URL_PATTERN.findall(text)))
+
+
+def _extract_auth_hints(text: str) -> list[str]:
+    """Lines mentioning an auth-related keyword (api key/token/authorization/device UID).
+
+    A hint, not a conclusion -- surfaced verbatim (truncated) so a human
+    can judge relevance, since a keyword match alone proves nothing
+    about how (or whether) the device actually uses it.
+    """
+    hints = []
+    for line in text.splitlines():
+        if _AUTH_KEYWORD_PATTERN.search(line):
+            stripped = line.strip()
+            if stripped:
+                hints.append(stripped[:200])
+    return hints[:50]
+
+
+def _analyze_script_text(text: str) -> dict[str, Any]:
+    """Run every JS/HTML text-pattern extraction used by the dev-interface investigation."""
+    return {
+        "fetch_calls": _extract_fetch_calls(text),
+        "xhr_calls": _extract_xhr_calls(text),
+        "websocket_urls": _extract_websocket_urls(text),
+        "endpoint_like_strings": _extract_endpoint_like_strings(text),
+        "auth_hints": _extract_auth_hints(text),
+        "mentions_swagger_or_openapi": bool(re.search(r"(?i)swagger|openapi", text)),
+    }
+
+
+def _same_origin_request_path(url: str | None) -> str | None:
+    """The request path if `url` is same-origin (relative, no scheme/host), else None.
+
+    Deliberately refuses anything with an explicit scheme or host --
+    including plain ``http://`` to a *different* host -- so this
+    investigation only ever follows a resource the page's own markup
+    points back at itself, never a third-party or cross-origin URL.
+    """
+    if not url:
+        return None
+    parsed = urlsplit(url)
+    if parsed.scheme or parsed.netloc:
+        return None
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return path
+
+
+def investigate_http_dev_interface(ip: str, port: int) -> dict[str, Any]:
+    """Safe, GET-only investigation of an HTTP development/test interface.
+
+    Built after a real on-device diagnostic run found the DELI ES172
+    itself serving exactly such an interface on port 80 ("Attendance &
+    Access machine development test interface", Boost.Beast) -- this is
+    evidence-driven, not a guess at any device's behavior.
+
+    Fetches the root page ("/") in full, parses its HTML for every
+    link/form/input/button/script/stylesheet it contains, scans its
+    inline scripts (and the page itself) for ``fetch()``/XHR/WebSocket
+    calls and endpoint-looking path strings, and follows -- GET only --
+    same-origin JS/CSS files the page itself references, up to
+    :data:`DEV_INTERFACE_MAX_RESOURCES_FOLLOWED` of them. Never invents
+    a path to try, never sends a body, never sends POST/PUT/DELETE,
+    never touches anything not already linked from the page.
+    """
+    investigation: dict[str, Any] = {"port": port}
+
+    root = fetch_full_http_resource(ip, port, "/", max_bytes=DEV_INTERFACE_PAGE_MAX_BYTES)
+    investigation["root_page"] = root
+    if not root.get("looks_like_http") or "body_text" not in root:
+        investigation["error"] = "root page did not return a readable HTTP body"
+        return investigation
+
+    html_text = root["body_text"]
+    parser = _DevInterfaceHTMLParser()
+    try:
+        parser.feed(html_text)
+    except Exception as exc:  # noqa: BLE001 - never let malformed HTML crash the diagnostic
+        investigation["html_parse_error"] = str(exc)
+
+    investigation["links"] = parser.links
+    investigation["stylesheets"] = parser.stylesheets
+    investigation["script_srcs"] = parser.script_srcs
+    investigation["forms"] = parser.forms
+    investigation["buttons"] = parser.buttons
+    investigation["inline_scripts"] = parser.inline_scripts
+
+    combined_inline_script_text = "\n".join(parser.inline_scripts)
+    investigation["inline_script_findings"] = _analyze_script_text(combined_inline_script_text)
+    investigation["html_findings"] = _analyze_script_text(html_text)
+    investigation["mentions_port_5005"] = "5005" in html_text or "5005" in combined_inline_script_text
+
+    same_origin_paths: list[tuple[str, str]] = []
+    seen_paths: set[str] = set()
+    for referenced_url in [*parser.script_srcs, *parser.stylesheets]:
+        path = _same_origin_request_path(referenced_url)
+        if path is not None and path not in seen_paths:
+            seen_paths.add(path)
+            same_origin_paths.append((referenced_url, path))
+    same_origin_paths = same_origin_paths[:DEV_INTERFACE_MAX_RESOURCES_FOLLOWED]
+
+    fetched_resources = []
+    for referenced_url, path in same_origin_paths:
+        resource = fetch_full_http_resource(ip, port, path, max_bytes=DEV_INTERFACE_RESOURCE_MAX_BYTES)
+        resource["referenced_as"] = referenced_url
+        if resource.get("looks_like_http") and "body_text" in resource:
+            resource["findings"] = _analyze_script_text(resource["body_text"])
+            if "5005" in resource["body_text"]:
+                investigation["mentions_port_5005"] = True
+        fetched_resources.append(resource)
+    investigation["fetched_resources"] = fetched_resources
+
+    return investigation
+
+
 def diagnose(ip: str) -> dict[str, Any]:
     report: dict[str, Any] = {
         "tool": "deli_es172_diagnose.py",
-        "tool_version": "1.0",
+        "tool_version": "1.1",
         "generated_at_utc": _now_utc_iso(),
         "target_ip": ip,
         "runner_platform": platform.platform(),
@@ -307,6 +645,17 @@ def diagnose(ip: str) -> dict[str, Any]:
         any_http = any(p.get("looks_like_http") for p in entry["http_probes"])
         print(f"        -> looks like plain HTTP: {any_http}")
 
+        if any_http:
+            print("        investigating HTTP development/test interface (GET-only)...")
+            entry["dev_interface"] = investigate_http_dev_interface(ip, port)
+            dev = entry["dev_interface"]
+            if not dev.get("error"):
+                print(
+                    f"        -> {len(dev.get('links', []))} links, "
+                    f"{len(dev.get('script_srcs', []))} scripts, "
+                    f"{len(dev.get('fetched_resources', []))} same-origin resources fetched"
+                )
+
         if port == 443:
             print("        attempting TLS handshake ...")
             entry["tls"] = try_tls_handshake(ip, port)
@@ -327,6 +676,84 @@ def diagnose(ip: str) -> dict[str, Any]:
 
     print("[3/3] Done.")
     return report
+
+
+def _render_dev_interface_txt(dev: dict[str, Any]) -> list[str]:
+    """Human-readable summary of an :func:`investigate_http_dev_interface` result.
+
+    Counts and short excerpts only -- the full HTML/JS content and
+    every detail always remain in the ``.json`` report; this is meant
+    to be skimmable.
+    """
+    lines = ["  --- HTTP development/test interface investigation (GET-only) ---"]
+    if dev.get("error"):
+        lines.append(f"    error: {dev['error']}")
+        return lines
+
+    root = dev.get("root_page", {})
+    lines.append(f"    root page status: {root.get('status_line')}")
+    for header in root.get("headers", []):
+        lines.append(f"    header: {header}")
+    lines.append(f"    links found: {len(dev.get('links', []))}")
+    lines.append(f"    forms found: {len(dev.get('forms', []))}")
+    lines.append(f"    buttons found: {len(dev.get('buttons', []))}")
+    lines.append(f"    script files referenced: {len(dev.get('script_srcs', []))}")
+    lines.append(f"    stylesheets/resources referenced: {len(dev.get('stylesheets', []))}")
+    lines.append(f"    inline <script> blocks: {len(dev.get('inline_scripts', []))}")
+    lines.append(f"    same-origin resources fetched: {len(dev.get('fetched_resources', []))}")
+    lines.append(f"    mentions port 5005 anywhere: {dev.get('mentions_port_5005')}")
+
+    html_findings = dev.get("html_findings", {})
+    inline_findings = dev.get("inline_script_findings", {})
+    if html_findings.get("mentions_swagger_or_openapi") or inline_findings.get(
+        "mentions_swagger_or_openapi"
+    ):
+        lines.append("    mentions Swagger/OpenAPI: True")
+
+    endpoint_strings = sorted(
+        set(html_findings.get("endpoint_like_strings", []))
+        | set(inline_findings.get("endpoint_like_strings", []))
+    )
+    if endpoint_strings:
+        lines.append(f"    endpoint-like strings on the page: {', '.join(endpoint_strings[:30])}")
+
+    if inline_findings.get("fetch_calls"):
+        lines.append(f"    fetch() calls in inline scripts: {', '.join(inline_findings['fetch_calls'][:20])}")
+    if inline_findings.get("xhr_calls"):
+        xhr_summary = ", ".join(
+            f"{c['method']} {c['url']}" for c in inline_findings["xhr_calls"][:20]
+        )
+        lines.append(f"    XMLHttpRequest calls in inline scripts: {xhr_summary}")
+    if inline_findings.get("websocket_urls"):
+        lines.append(f"    WebSocket URLs in inline scripts: {', '.join(inline_findings['websocket_urls'][:20])}")
+
+    all_auth_hints = list(html_findings.get("auth_hints", [])) + list(inline_findings.get("auth_hints", []))
+    for resource in dev.get("fetched_resources", []):
+        findings = resource.get("findings", {})
+        all_auth_hints.extend(findings.get("auth_hints", []))
+    if all_auth_hints:
+        lines.append("    possible authentication/API-key clues (verbatim lines, review manually):")
+        for hint in all_auth_hints[:20]:
+            lines.append(f"      {hint}")
+
+    for resource in dev.get("fetched_resources", []):
+        findings = resource.get("findings", {})
+        lines.append(
+            f"    resource {resource.get('path')} (referenced as {resource.get('referenced_as')}): "
+            f"status={resource.get('status_line')}"
+        )
+        if findings.get("fetch_calls"):
+            lines.append(f"      fetch() calls: {', '.join(findings['fetch_calls'][:20])}")
+        if findings.get("xhr_calls"):
+            xhr_summary = ", ".join(f"{c['method']} {c['url']}" for c in findings["xhr_calls"][:20])
+            lines.append(f"      XMLHttpRequest calls: {xhr_summary}")
+        if findings.get("websocket_urls"):
+            lines.append(f"      WebSocket URLs: {', '.join(findings['websocket_urls'][:20])}")
+        if findings.get("endpoint_like_strings"):
+            lines.append(f"      endpoint-like strings: {', '.join(findings['endpoint_like_strings'][:30])}")
+
+    lines.append("    NOTE: full HTML, full JS/CSS content, and every raw header are in the .json report.")
+    return lines
 
 
 def _write_reports(report: dict[str, Any], output_dir: Path | None = None) -> tuple[Path, Path]:
@@ -383,6 +810,8 @@ def _write_reports(report: dict[str, Any], output_dir: Path | None = None) -> tu
             ws = entry["websocket_probe"]
             lines.append(f"  WebSocket upgrade -> 101 Switching Protocols: {ws.get('is_101_switching_protocols')}")
             lines.append(f"  WebSocket raw response snippet: {ws.get('raw_snippet')!r}")
+        if "dev_interface" in entry:
+            lines.extend(_render_dev_interface_txt(entry["dev_interface"]))
         lines.append("")
 
     txt_path.write_text("\n".join(lines), encoding="utf-8")
