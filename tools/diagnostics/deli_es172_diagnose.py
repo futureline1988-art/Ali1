@@ -14,10 +14,12 @@ What this does, and does not, do:
   plain, unauthenticated, read-only HTTP GET requests on FRESH
   connections to see whether the port speaks HTTP -- never reusing a
   socket a proprietary protocol may already be mid-handshake on.
-- For port 443, additionally attempts a TLS handshake (no certificate
-  validation, since this is a local device almost certainly using a
-  self-signed certificate) purely to read back the negotiated
-  protocol/cipher and certificate subject, if any.
+- For EVERY open port (not just 443 -- a proprietary service can just
+  as well be TLS-wrapped on a non-standard port), additionally attempts
+  a TLS handshake (no certificate validation, since this is a local
+  device almost certainly using a self-signed certificate) purely to
+  read back the negotiated protocol/cipher and certificate subject, if
+  any.
 - For port 5005 specifically, additionally attempts one WebSocket
   upgrade handshake -- a standard, harmless HTTP Upgrade request -- to
   see whether the response is a 101 Switching Protocols (WebSocket), a
@@ -27,13 +29,24 @@ What this does, and does not, do:
   fetches the full "/" page and investigates it as a possible
   development/test web interface: parses every link, form, script,
   and inline script the page itself references, and follows -- GET
-  only, same-origin only, never guessed -- whatever JS/CSS files it
-  finds. See :func:`investigate_http_dev_interface`'s own docstring
-  for the exact, hard read-only boundary this respects. This step
-  exists because the real DELI ES172 was found to expose exactly such
-  an interface on port 80 ("Attendance & Access machine development
-  test interface", served by Boost.Beast) -- confirmed by a real
-  on-device diagnostic run, not assumed.
+  only, same-origin only, never guessed -- whatever JS/CSS files AND
+  links it finds. See :func:`investigate_http_dev_interface`'s own
+  docstring for the exact, hard read-only boundary this respects. This
+  step exists because the real DELI ES172 was found to expose exactly
+  such an interface on port 80 ("Attendance & Access machine
+  development test interface", served by Boost.Beast) -- confirmed by
+  a real on-device diagnostic run, not assumed.
+- For any port that stays unidentified after all of the above (open,
+  but neither HTTP, WebSocket, nor TLS -- exactly what port 5005 turned
+  out to be on the real device), additionally runs
+  :func:`investigate_unknown_tcp_service`: listens passively for longer
+  in case the service greets slowly, then sends one generic,
+  protocol-agnostic "nudge" (the same kind of harmless probe nmap's own
+  service-detection uses) to see whether it reacts to *any* input at
+  all -- recording every byte sent and received in both hex and ASCII.
+  This is the deepest this tool goes without real protocol evidence;
+  see that function's own docstring for exactly what it does and does
+  not send.
 
 This NEVER sends an API key, device UID, enrollment command, write
 request, or any device-specific proprietary payload -- there is
@@ -80,7 +93,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-DEFAULT_TARGET_IP = "192.168.1.28"
+#: Only a convenience pre-fill for the CLI arg / UI field -- the device's
+#: IP has already changed twice during this investigation (originally
+#: 192.168.68.138, then 192.168.1.28 after a DHCP reassignment, now
+#: confirmed at 192.168.1.8) and always remains fully overridable
+#: everywhere this is used; nothing in this module or in any connector
+#: ever hard-codes a specific device address.
+DEFAULT_TARGET_IP = "192.168.1.8"
 
 #: Exactly the ports requested for this investigation.
 CANDIDATE_PORTS = [5005, 4370, 7070, 80, 443, 8080]
@@ -607,13 +626,144 @@ def investigate_http_dev_interface(ip: str, port: int) -> dict[str, Any]:
         fetched_resources.append(resource)
     investigation["fetched_resources"] = fetched_resources
 
+    # Same treatment for every same-origin <a href> link the page itself
+    # exposes -- explicitly requested evidence-gathering (e.g. "the exact
+    # URL behind the single detected link"), still GET-only and still
+    # never a path this tool invents itself.
+    same_origin_link_paths: list[tuple[str, str]] = []
+    seen_link_paths: set[str] = set(seen_paths)
+    for referenced_url in parser.links:
+        path = _same_origin_request_path(referenced_url)
+        if path is not None and path not in seen_link_paths:
+            seen_link_paths.add(path)
+            same_origin_link_paths.append((referenced_url, path))
+    same_origin_link_paths = same_origin_link_paths[:DEV_INTERFACE_MAX_RESOURCES_FOLLOWED]
+
+    followed_links = []
+    for referenced_url, path in same_origin_link_paths:
+        followed = fetch_full_http_resource(ip, port, path, max_bytes=DEV_INTERFACE_RESOURCE_MAX_BYTES)
+        followed["referenced_as"] = referenced_url
+        if followed.get("looks_like_http") and "body_text" in followed:
+            followed["findings"] = _analyze_script_text(followed["body_text"])
+            if "5005" in followed["body_text"]:
+                investigation["mentions_port_5005"] = True
+        followed_links.append(followed)
+    investigation["followed_links"] = followed_links
+
     return investigation
+
+
+def _hex_and_ascii(raw: bytes) -> dict[str, str]:
+    """Both representations of raw bytes, always -- never just one or the other."""
+    return {"hex": raw.hex(" "), "ascii": raw.decode("ascii", errors="replace")}
+
+
+def _extended_passive_listen(ip: str, port: int, *, window_seconds: float = 5.0) -> dict[str, Any]:
+    """Listen on a fresh connection for up to ``window_seconds``, never sending anything.
+
+    :func:`probe_tcp_port` only waits :data:`BANNER_READ_TIMEOUT_SECONDS`
+    for a single read; some proprietary services take longer to greet,
+    or send their banner in more than one chunk. Every chunk received is
+    recorded with its elapsed time and both hex and ASCII forms.
+    """
+    reads: list[dict[str, Any]] = []
+    total_bytes = 0
+    sock = None
+    start = time.monotonic()
+    try:
+        sock = socket.create_connection((ip, port), timeout=CONNECT_TIMEOUT_SECONDS)
+        sock.settimeout(1.0)
+        while time.monotonic() - start < window_seconds:
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            reads.append({"elapsed_ms": round((time.monotonic() - start) * 1000, 1), **_hex_and_ascii(chunk)})
+            total_bytes += len(chunk)
+    except OSError as exc:
+        return {"error": str(exc), "reads": reads, "total_bytes": total_bytes}
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return {"reads": reads, "total_bytes": total_bytes}
+
+
+def _try_generic_probe(ip: str, port: int, name: str, payload: bytes) -> dict[str, Any]:
+    """Send one small, protocol-agnostic payload on a fresh connection and record the raw response.
+
+    ``payload`` is deliberately restricted to the same generic, harmless
+    probes port-scanners like nmap use for service version detection
+    (e.g. a bare ``\\r\\n\\r\\n``) -- never a guessed vendor-specific
+    command or opcode. An empty payload sends nothing (equivalent to
+    :func:`_extended_passive_listen`'s single-read case, offered here
+    only for a uniform result shape when called from
+    :func:`investigate_unknown_tcp_service`).
+    """
+    tx = _hex_and_ascii(payload)
+    result: dict[str, Any] = {"name": name, "tx_bytes": len(payload), "tx_hex": tx["hex"], "tx_ascii": tx["ascii"]}
+    sock = None
+    try:
+        sock = socket.create_connection((ip, port), timeout=CONNECT_TIMEOUT_SECONDS)
+        sock.settimeout(BANNER_READ_TIMEOUT_SECONDS)
+        if payload:
+            sock.sendall(payload)
+        try:
+            raw = sock.recv(4096)
+        except socket.timeout:
+            raw = b""
+        rx = _hex_and_ascii(raw)
+        result["rx_bytes"] = len(raw)
+        result["rx_hex"] = rx["hex"]
+        result["rx_ascii"] = rx["ascii"]
+    except OSError as exc:
+        result["error"] = str(exc)
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return result
+
+
+def investigate_unknown_tcp_service(ip: str, port: int) -> dict[str, Any]:
+    """Deeper, still entirely passive/generic investigation of a port whose protocol is unidentified.
+
+    Run automatically (see :func:`diagnose`) for any open port that
+    turned out to speak neither HTTP nor WebSocket nor TLS -- exactly
+    the situation port 5005 was found in on the real device (open, but
+    silent to every HTTP path tried and to a WebSocket upgrade). Two
+    steps, both well short of "sending a command":
+
+    1. :func:`_extended_passive_listen` -- wait longer than the initial
+       banner read, in case the service greets slowly or in multiple
+       chunks.
+    2. One generic, protocol-agnostic "nudge" (``\\r\\n\\r\\n``, the same
+       probe nmap's own generic service-detection uses) to see whether
+       the service reacts to *any* client input at all, without
+       guessing what that input should mean to it.
+
+    Every byte sent and received is recorded in both hex and ASCII so a
+    human (or a later, evidence-based connector) can judge what -- if
+    anything -- it reveals about the framing/protocol in use.
+    """
+    return {
+        "extended_passive_listen": _extended_passive_listen(ip, port),
+        "generic_probes": [
+            _try_generic_probe(ip, port, "generic_lines_crlf", b"\r\n\r\n"),
+        ],
+    }
 
 
 def diagnose(ip: str) -> dict[str, Any]:
     report: dict[str, Any] = {
         "tool": "deli_es172_diagnose.py",
-        "tool_version": "1.1",
+        "tool_version": "1.2",
         "generated_at_utc": _now_utc_iso(),
         "target_ip": ip,
         "runner_platform": platform.platform(),
@@ -656,19 +806,36 @@ def diagnose(ip: str) -> dict[str, Any]:
                     f"{len(dev.get('fetched_resources', []))} same-origin resources fetched"
                 )
 
-        if port == 443:
-            print("        attempting TLS handshake ...")
-            entry["tls"] = try_tls_handshake(ip, port)
-            if entry["tls"].get("tls_handshake_ok"):
-                print("        TLS OK, trying HTTPS GET requests ...")
-                entry["https_probes"] = [
-                    try_http_get(ip, port, path, use_tls=True) for path in HTTP_PROBE_PATHS
-                ]
+        # Attempted on every open port, not just 443 -- a proprietary
+        # service (like port 5005) could just as well be TLS-wrapped on
+        # a non-standard port; this is a standard handshake only, no
+        # data exchanged beyond the negotiation itself.
+        print("        attempting TLS handshake ...")
+        entry["tls"] = try_tls_handshake(ip, port)
+        if entry["tls"].get("tls_handshake_ok"):
+            print("        TLS OK, trying HTTPS GET requests ...")
+            entry["https_probes"] = [
+                try_http_get(ip, port, path, use_tls=True) for path in HTTP_PROBE_PATHS
+            ]
 
         if port in WEBSOCKET_PROBE_PORTS:
             print(f"        trying WebSocket upgrade handshake on port {port} ...")
             entry["websocket_probe"] = try_websocket_handshake(ip, port)
             print(f"        -> is 101 Switching Protocols: {entry['websocket_probe'].get('is_101_switching_protocols')}")
+
+        protocol_identified = (
+            any_http
+            or entry.get("websocket_probe", {}).get("is_101_switching_protocols")
+            or entry["tls"].get("tls_handshake_ok")
+        )
+        if not protocol_identified:
+            print("        protocol not yet identified -- extended passive listen + generic probe ...")
+            entry["unknown_protocol_investigation"] = investigate_unknown_tcp_service(ip, port)
+            unk = entry["unknown_protocol_investigation"]
+            print(
+                f"        -> passive listen: {unk['extended_passive_listen'].get('total_bytes', 0)} bytes captured; "
+                f"{len(unk['generic_probes'])} generic probe(s) sent"
+            )
 
         ports_report.append(entry)
 
@@ -752,7 +919,40 @@ def _render_dev_interface_txt(dev: dict[str, Any]) -> list[str]:
         if findings.get("endpoint_like_strings"):
             lines.append(f"      endpoint-like strings: {', '.join(findings['endpoint_like_strings'][:30])}")
 
+    for link in dev.get("followed_links", []):
+        lines.append(f"    link {link.get('path')} (href=\"{link.get('referenced_as')}\"): status={link.get('status_line')}")
+        if link.get("error"):
+            lines.append(f"      error: {link['error']}")
+        findings = link.get("findings", {})
+        if findings.get("endpoint_like_strings"):
+            lines.append(f"      endpoint-like strings: {', '.join(findings['endpoint_like_strings'][:30])}")
+
     lines.append("    NOTE: full HTML, full JS/CSS content, and every raw header are in the .json report.")
+    return lines
+
+
+def _render_unknown_protocol_txt(unk: dict[str, Any]) -> list[str]:
+    """Human-readable summary of an :func:`investigate_unknown_tcp_service` result.
+
+    Full hex/ASCII dumps always remain in the ``.json`` report; this
+    surfaces just enough to tell at a glance whether anything came back
+    at all.
+    """
+    lines = ["  --- unidentified-protocol investigation (passive listen + one generic probe) ---"]
+    listen = unk.get("extended_passive_listen", {})
+    if listen.get("error"):
+        lines.append(f"    passive listen error: {listen['error']}")
+    else:
+        lines.append(f"    passive listen: {len(listen.get('reads', []))} read(s), {listen.get('total_bytes', 0)} bytes total")
+        for read in listen.get("reads", []):
+            lines.append(f"      +{read['elapsed_ms']} ms: {read['hex']}")
+    for probe in unk.get("generic_probes", []):
+        lines.append(f"    probe '{probe['name']}' sent {probe['tx_bytes']} bytes ({probe['tx_hex']})")
+        if probe.get("error"):
+            lines.append(f"      error: {probe['error']}")
+        else:
+            lines.append(f"      response: {probe.get('rx_bytes', 0)} bytes ({probe.get('rx_hex', '')})")
+    lines.append("    NOTE: full hex/ASCII detail for every byte is in the .json report.")
     return lines
 
 
@@ -812,6 +1012,8 @@ def _write_reports(report: dict[str, Any], output_dir: Path | None = None) -> tu
             lines.append(f"  WebSocket raw response snippet: {ws.get('raw_snippet')!r}")
         if "dev_interface" in entry:
             lines.extend(_render_dev_interface_txt(entry["dev_interface"]))
+        if "unknown_protocol_investigation" in entry:
+            lines.extend(_render_unknown_protocol_txt(entry["unknown_protocol_investigation"]))
         lines.append("")
 
     txt_path.write_text("\n".join(lines), encoding="utf-8")

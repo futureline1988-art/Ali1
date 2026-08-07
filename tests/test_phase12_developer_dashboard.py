@@ -881,6 +881,7 @@ class TestNavigationAndModules:
             "UpdateManagerModule",
             "ReportingModule",
             "ServerStatusModule",
+            "DeviceDiagnosticsModule",
             "SettingsModule",
         ]
 

@@ -115,6 +115,8 @@ var enrollEndpoint = "/api/enroll";
 
 _DEV_INTERFACE_CSS = "body { color: red; }\n"
 
+_DEV_INTERFACE_EMPLOYEES_JSON = '{"employees": []}'
+
 
 class _DevInterfaceRequestHandler(http.server.BaseHTTPRequestHandler):
     """Serves the crafted dev-interface fixture pages for TestInvestigateHttpDevInterface."""
@@ -123,6 +125,7 @@ class _DevInterfaceRequestHandler(http.server.BaseHTTPRequestHandler):
         "/": ("text/html", _DEV_INTERFACE_HTML),
         "/app.js": ("application/javascript", _DEV_INTERFACE_JS),
         "/style.css": ("text/css", _DEV_INTERFACE_CSS),
+        "/api/employees": ("application/json", _DEV_INTERFACE_EMPLOYEES_JSON),
     }
 
     def log_message(self, format, *args):  # noqa: A002 - matches BaseHTTPRequestHandler's signature
@@ -363,6 +366,14 @@ class TestInvestigateHttpDevInterface:
         assert result["mentions_port_5005"] is True
         assert any("apiKey" in hint for hint in result["inline_script_findings"]["auth_hints"])
 
+        # The single <a href> link the page exposes is also followed
+        # (GET, same-origin) -- "the exact URL behind the detected link".
+        assert len(result["followed_links"]) == 1
+        employees_link = result["followed_links"][0]
+        assert employees_link["path"] == "/api/employees"
+        assert employees_link["referenced_as"] == "/api/employees"
+        assert "employees" in employees_link["body_text"]
+
     def test_never_follows_the_cross_origin_script(self, dev_interface_server):
         result = diag.investigate_http_dev_interface("127.0.0.1", dev_interface_server)
         referenced = {r["referenced_as"] for r in result["fetched_resources"]}
@@ -378,6 +389,128 @@ class TestInvestigateHttpDevInterface:
         assert entry["open"] is True
         assert "dev_interface" in entry
         assert entry["dev_interface"]["mentions_port_5005"] is True
+        # This port was identified as HTTP, so the deeper unidentified-
+        # protocol investigation must NOT have run for it.
+        assert "unknown_protocol_investigation" not in entry
+
+
+@pytest.fixture
+def delayed_multi_chunk_server(free_ports):
+    """A TCP server that sends its banner in two chunks with a delay between them.
+
+    Simulates a service that greets slowly or in pieces -- exactly what
+    :func:`~tools.diagnostics.deli_es172_diagnose._extended_passive_listen`
+    (unlike the single-read banner capture in :func:`probe_tcp_port`) is
+    built to catch.
+    """
+    port = free_ports[1]
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", port))
+    server_socket.listen(5)
+    stop_requested = threading.Event()
+
+    def serve():
+        server_socket.settimeout(0.2)
+        while not stop_requested.is_set():
+            try:
+                conn, _ = server_socket.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                conn.sendall(b"\x01FIRST")
+                time.sleep(0.3)
+                conn.sendall(b"\x02SECOND")
+            finally:
+                conn.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    yield port
+    stop_requested.set()
+    server_socket.close()
+
+
+class TestHexAndAscii:
+    def test_returns_both_representations(self):
+        result = diag._hex_and_ascii(b"\x00\x01AB")
+        assert result["hex"] == "00 01 41 42"
+        assert result["ascii"] == "\x00\x01AB"
+
+    def test_non_ascii_bytes_are_replaced_not_raised(self):
+        result = diag._hex_and_ascii(b"\xff\xfe")
+        assert result["hex"] == "ff fe"
+        assert "�" in result["ascii"] or result["ascii"] != ""
+
+
+class TestExtendedPassiveListen:
+    def test_captures_multiple_delayed_chunks(self, delayed_multi_chunk_server):
+        result = diag._extended_passive_listen("127.0.0.1", delayed_multi_chunk_server, window_seconds=2.0)
+        assert "error" not in result
+        assert len(result["reads"]) == 2
+        assert result["reads"][0]["hex"] == "01 46 49 52 53 54"
+        assert result["reads"][1]["hex"] == "02 53 45 43 4f 4e 44"
+        # The second chunk arrived after the ~0.3s server-side delay.
+        assert result["reads"][1]["elapsed_ms"] > result["reads"][0]["elapsed_ms"]
+        assert result["total_bytes"] == 6 + 7
+
+    def test_closed_port_reports_an_error_not_a_crash(self, closed_port):
+        result = diag._extended_passive_listen("127.0.0.1", closed_port, window_seconds=1.0)
+        assert "error" in result
+        assert result["reads"] == []
+
+
+class TestGenericProbe:
+    def test_records_tx_and_rx_in_hex_and_ascii(self, raw_banner_server):
+        time.sleep(0.1)
+        result = diag._try_generic_probe("127.0.0.1", raw_banner_server, "generic_lines_crlf", b"\r\n\r\n")
+        assert result["name"] == "generic_lines_crlf"
+        assert result["tx_bytes"] == 4
+        assert result["tx_hex"] == "0d 0a 0d 0a"
+        assert result["tx_ascii"] == "\r\n\r\n"
+        assert "error" not in result
+        assert result["rx_bytes"] > 0
+
+    def test_empty_payload_sends_nothing(self, raw_banner_server):
+        time.sleep(0.1)
+        result = diag._try_generic_probe("127.0.0.1", raw_banner_server, "empty", b"")
+        assert result["tx_bytes"] == 0
+
+    def test_closed_port_reports_an_error_not_a_crash(self, closed_port):
+        result = diag._try_generic_probe("127.0.0.1", closed_port, "generic_lines_crlf", b"\r\n\r\n")
+        assert "error" in result
+
+
+class TestInvestigateUnknownTcpService:
+    def test_returns_passive_listen_and_generic_probe_results(self, raw_banner_server):
+        time.sleep(0.1)
+        result = diag.investigate_unknown_tcp_service("127.0.0.1", raw_banner_server)
+        assert result["extended_passive_listen"]["total_bytes"] > 0
+        assert len(result["generic_probes"]) == 1
+        assert result["generic_probes"][0]["name"] == "generic_lines_crlf"
+
+    def test_never_sends_a_credential_or_command(self, raw_banner_server):
+        import json
+
+        time.sleep(0.1)
+        result = diag.investigate_unknown_tcp_service("127.0.0.1", raw_banner_server)
+        serialized = json.dumps(result)
+        assert "api_key" not in serialized.lower()
+        assert "device_uid" not in serialized.lower()
+
+    def test_wired_into_diagnose_for_an_unidentified_port(self, raw_banner_server, monkeypatch):
+        monkeypatch.setattr(diag, "CANDIDATE_PORTS", [raw_banner_server])
+        monkeypatch.setattr(diag, "WEBSOCKET_PROBE_PORTS", set())
+        time.sleep(0.1)
+
+        report = diag.diagnose("127.0.0.1")
+
+        entry = report["ports"][0]
+        assert entry["open"] is True
+        assert "unknown_protocol_investigation" in entry
+        assert "dev_interface" not in entry
 
 
 def test_write_reports_creates_both_json_and_txt(tmp_path, monkeypatch):

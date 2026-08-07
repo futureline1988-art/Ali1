@@ -22,6 +22,7 @@ from developer_suite.modules import (
     ALL_MODULES,
     CustomerManagementModule,
     DashboardModule,
+    DeviceDiagnosticsModule,
     MonitoringModule,
     PlatformModule,
     RemoteConfigurationModule,
@@ -189,6 +190,7 @@ class ServiceContainer:
             ),
             MonitoringModule: lambda: MonitoringModule(self.admin_client),
             ServerStatusModule: lambda: ServerStatusModule(self.admin_client, self.config),
+            DeviceDiagnosticsModule: lambda: DeviceDiagnosticsModule(self.config),
             UpdateManagerModule: lambda: UpdateManagerModule(
                 self.update_manager_service,
                 self.customer_service,

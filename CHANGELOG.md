@@ -3,6 +3,41 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.0.3 / Developer Suite 1.1.4] - 2026-08-07 — Deeper DELI ES172 port-80/5005 investigation, Developer Suite diagnostic page
+
+A real on-device run of v2.0.2 confirmed the device is now at
+192.168.1.8, port 5005 is open, and port 80's development interface has
+exactly one link and no JavaScript resources. This release deepens the
+investigation of both ports with real evidence still driving every
+change -- **no DELI connector is implemented yet**; the protocol on
+port 5005 remains unproven.
+
+### Added
+
+- The diagnostic now follows same-origin `<a href>` links the port-80
+  page exposes, not just `<script src>`/`<link href>` resources --
+  captures the full response behind "the exact URL behind the
+  detected link".
+- TLS handshake is now attempted on **every** open port, not just 443
+  -- a proprietary service can be TLS-wrapped on any port.
+- For any port that stays unidentified after HTTP/WebSocket/TLS all
+  fail (port 5005 on the real device): a new, still strictly
+  read-only investigation listens passively for up to 5 seconds (in
+  case the service greets slowly or in multiple chunks) and sends one
+  generic, protocol-agnostic probe (the same kind nmap's own
+  service-detection uses) -- never a guessed DELI-specific command.
+  Every byte sent and received is recorded in both hex and ASCII.
+- A new **"تشخيص الأجهزة" (Device Diagnostics)** page in the Developer
+  Suite, reusing the exact same diagnostic logic as the Attendance
+  Client's Devices page -- for validating a device's network behavior
+  from the Developer Suite before it ships to a customer, again with
+  no separate Python install needed.
+- The diagnostic's default pre-filled IP is now `192.168.1.8` (the
+  device's current confirmed address) -- still just a convenience
+  default; the IP field remains fully free-form everywhere, and
+  nothing in the diagnostic or any future connector hard-codes a
+  specific device address.
+
 ## [Client 2.0.2] - 2026-08-07 — DELI ES172 HTTP development-interface investigation
 
 A real on-device diagnostic run (v2.0.1's in-app tool) confirmed port 4370

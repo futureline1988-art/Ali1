@@ -70,7 +70,7 @@ back the two file paths it prints at the end. Or from a terminal:
 python deli_es172_diagnose.py [IP_ADDRESS]
 ```
 
-`IP_ADDRESS` defaults to `192.168.1.28` if omitted.
+`IP_ADDRESS` defaults to `192.168.1.8` if omitted.
 
 ## Tests
 

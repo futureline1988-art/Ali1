@@ -21,6 +21,7 @@ from __future__ import annotations
 from developer_suite.modules.base import PlatformModule
 from developer_suite.modules.customer_management import CustomerManagementModule
 from developer_suite.modules.dashboard import DashboardModule
+from developer_suite.modules.device_diagnostics import DeviceDiagnosticsModule
 from developer_suite.modules.monitoring import MonitoringModule
 from developer_suite.modules.remote_configuration import RemoteConfigurationModule
 from developer_suite.modules.reporting import ReportingModule
@@ -38,6 +39,7 @@ ALL_MODULES: tuple[type[PlatformModule], ...] = (
     UpdateManagerModule,
     ReportingModule,
     ServerStatusModule,
+    DeviceDiagnosticsModule,
     SettingsModule,
 )
 """Every platform module, in navigation display order."""
@@ -52,6 +54,7 @@ __all__ = [
     "UpdateManagerModule",
     "ReportingModule",
     "ServerStatusModule",
+    "DeviceDiagnosticsModule",
     "SettingsModule",
     "ALL_MODULES",
 ]

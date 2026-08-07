@@ -9,8 +9,8 @@ REM ============================================================
 
 setlocal
 
-set TARGET_IP=192.168.1.28
-set /p TARGET_IP="Device IP address (press Enter to use 192.168.1.28): "
+set TARGET_IP=192.168.1.8
+set /p TARGET_IP="Device IP address (press Enter to use 192.168.1.8): "
 
 echo.
 echo Running diagnostic against %TARGET_IP% ...

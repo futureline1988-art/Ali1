@@ -31,6 +31,7 @@ from developer_suite.modules import (
     ALL_MODULES,
     CustomerManagementModule,
     DashboardModule,
+    DeviceDiagnosticsModule,
     MonitoringModule,
     RemoteConfigurationModule,
     ReportingModule,
@@ -150,6 +151,8 @@ def _construct_module(
             customer_service, _NullSubscriptionService(), configuration_publish_service, dashboard_service, admin_client
         )
         return ReportingModule(reporting_service, config)
+    if module_cls is DeviceDiagnosticsModule:
+        return DeviceDiagnosticsModule(config)
     return module_cls()
 
 
@@ -243,6 +246,7 @@ class TestModuleInterface:
             "server_status",
             "update_manager",
             "reporting",
+            "device_diagnostics",
             "settings",
         }
 
