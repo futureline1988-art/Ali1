@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from config import get_config
 from controllers.branch_controller import BranchController
 from controllers.device_controller import DeviceController, _connection_test_result_to_dict
 from controllers.employee_controller import EmployeeController
+from devices import deli_es172_device
 from devices.device_manager import DeviceManager
 from models.device import Device
 from models.enums import DeviceProtocol
@@ -239,6 +241,103 @@ class NetworkDiagnosticDialog(QDialog):
         """Open the folder containing the saved diagnostic reports."""
         if self._last_output_dir is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_dir)))
+
+
+class DeliConnectionTestDialog(QDialog):
+    """Tests the DELI ES172's discovered HTTP control API with GetVersionInfo.
+
+    Deliberately separate from :class:`DeviceFormDialog`/the normal
+    "add device" flow -- DELI ES172 is not yet a selectable protocol in
+    :class:`~models.enums.DeviceProtocol` (see
+    :mod:`devices.deli_es172_device`'s own module docstring for why:
+    only this one read-only command has been confirmed against the
+    real device so far). This dialog exists purely to prove
+    endpoint/authentication/framing before anything else is built on
+    top of it.
+    """
+
+    def __init__(self, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("اختبار اتصال DELI ES172")
+        self.setMinimumWidth(480)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(12)
+
+        intro = make_secondary_label(
+            "يرسل هذا الاختبار أمر GetVersionInfo (قراءة فقط، دون أي تعديل على الجهاز) إلى "
+            "واجهة التحكم المكتشفة على جهاز DELI ES172. أدخل عنوان IP ومفتاح API الخاصين "
+            "بالجهاز، ثم اضغط \"اختبار اتصال DELI\"."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.ip_edit = QLineEdit(self)
+        self.ip_edit.setText(network_diagnostic.DEFAULT_TARGET_IP)
+        form.addRow("عنوان الجهاز (IP)", self.ip_edit)
+
+        self.api_key_edit = QLineEdit(self)
+        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_edit.setPlaceholderText("API Key for SDK")
+        form.addRow("مفتاح API", self.api_key_edit)
+        layout.addLayout(form)
+
+        self.run_button = make_primary_button("اختبار اتصال DELI", parent=self)
+        self.run_button.clicked.connect(self._on_run_clicked)
+        layout.addWidget(self.run_button)
+
+        self.status_label = make_secondary_label("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        layout.addWidget(make_secondary_label("الاستجابة المفسَّرة (JSON):"))
+        self.parsed_view = QTextEdit(self)
+        self.parsed_view.setReadOnly(True)
+        self.parsed_view.setFixedHeight(120)
+        layout.addWidget(self.parsed_view)
+
+        layout.addWidget(make_secondary_label("الاستجابة الخام:"))
+        self.raw_view = QTextEdit(self)
+        self.raw_view.setReadOnly(True)
+        self.raw_view.setFixedHeight(120)
+        layout.addWidget(self.raw_view)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=self)
+        buttons.button(QDialogButtonBox.Close).setText("إغلاق")
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_run_clicked(self) -> None:
+        """Send GetVersionInfo to the entered IP/API key and display the classified result."""
+        ip = self.ip_edit.text().strip()
+        api_key = self.api_key_edit.text().strip()
+        if not ip or not api_key:
+            QMessageBox.warning(self, "بيانات ناقصة", "الرجاء إدخال عنوان IP ومفتاح API.")
+            return
+        self.run_button.setEnabled(False)
+        try:
+            result = run_blocking_operation(
+                self,
+                "جارٍ إرسال GetVersionInfo إلى الجهاز...",
+                lambda: deli_es172_device.test_get_version_info(ip, api_key),
+            )
+            self.status_label.setText(result.message_ar)
+            self.status_label.setProperty(
+                "status", "success" if result.outcome == deli_es172_device.OUTCOME_SUCCESS else "danger"
+            )
+            self.status_label.style().unpolish(self.status_label)
+            self.status_label.style().polish(self.status_label)
+            if result.parsed_response is not None:
+                self.parsed_view.setPlainText(
+                    json.dumps(result.parsed_response, indent=2, ensure_ascii=False)
+                )
+            else:
+                self.parsed_view.setPlainText("—")
+            self.raw_view.setPlainText(result.raw_response_text or (result.error_detail or "—"))
+        finally:
+            self.run_button.setEnabled(True)
 
 
 def _probe_connection(values: dict[str, Any]) -> dict[str, Any]:
@@ -534,6 +633,14 @@ class DevicesPage(TablePage):
         self.network_diagnostic_button.clicked.connect(self._on_network_diagnostic_clicked)
         self.toolbar_layout.addWidget(self.network_diagnostic_button)
 
+        # Also always enabled, same reasoning: DELI ES172 is not a
+        # selectable protocol yet (see deli_es172_device's module
+        # docstring), so this cannot live on a saved device row either.
+        self.deli_test_button = _toolbar_button("اختبار اتصال DELI")
+        self.deli_test_button.setEnabled(True)
+        self.deli_test_button.clicked.connect(self._on_deli_test_clicked)
+        self.toolbar_layout.addWidget(self.deli_test_button)
+
         self.delete_button = make_danger_button("حذف", parent=self)
         self.delete_button.clicked.connect(self._on_delete_clicked)
         self.toolbar_layout.addWidget(self.delete_button)
@@ -692,6 +799,10 @@ class DevicesPage(TablePage):
     def _on_network_diagnostic_clicked(self) -> None:
         """Open the safe network diagnostic for a device with no connector yet."""
         NetworkDiagnosticDialog(parent=self).exec()
+
+    def _on_deli_test_clicked(self) -> None:
+        """Open the DELI ES172 GetVersionInfo connection test."""
+        DeliConnectionTestDialog(parent=self).exec()
 
     def _on_sync_clicked(self) -> None:
         """Sync the selected device's attendance logs."""

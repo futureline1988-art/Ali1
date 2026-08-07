@@ -12,6 +12,7 @@ real (inaccessible from this environment) device.
 
 from __future__ import annotations
 
+import functools
 import http.server
 import socket
 import threading
@@ -38,9 +39,20 @@ def free_ports():
 
 
 @pytest.fixture
-def http_test_server(free_ports):
+def http_test_server(free_ports, tmp_path):
+    """A plain HTTP server serving an isolated, empty directory.
+
+    Deliberately NOT the process's current working directory (the repo
+    root) -- SimpleHTTPRequestHandler defaults to serving CWD, which
+    would leak the entire repository tree (including files whose text
+    content happens to contain words like "api_key" as documentation,
+    not a secret) to any test that -- like
+    investigate_http_dev_interface's link-following -- actually reads
+    what this server returns.
+    """
     port = free_ports[0]
-    server = http.server.HTTPServer(("127.0.0.1", port), http.server.SimpleHTTPRequestHandler)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    server = http.server.HTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield port

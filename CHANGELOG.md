@@ -3,6 +3,43 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.0.4] - 2026-08-07 — First real DELI ES172 API call: GetVersionInfo
+
+The device-discovered HTTP control interface is now called for real:
+`POST http://<device-ip>/control?api_key=<API_KEY>` with the device-
+confirmed, read-only `GetVersionInfo` command. This is the first actual
+DELI ES172 API request the application makes -- still not a full
+connector (no employee upload/download, no attendance log download, no
+write/enrollment command of any kind), only a dedicated connection test
+to prove the endpoint, authentication, and framing work against the
+physical device.
+
+### Added
+
+- New "اختبار اتصال DELI" button on the Attendance Client's Devices
+  page toolbar, opening a dedicated dialog: enter the device's IP and
+  its "API Key for SDK", click "اختبار اتصال DELI", and see both the
+  raw and parsed (pretty-printed JSON) response. Clearly distinguishes
+  a wrong/rejected API key (HTTP 401/403), a timeout, a network error,
+  a non-JSON response, an HTTP error status, and success -- each with
+  its own precise Arabic message.
+- `devices/deli_es172_device.py`: the client for this one command.
+  Deliberately not registered as a `DeviceProtocol`/wired into
+  `DeviceManager` yet -- DELI ES172 is not a general connector until
+  more commands (device info, employee list, attendance log) are each
+  confirmed against the real device the same evidence-driven way.
+  Never sends anything but the confirmed request; the API key is never
+  logged or displayed in plaintext in any error detail (it is redacted
+  even from a raw network-failure exception message, which would
+  otherwise echo the full request URL).
+- 15 new tests: every response classification (success, 401, 403,
+  invalid JSON, HTTP error, network error, timeout) against local
+  throwaway HTTP servers, exact request-contract verification
+  (path/headers/body), API-key redaction, and the dialog's own
+  success/error/empty-field behavior. Full regression: 661/661.
+
+Preserves the existing ZKTeco and Hikvision connectors unchanged.
+
 ## [Client 2.0.3 / Developer Suite 1.1.4] - 2026-08-07 — Deeper DELI ES172 port-80/5005 investigation, Developer Suite diagnostic page
 
 A real on-device run of v2.0.2 confirmed the device is now at
