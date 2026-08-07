@@ -502,7 +502,7 @@ class AppConfig:
 
     app_name: str = "Attendance Management System"
     app_name_ar: str = "نظام إدارة الحضور والانصراف"
-    app_version: str = "2.0.0"
+    app_version: str = "2.0.1"
     organization_name: str = "Attendance Systems"
     environment: Environment = Environment.PRODUCTION
 

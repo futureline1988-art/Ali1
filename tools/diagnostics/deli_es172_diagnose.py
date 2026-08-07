@@ -33,7 +33,8 @@ in the Ali1 repository for why: every real connector must be a
 faithful adapter over a vendor's *documented* SDK, never a
 reverse-engineered guess -- and neither is this diagnostic.
 
-Usage (from a Command Prompt or by double-clicking Run_DELI_Diagnostic.bat):
+Usage (from a Command Prompt or by double-clicking Run_DELI_Diagnostic.bat --
+requires a separately installed Python 3, see that file's own notes):
 
     python deli_es172_diagnose.py [IP_ADDRESS]
 
@@ -41,6 +42,15 @@ If IP_ADDRESS is omitted, 192.168.1.28 (the device's currently reported
 address) is used. Writes a timestamped report (.json and .txt) into a
 "deli_diagnostic_output" folder created next to this script, and prints
 the exact file to send back at the end.
+
+On a normal customer installation, prefer the built-in "تشخيص شبكة
+الجهاز" (Network diagnostic) button on the Devices page of the
+Attendance Management System application instead -- it calls
+:func:`diagnose` and :func:`_write_reports` directly from inside the
+already-installed, already-bundled application (see ``ui/devices.py``'s
+``NetworkDiagnosticDialog``), so it needs no separate Python install at
+all. This standalone script remains for developers/CI and for running
+the check before the application itself is installed.
 """
 
 from __future__ import annotations
@@ -319,8 +329,21 @@ def diagnose(ip: str) -> dict[str, Any]:
     return report
 
 
-def _write_reports(report: dict[str, Any]) -> tuple[Path, Path]:
-    output_dir = Path(__file__).resolve().parent / "deli_diagnostic_output"
+def _write_reports(report: dict[str, Any], output_dir: Path | None = None) -> tuple[Path, Path]:
+    """Write the JSON + TXT reports, returning both paths.
+
+    Args:
+        report: The dict returned by :func:`diagnose`.
+        output_dir: Where to write the reports. Defaults to a
+            ``deli_diagnostic_output`` folder next to this script (the
+            CLI usage) -- pass an explicit, guaranteed-writable
+            directory (e.g. the running application's per-user data
+            directory) when calling this from inside a frozen build,
+            since a onefile build's own directory is a temporary
+            extraction discarded after every run.
+    """
+    if output_dir is None:
+        output_dir = Path(__file__).resolve().parent / "deli_diagnostic_output"
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     json_path = output_dir / f"deli_diagnostic_{timestamp}.json"

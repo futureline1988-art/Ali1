@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -19,12 +22,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from config import get_config
 from controllers.branch_controller import BranchController
 from controllers.device_controller import DeviceController, _connection_test_result_to_dict
 from controllers.employee_controller import EmployeeController
 from devices.device_manager import DeviceManager
 from models.device import Device
 from models.enums import DeviceProtocol
+from tools.diagnostics import deli_es172_diagnose as network_diagnostic
 from ui.table_page import TablePage
 from ui.widgets import (
     ConfirmDialog,
@@ -104,6 +109,126 @@ class ConnectionDiagnosticDialog(QDialog):
         buttons.button(QDialogButtonBox.Ok).setText("موافق")
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+
+def _format_network_diagnostic_summary(report: dict[str, Any]) -> str:
+    """Render a :func:`tools.diagnostics.deli_es172_diagnose.diagnose` report for display.
+
+    Plain-language Arabic labels over the report's technical findings --
+    open/closed per port, and for open ports, whatever the safe probing
+    could tell (unsolicited banner, plain HTTP, WebSocket upgrade
+    accepted, TLS handshake ok). This never claims to identify the
+    protocol; it only surfaces what was actually observed, so the
+    reader can send it back for the next diagnosis step.
+    """
+    lines: list[str] = [
+        f"عنوان الجهاز: {report['target_ip']}",
+        "استجابة ping: " + ("نعم، الجهاز متصل بالشبكة" if report["ping"]["reachable"] else "لا استجابة"),
+        "",
+    ]
+    for entry in report["ports"]:
+        if not entry["open"]:
+            lines.append(f"المنفذ {entry['port']}: مغلق أو غير متاح")
+            continue
+        lines.append(f"المنفذ {entry['port']}: مفتوح")
+        banner_bytes = entry.get("unsolicited_banner_bytes") or 0
+        if banner_bytes:
+            lines.append(f"  - أرسل الجهاز بيانات فور الاتصال ({banner_bytes} بايت)")
+        if any(probe.get("looks_like_http") for probe in entry.get("http_probes", [])):
+            lines.append("  - يستجيب كخادم HTTP عادي")
+        websocket_probe = entry.get("websocket_probe")
+        if websocket_probe and websocket_probe.get("is_101_switching_protocols"):
+            lines.append("  - يقبل ترقية الاتصال إلى WebSocket")
+        tls = entry.get("tls")
+        if tls and tls.get("tls_handshake_ok"):
+            lines.append("  - يدعم تشفير TLS على هذا المنفذ")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+class NetworkDiagnosticDialog(QDialog):
+    """Safe, protocol-agnostic network diagnostic for a device with no connector yet.
+
+    Runs :func:`tools.diagnostics.deli_es172_diagnose.diagnose` directly
+    inside the already-installed application -- unlike the standalone
+    script it shares its logic with, this needs no separately installed
+    Python interpreter, since it is bundled into this same executable.
+    Built for investigating a DELI ES172 device, but the underlying
+    probing is generic TCP/HTTP/WebSocket fingerprinting safe against
+    any device, so the IP field is free-form.
+    """
+
+    def __init__(self, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("تشخيص شبكة الجهاز")
+        self.setMinimumWidth(480)
+        self._last_output_dir: Path | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(12)
+
+        intro = make_secondary_label(
+            "لفحص جهاز غير مدعوم حالياً على شبكتك (مثل بعض أجهزة DELI): أدخل عنوان "
+            "IP الخاص به كما يظهر على شاشة الجهاز نفسه، ثم اضغط \"بدء الفحص\". هذا "
+            "الفحص آمن تماماً؛ يتحقق فقط من استجابة الجهاز على الشبكة ولا يرسل أي "
+            "كلمة مرور أو مفتاح اتصال أو أمر تسجيل."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.ip_edit = QLineEdit(self)
+        self.ip_edit.setText(network_diagnostic.DEFAULT_TARGET_IP)
+        form.addRow("عنوان الجهاز (IP)", self.ip_edit)
+        layout.addLayout(form)
+
+        self.run_button = make_primary_button("بدء الفحص", parent=self)
+        self.run_button.clicked.connect(self._on_run_clicked)
+        layout.addWidget(self.run_button)
+
+        self.result_view = QTextEdit(self)
+        self.result_view.setReadOnly(True)
+        self.result_view.setPlaceholderText("ستظهر نتيجة الفحص هنا بعد التشغيل...")
+        self.result_view.setMinimumHeight(220)
+        layout.addWidget(self.result_view)
+
+        self.open_folder_button = QPushButton("فتح مجلد التقرير", self)
+        self.open_folder_button.setEnabled(False)
+        self.open_folder_button.clicked.connect(self._on_open_folder_clicked)
+        layout.addWidget(self.open_folder_button)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, parent=self)
+        buttons.button(QDialogButtonBox.Close).setText("إغلاق")
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_run_clicked(self) -> None:
+        """Run the diagnostic against the entered IP and display + save the result."""
+        ip = self.ip_edit.text().strip()
+        if not ip:
+            QMessageBox.warning(self, "بيانات ناقصة", "الرجاء إدخال عنوان IP للجهاز.")
+            return
+        self.run_button.setEnabled(False)
+        try:
+            report = run_blocking_operation(
+                self, f"جارٍ فحص الشبكة على {ip} ...", lambda: network_diagnostic.diagnose(ip)
+            )
+            output_dir = get_config().paths.data_dir / "diagnostics"
+            json_path, txt_path = network_diagnostic._write_reports(report, output_dir=output_dir)
+            self._last_output_dir = output_dir
+            self.open_folder_button.setEnabled(True)
+            summary = _format_network_diagnostic_summary(report)
+            self.result_view.setPlainText(
+                f"{summary}\n\nتم حفظ تقرير كامل قابل للإرسال في:\n{json_path.name}\n{txt_path.name}"
+            )
+        finally:
+            self.run_button.setEnabled(True)
+
+    def _on_open_folder_clicked(self) -> None:
+        """Open the folder containing the saved diagnostic reports."""
+        if self._last_output_dir is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_dir)))
 
 
 def _probe_connection(values: dict[str, Any]) -> dict[str, Any]:
@@ -390,6 +515,15 @@ class DevicesPage(TablePage):
         self.pull_button.clicked.connect(self._on_pull_clicked)
         self.toolbar_layout.addWidget(self.pull_button)
 
+        # Always enabled (unlike the buttons above): diagnoses a device by
+        # IP directly, independent of the selected row -- for devices with
+        # no supported protocol/connector yet (e.g. a DELI ES172), which
+        # therefore cannot be added to this list at all.
+        self.network_diagnostic_button = _toolbar_button("تشخيص شبكة الجهاز")
+        self.network_diagnostic_button.setEnabled(True)
+        self.network_diagnostic_button.clicked.connect(self._on_network_diagnostic_clicked)
+        self.toolbar_layout.addWidget(self.network_diagnostic_button)
+
         self.delete_button = make_danger_button("حذف", parent=self)
         self.delete_button.clicked.connect(self._on_delete_clicked)
         self.toolbar_layout.addWidget(self.delete_button)
@@ -544,6 +678,10 @@ class DevicesPage(TablePage):
         self.refresh()
         if result is not None:
             ConnectionDiagnosticDialog(result=result, parent=self).exec()
+
+    def _on_network_diagnostic_clicked(self) -> None:
+        """Open the safe network diagnostic for a device with no connector yet."""
+        NetworkDiagnosticDialog(parent=self).exec()
 
     def _on_sync_clicked(self) -> None:
         """Sync the selected device's attendance logs."""

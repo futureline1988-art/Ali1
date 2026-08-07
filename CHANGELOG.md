@@ -3,6 +3,30 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.0.1] - 2026-08-07 — DELI ES172 network diagnostic, no Python required
+
+### Added
+
+- "تشخيص شبكة الجهاز" (Network diagnostic) button on the Devices page:
+  a safe, protocol-agnostic TCP/HTTP/WebSocket network probe for
+  investigating a device with no supported connector yet (built for
+  the DELI ES172 investigation, generic enough for any device). It
+  never sends a password, communication key, or write/enrollment
+  command — only read-only reachability and protocol fingerprinting —
+  and saves a JSON + TXT report the customer can send back for
+  diagnosis. Runs entirely inside the already-installed application,
+  so it needs no separately installed Python interpreter.
+
+### Fixed
+
+- The standalone diagnostic script (`tools/diagnostics/deli_es172_diagnose.py`
+  and its `Run_DELI_Diagnostic.bat` launcher) required a system Python
+  install and failed on a normal Windows PC with "Python was not
+  found". The in-app button above is now the supported way to run this
+  diagnostic on a customer machine; the standalone script remains for
+  developers/CI and for checking a device before the application
+  itself is installed.
+
 ## [Client 2.0.0] - 2026-08-05 — First standalone commercial edition
 
 The Attendance Client's first release as a permanently-owned, one-time-

@@ -173,3 +173,147 @@ def test_write_reports_creates_both_json_and_txt(tmp_path, monkeypatch):
     assert txt_path.exists()
     assert json_path.parent.name == "deli_diagnostic_output"
     assert "5005" in txt_path.read_text(encoding="utf-8")
+
+
+def test_write_reports_honors_an_explicit_output_dir(tmp_path):
+    """The in-app caller (ui.devices.NetworkDiagnosticDialog) passes an
+    explicit, guaranteed-writable directory rather than relying on the
+    default "next to the script" location, which is a temporary,
+    discarded-on-exit extraction directory in a frozen onefile build.
+    """
+    fake_report = {
+        "generated_at_utc": "2026-01-01T00:00:00Z",
+        "target_ip": "192.168.1.28",
+        "runner_platform": "test",
+        "ping": {"reachable": True},
+        "ports": [{"port": 5005, "open": False, "error": "timed out"}],
+    }
+    output_dir = tmp_path / "app_data" / "diagnostics"
+    json_path, txt_path = diag._write_reports(fake_report, output_dir=output_dir)
+    assert json_path.parent == output_dir
+    assert txt_path.parent == output_dir
+    assert json_path.exists()
+    assert txt_path.exists()
+
+
+class TestFormatNetworkDiagnosticSummary:
+    """ui.devices._format_network_diagnostic_summary -- a pure function
+    turning a diagnose() report into a plain-language Arabic summary,
+    tested without any Qt widget involved."""
+
+    def test_summarizes_reachability_and_open_closed_ports(self):
+        from ui.devices import _format_network_diagnostic_summary
+
+        report = {
+            "target_ip": "192.168.1.28",
+            "ping": {"reachable": True},
+            "ports": [
+                {
+                    "port": 5005,
+                    "open": True,
+                    "unsolicited_banner_bytes": 12,
+                    "http_probes": [{"looks_like_http": False}],
+                    "websocket_probe": {"is_101_switching_protocols": True},
+                },
+                {"port": 4370, "open": False, "error": "timed out"},
+            ],
+        }
+        summary = _format_network_diagnostic_summary(report)
+        assert "192.168.1.28" in summary
+        assert "نعم" in summary  # reachable
+        assert "5005" in summary and "مفتوح" in summary
+        assert "4370" in summary and "مغلق" in summary
+        assert "WebSocket" in summary
+
+    def test_says_nothing_it_did_not_observe(self):
+        from ui.devices import _format_network_diagnostic_summary
+
+        report = {
+            "target_ip": "10.0.0.5",
+            "ping": {"reachable": False},
+            "ports": [{"port": 80, "open": True, "http_probes": []}],
+        }
+        summary = _format_network_diagnostic_summary(report)
+        assert "WebSocket" not in summary
+        assert "HTTP" not in summary
+
+
+class TestNetworkDiagnosticDialog:
+    """ui.devices.NetworkDiagnosticDialog -- the in-app diagnostic that
+    needs no separately installed Python (see the Windows-packaging fix
+    this dialog was added for: the standalone .bat script requires a
+    system Python, which a normal customer install does not have)."""
+
+    @pytest.fixture(autouse=True)
+    def _cleanup_diagnostics_dir(self):
+        import shutil
+
+        import config as attendance_config_module
+        from config import get_config
+
+        output_dir = get_config().paths.data_dir / "diagnostics"
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        yield
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        # get_config() above lazily creates config's process-wide
+        # singleton, same as tests/conftest.py's db_session fixture
+        # does for every DB-using test -- reset it here too so a test
+        # that asserts nothing has touched it yet (e.g.
+        # test_developer_suite_phase2.py's isolation check) is not
+        # affected just because this file happens to sort before it.
+        attendance_config_module._config_instance = None
+
+    def test_default_ip_is_prefilled_and_folder_button_starts_disabled(self, qtbot):
+        from ui.devices import NetworkDiagnosticDialog
+
+        dialog = NetworkDiagnosticDialog()
+        qtbot.addWidget(dialog)
+        assert dialog.ip_edit.text() == diag.DEFAULT_TARGET_IP
+        assert dialog.open_folder_button.isEnabled() is False
+
+    def test_running_the_diagnostic_populates_results_and_writes_reports(self, qtbot, monkeypatch):
+        from ui import devices as devices_module
+
+        fake_report = {
+            "target_ip": "192.168.1.28",
+            "generated_at_utc": "2026-01-01T00:00:00Z",
+            "runner_platform": "test",
+            "ping": {"reachable": True},
+            "ports": [{"port": 5005, "open": False, "error": "timed out"}],
+        }
+        # Patches the same module object ui.devices imported as
+        # network_diagnostic -- no real socket I/O happens in this test.
+        monkeypatch.setattr(devices_module.network_diagnostic, "diagnose", lambda ip: fake_report)
+
+        dialog = devices_module.NetworkDiagnosticDialog()
+        qtbot.addWidget(dialog)
+        dialog.run_button.click()
+
+        assert "192.168.1.28" in dialog.result_view.toPlainText()
+        assert dialog.open_folder_button.isEnabled() is True
+        assert dialog._last_output_dir is not None
+        assert list(dialog._last_output_dir.glob("*.json"))
+        assert list(dialog._last_output_dir.glob("*.txt"))
+
+    def test_empty_ip_is_rejected_before_running_anything(self, qtbot, monkeypatch):
+        from ui import devices as devices_module
+
+        called = False
+
+        def _fake_diagnose(ip):
+            nonlocal called
+            called = True
+            return {}
+
+        monkeypatch.setattr(devices_module.network_diagnostic, "diagnose", _fake_diagnose)
+        monkeypatch.setattr(devices_module.QMessageBox, "warning", lambda *args, **kwargs: None)
+
+        dialog = devices_module.NetworkDiagnosticDialog()
+        qtbot.addWidget(dialog)
+        dialog.ip_edit.setText("")
+        dialog.run_button.click()
+
+        assert called is False
+        assert dialog.open_folder_button.isEnabled() is False
