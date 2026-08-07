@@ -3,6 +3,70 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.1.0] - 2026-08-07 — Real DELI ES172 connector, built from the official SDK protocol document
+
+The vendor's official "DELI offline SDK protocol" document is now the
+source of truth for this integration (superseding the earlier blind
+port/HTTP-interface investigation). DELI ES172 is a full, selectable
+device type: read-only device info, employee download, and attendance
+log download all work exactly per the documented commands and
+pagination scheme. The ZKTeco and Hikvision connectors are unchanged.
+
+### Why the on-device "API Key for SDK" field was blank
+
+Per the document's "Security Configuration" section, the API key is
+only enforced once `SetSecurityConfig` has explicitly set one -- "the
+device will only accept commands if the key matches the currently set
+value". A factory-fresh device has never had a key set, so the field is
+blank by design, and read-only commands are expected to work with an
+empty API key. `SetSecurityConfig` is **not implemented** in this
+release: unlike `SetUserInfo` (which explicitly documents that fields
+"can be omitted to keep the current value"), the document never states
+that any `SetSecurityConfig` field (`api_key`/`enable_http`/`tls_conf`)
+can be safely omitted, so sending it could risk disabling the very
+HTTP interface this application depends on. It will only be added once
+that is proven safe from a vendor-confirmed example.
+
+### Added
+
+- `models.enums.DeviceProtocol.DELI_ES172` -- selectable in the
+  Attendance Client's "إضافة جهاز جديد" form alongside ZKTeco/Hikvision,
+  with a hint about the default port (80) and the blank-API-key
+  convention for an unconfigured device.
+- `devices.deli_es172_device.DeliES172Connector` -- a full
+  `DeviceConnector` implementation over the documented
+  `POST /control?api_key=...` interface, covering every read-only
+  command the document defines: `GetVersionInfo`, `GetDeviceUid`,
+  `GetDeviceCapabilities`, `GetCapacityLimit`, `GetCurrentUsage`,
+  `GetUserIdList`, `GetUserInfo`, `GetAttendLog` -- plus `SetUserInfo`
+  for employee push. Pagination (`start_pos`/`next_page_pos` for users,
+  `start_pos`/`next_pos` for attendance logs) follows the document's
+  own communication-example tables exactly. Never sends
+  `EraseAttendLog`, `ClearUsers`, `ClearAllData`, or `SetSecurityConfig`.
+- `devices.device_manager.DeviceManager` now resolves
+  `DeviceProtocol.DELI_ES172` to `DeliES172Connector`, so the existing
+  protocol-agnostic `DeviceService` (connection test, employee push/
+  pull, attendance sync) works for DELI devices with no service-layer
+  changes.
+- 15 new tests (`tests/test_deli_es172_connector.py`) against a local
+  HTTP server that speaks the documented response envelope: connection
+  test + capability reading, exact request-contract verification, the
+  blank-API-key case, device-level error responses (`user_id_not_exists`
+  handled as "not found", not a failure), full `GetUserIdList`/
+  `GetAttendLog` pagination sequences, `SetUserInfo` push, and a check
+  that no destructive or `SetSecurityConfig` command is ever sent.
+
+### Known limitation
+
+The document's `GetAttendLog` entries carry a verification method
+(`mode`: face/fp/card/pwd) but no check-in/check-out direction field.
+This is the same limitation the existing Hikvision connector already
+has; every DELI attendance entry is reported as a check-in, and the
+existing daily first-in/last-out aggregation in the service layer is
+what derives the actual check-in/check-out pairing.
+
+Preserves the existing ZKTeco and Hikvision connectors unchanged.
+
 ## [Client 2.0.4] - 2026-08-07 — First real DELI ES172 API call: GetVersionInfo
 
 The device-discovered HTTP control interface is now called for real:

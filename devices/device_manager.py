@@ -10,6 +10,7 @@ connector class, not touching ``services/device_service.py``.
 from __future__ import annotations
 
 from config import get_config
+from devices.deli_es172_device import DeliES172Connector
 from devices.device_interface import DeviceConnector
 from devices.hikvision_device import HikvisionConnector
 from devices.zkteco_device import ZKTecoConnector
@@ -92,6 +93,13 @@ class DeviceManager:
                 password=password,
                 timeout=device.timeout_seconds
                 or device_defaults.hikvision_default_timeout_seconds,
+            )
+        if device.protocol is DeviceProtocol.DELI_ES172:
+            return DeliES172Connector(
+                host=device.host,
+                port=device.port,
+                api_key=device.communication_key,
+                timeout=device.timeout_seconds or device_defaults.deli_default_timeout_seconds,
             )
 
         raise UnsupportedProtocolError(
