@@ -22,7 +22,17 @@ from devices.device_interface import (
     DeviceConnectionError,
     RawDeviceUser,
 )
-from devices.deli_es172_device import DeliCommandError, DeliES172Connector
+from devices.deli_es172_device import (
+    ENROLLMENT_KIND_FACE,
+    ENROLLMENT_KIND_FINGERPRINT,
+    ENROLLMENT_KIND_PALM,
+    JOB_STATE_FAILED,
+    JOB_STATE_PENDING,
+    JOB_STATE_SUCCEEDED,
+    DeliCommandError,
+    DeliEnrollmentJob,
+    DeliES172Connector,
+)
 from models.enums import PunchType
 
 
@@ -125,6 +135,7 @@ class TestGetVersionInfoAndConnectionTest:
         assert result.success is True
         assert result.capabilities.supports_face is True
         assert result.capabilities.supports_fingerprint is True
+        assert result.capabilities.supports_palm is False
         assert result.capabilities.user_count == 1
         assert result.capabilities.user_capacity == 5000
         assert result.capabilities.firmware_version == "13750C v3.11.802"
@@ -275,6 +286,21 @@ class TestGetUserBiometricStatus:
         status = connector.get_user_biometric_status("1")
         assert status.fingerprint_count == 2
         assert status.card_assigned is True
+        assert status.face_registered is False
+        assert status.palm_registered is False
+
+    def test_reports_face_and_palm_registration(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "GetUserInfo": {
+                "mid": "1",
+                "result": "UserInfo",
+                "payload": {"id": "1", "face": "base64-face-data", "palm": ["base64-palm-data"]},
+            }
+        }
+        connector = _connector(scripted_server)
+        status = connector.get_user_biometric_status("1")
+        assert status.face_registered is True
+        assert status.palm_registered is True
 
     def test_unknown_user_returns_zero_status_without_raising(self, scripted_server):
         _ScriptedHandler.responses = {
@@ -288,22 +314,163 @@ class TestGetUserBiometricStatus:
         status = connector.get_user_biometric_status("999")
         assert status.fingerprint_count == 0
         assert status.card_assigned is False
+        assert status.face_registered is False
+        assert status.palm_registered is False
 
 
 class TestNeverSendsDestructiveCommands:
     def test_no_public_method_issues_erase_or_clear_commands(self, scripted_server):
         _ScriptedHandler.responses = {
             "GetUserIdList": {"mid": "1", "result": "UserIdList", "payload": {"user_id": []}},
+            "BeginEnrollFace": {"mid": "1", "result": "JobCreated", "payload": {"job_id": 1}},
         }
         connector = _connector(scripted_server)
         connector.test_connection()
         connector.fetch_users()
         connector.fetch_attendance_logs()
+        connector.begin_face_enrollment()
+        connector.cancel_all_enrollment_jobs()
         connector.disconnect()
 
         commands_sent = {r["body"]["cmd"] for r in _ScriptedHandler.received_requests}
-        destructive = {"EraseAttendLog", "ClearUsers", "ClearAllData", "SetSecurityConfig"}
+        destructive = {
+            "EraseAttendLog",
+            "ClearUsers",
+            "ClearAllData",
+            "SetSecurityConfig",
+            "BeginEnrollCard",
+            "PhotoToFacedata",
+        }
         assert commands_sent.isdisjoint(destructive)
+
+
+class TestBiometricEnrollment:
+    """On-device face/fingerprint/palm capture, per the official document's
+    "Biometric Enrollment" section (BeginEnrollFace/BeginEnrollFp/
+    BeginEnrollPalm, QueryJobStatus, CancelJob, CancelAllJobs) -- and
+    attaching a captured template to an employee via SetUserInfo.
+    """
+
+    def test_begin_face_enrollment_sends_documented_command_and_returns_pending_job(
+        self, scripted_server
+    ):
+        _ScriptedHandler.responses = {
+            "BeginEnrollFace": {"mid": "1", "result": "JobCreated", "payload": {"job_id": 7}},
+        }
+        connector = _connector(scripted_server)
+        job = connector.begin_face_enrollment()
+        assert _ScriptedHandler.received_requests[-1]["body"]["cmd"] == "BeginEnrollFace"
+        assert _ScriptedHandler.received_requests[-1]["body"]["payload"] == {}
+        assert job == DeliEnrollmentJob(job_id=7, kind=ENROLLMENT_KIND_FACE, state=JOB_STATE_PENDING)
+
+    def test_begin_fingerprint_enrollment_sends_begin_enroll_fp(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "BeginEnrollFp": {"mid": "1", "result": "JobCreated", "payload": {"job_id": 3}},
+        }
+        connector = _connector(scripted_server)
+        job = connector.begin_fingerprint_enrollment()
+        assert _ScriptedHandler.received_requests[-1]["body"]["cmd"] == "BeginEnrollFp"
+        assert job.kind == ENROLLMENT_KIND_FINGERPRINT
+
+    def test_begin_palm_enrollment_sends_begin_enroll_palm(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "BeginEnrollPalm": {"mid": "1", "result": "JobCreated", "payload": {"job_id": 9}},
+        }
+        connector = _connector(scripted_server)
+        job = connector.begin_palm_enrollment()
+        assert _ScriptedHandler.received_requests[-1]["body"]["cmd"] == "BeginEnrollPalm"
+        assert job.kind == ENROLLMENT_KIND_PALM
+
+    def test_query_job_status_pending_has_no_template_data(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "QueryJobStatus": {
+                "mid": "1",
+                "result": "JobStatus",
+                "payload": {"job_id": 7, "state": "pending"},
+            },
+        }
+        connector = _connector(scripted_server)
+        job = DeliEnrollmentJob(job_id=7, kind=ENROLLMENT_KIND_FACE, state=JOB_STATE_PENDING)
+        updated = connector.query_enrollment_job(job)
+        assert _ScriptedHandler.received_requests[-1]["body"]["payload"] == {"job_id": 7}
+        assert updated.state == JOB_STATE_PENDING
+        assert updated.template_data is None
+
+    def test_query_job_status_succeeded_face_returns_face_data(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "QueryJobStatus": {
+                "mid": "1",
+                "result": "JobStatus",
+                "payload": {"job_id": 7, "state": "succeeded", "face_data": "b64face"},
+            },
+        }
+        connector = _connector(scripted_server)
+        job = DeliEnrollmentJob(job_id=7, kind=ENROLLMENT_KIND_FACE, state=JOB_STATE_PENDING)
+        updated = connector.query_enrollment_job(job)
+        assert updated.state == JOB_STATE_SUCCEEDED
+        assert updated.template_data == "b64face"
+
+    def test_query_job_status_succeeded_fingerprint_returns_fp_data(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "QueryJobStatus": {
+                "mid": "1",
+                "result": "JobStatus",
+                "payload": {"job_id": 3, "state": "succeeded", "fp_data": "b64fp"},
+            },
+        }
+        connector = _connector(scripted_server)
+        job = DeliEnrollmentJob(job_id=3, kind=ENROLLMENT_KIND_FINGERPRINT, state=JOB_STATE_PENDING)
+        updated = connector.query_enrollment_job(job)
+        assert updated.state == JOB_STATE_SUCCEEDED
+        assert updated.template_data == "b64fp"
+
+    def test_query_job_status_failed_has_no_template_data(self, scripted_server):
+        _ScriptedHandler.responses = {
+            "QueryJobStatus": {
+                "mid": "1",
+                "result": "JobStatus",
+                "payload": {"job_id": 7, "state": "failed"},
+            },
+        }
+        connector = _connector(scripted_server)
+        job = DeliEnrollmentJob(job_id=7, kind=ENROLLMENT_KIND_FACE, state=JOB_STATE_PENDING)
+        updated = connector.query_enrollment_job(job)
+        assert updated.state == JOB_STATE_FAILED
+        assert updated.template_data is None
+
+    def test_cancel_enrollment_job_sends_cancel_job_with_id(self, scripted_server):
+        connector = _connector(scripted_server)
+        job = DeliEnrollmentJob(job_id=42, kind=ENROLLMENT_KIND_FACE, state=JOB_STATE_PENDING)
+        connector.cancel_enrollment_job(job)
+        request = _ScriptedHandler.received_requests[-1]
+        assert request["body"]["cmd"] == "CancelJob"
+        assert request["body"]["payload"] == {"job_id": 42}
+
+    def test_cancel_all_enrollment_jobs_sends_cancel_all_jobs(self, scripted_server):
+        connector = _connector(scripted_server)
+        connector.cancel_all_enrollment_jobs()
+        request = _ScriptedHandler.received_requests[-1]
+        assert request["body"]["cmd"] == "CancelAllJobs"
+        assert request["body"]["payload"] == {}
+
+    def test_set_user_face_template_sends_face_as_single_string(self, scripted_server):
+        connector = _connector(scripted_server)
+        connector.set_user_face_template("42", "b64face")
+        request = _ScriptedHandler.received_requests[-1]
+        assert request["body"]["cmd"] == "SetUserInfo"
+        assert request["body"]["payload"] == {"id": "42", "face": "b64face"}
+
+    def test_set_user_fingerprint_template_sends_fp_as_array(self, scripted_server):
+        connector = _connector(scripted_server)
+        connector.set_user_fingerprint_template("42", "b64fp")
+        request = _ScriptedHandler.received_requests[-1]
+        assert request["body"]["payload"] == {"id": "42", "fp": ["b64fp"]}
+
+    def test_set_user_palm_template_sends_palm_as_array(self, scripted_server):
+        connector = _connector(scripted_server)
+        connector.set_user_palm_template("42", "b64palm")
+        request = _ScriptedHandler.received_requests[-1]
+        assert request["body"]["payload"] == {"id": "42", "palm": ["b64palm"]}
 
 
 class TestDeviceManagerWiring:

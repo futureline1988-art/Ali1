@@ -55,6 +55,8 @@ _DEFAULT_ROLE_PERMISSIONS: dict[UserRole, frozenset[str]] = {
             "holidays.view", "holidays.manage",
             "leave.view", "leave.manage",
             "settings.view",
+            "payroll.view", "payroll.manage_rules", "payroll.manage_adjustments",
+            "payroll.finalize", "payroll.reopen",
         }
     ),
     UserRole.HR: frozenset(
@@ -69,6 +71,7 @@ _DEFAULT_ROLE_PERMISSIONS: dict[UserRole, frozenset[str]] = {
             "leave.view", "leave.manage",
             "reports.view", "reports.export",
             "users.view",
+            "payroll.view", "payroll.manage_adjustments",
         }
     ),
     UserRole.SUPERVISOR: frozenset(

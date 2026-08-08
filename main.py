@@ -39,6 +39,7 @@ from ui.holidays import HolidaysPage
 from ui.leave import LeavePage
 from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
+from ui.payroll import PayrollPage
 from ui.reports import ReportsPage
 from ui.settings import SettingsPage
 from ui.shifts import ShiftsPage
@@ -79,6 +80,21 @@ _DEFAULT_PERMISSIONS: list[tuple[str, str, str, str]] = [
     ("settings.view", "settings", "عرض الإعدادات", "View Settings"),
     ("settings.manage", "settings", "إدارة إعدادات الشركة", "Manage Company Settings"),
     ("backup.manage", "settings", "إدارة النسخ الاحتياطي", "Manage Backups"),
+    ("payroll.view", "payroll", "عرض الرواتب", "View Payroll"),
+    (
+        "payroll.manage_rules",
+        "payroll",
+        "إدارة قواعد الرواتب التلقائية",
+        "Manage Automatic Payroll Rules",
+    ),
+    (
+        "payroll.manage_adjustments",
+        "payroll",
+        "إدارة الخصومات والمكافآت",
+        "Manage Deductions & Bonuses",
+    ),
+    ("payroll.finalize", "payroll", "اعتماد الرواتب نهائياً", "Finalize Payroll"),
+    ("payroll.reopen", "payroll", "إعادة فتح رواتب معتمدة", "Reopen Finalized Payroll"),
 ]
 
 # (route, sidebar label, page class, required permission codes) - the
@@ -104,6 +120,18 @@ _PAGE_DEFINITIONS: list[tuple[str, str, type, tuple[str, ...]]] = [
     ("holidays", "العطلات", HolidaysPage, ("holidays.view", "holidays.manage")),
     ("leave", "الإجازات", LeavePage, ("leave.view", "leave.manage")),
     ("reports", "التقارير", ReportsPage, ("reports.view", "reports.export")),
+    (
+        "payroll",
+        "الرواتب",
+        PayrollPage,
+        (
+            "payroll.view",
+            "payroll.manage_rules",
+            "payroll.manage_adjustments",
+            "payroll.finalize",
+            "payroll.reopen",
+        ),
+    ),
     ("users", "المستخدمون", UsersPage, ("users.view", "users.manage", "roles.manage")),
     (
         "settings",
@@ -115,18 +143,26 @@ _PAGE_DEFINITIONS: list[tuple[str, str, type, tuple[str, ...]]] = [
 
 
 def _seed_default_permissions() -> None:
-    """Seed the global permission catalog on first run.
+    """Seed the global permission catalog, adding any codes it is missing.
 
-    A no-op if the catalog already has any rows (e.g. every run after
-    the first, or a database restored from a backup).
+    Runs on every startup, not just the first: an existing, already-
+    initialized database (a real customer install) never gets a fresh
+    catalog insert, so a later release that adds new permission codes
+    (e.g. payroll) would otherwise never reach it. Checking per-code
+    instead of "catalog is empty" makes this a true migration path --
+    existing codes and the roles that already grant them are untouched,
+    only genuinely missing codes are added.
     """
+    added = 0
     with session_scope() as session:
         repo = PermissionRepository(session)
-        if repo.count():
-            return
         for code, module, name_ar, name_en in _DEFAULT_PERMISSIONS:
+            if repo.get_by_code(code) is not None:
+                continue
             repo.add(Permission(code=code, module=module, name_ar=name_ar, name_en=name_en))
-    logger.info("Seeded {count} default permissions", count=len(_DEFAULT_PERMISSIONS))
+            added += 1
+    if added:
+        logger.info("Seeded {count} new default permission(s)", count=added)
 
 
 def _has_any_company() -> bool:

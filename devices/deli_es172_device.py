@@ -44,10 +44,31 @@ This module has two layers:
   GetDeviceUid, GetDeviceCapabilities, GetCapacityLimit,
   GetCurrentUsage, GetUserIdList, GetUserInfo, GetAttendLog) plus the
   documented write commands the :class:`~devices.device_interface.DeviceConnector`
-  protocol requires (SetUserInfo for ``push_users``). Destructive
-  commands (``EraseAttendLog``, and ``DeviceControl``'s
+  protocol requires (SetUserInfo for ``push_users``), and the documented
+  on-device biometric enrollment commands (BeginEnrollFace, BeginEnrollFp,
+  BeginEnrollPalm, QueryJobStatus, CancelJob, CancelAllJobs -- see
+  "On-device biometric enrollment" below). Destructive commands
+  (``EraseAttendLog``, and ``DeviceControl``'s
   ``ClearUsers``/``ClearAllData`` actions) are never sent by this
   connector.
+
+On-device biometric enrollment (from the document's "Biometric
+Enrollment" section): ``BeginEnrollFace``/``BeginEnrollFp``/
+``BeginEnrollPalm`` each take an empty payload and return
+``{"job_id": N}`` immediately -- the device then waits for the employee
+to present their biometric at the physical unit. ``QueryJobStatus({"job_id"})``
+is polled until ``state`` leaves ``"pending"``; on ``"succeeded"`` the
+response carries the captured template (``face_data``/``fp_data``/
+``palm_data``, base64) which must then be attached to the target
+employee via ``SetUserInfo``'s ``face``/``fp``/``palm`` fields (this
+connector's :meth:`~DeliES172Connector.set_user_face_template` /
+:meth:`~DeliES172Connector.set_user_fingerprint_template` /
+:meth:`~DeliES172Connector.set_user_palm_template`) -- capture and
+attachment are two separate documented commands, never combined into
+one. ``BeginEnrollCard`` and ``PhotoToFacedata`` (photo-to-template
+conversion) are documented but intentionally not implemented: this
+project only ever captures biometrics at the physical device, never
+from an uploaded photo or a card reader.
 
 Pagination follows the document's own "Communication example" tables
 exactly: the first request of a paged command omits ``start_pos``; the
@@ -249,6 +270,72 @@ class DeliCommandError(DeviceConnectionError):
         self.code = code
 
 
+#: The three biometric kinds the device's own enrollment commands
+#: distinguish (``BeginEnrollFace``/``BeginEnrollFp``/``BeginEnrollPalm``);
+#: :class:`DeliEnrollmentJob` tags every job with the one that created it,
+#: since ``QueryJobStatus``'s response only ever carries the matching
+#: ``*_data`` field.
+ENROLLMENT_KIND_FACE = "face"
+ENROLLMENT_KIND_FINGERPRINT = "fp"
+ENROLLMENT_KIND_PALM = "palm"
+
+#: ``QueryJobStatus``'s documented ``state`` values (see the "Query Job
+#: Status" section) -- ``failed`` covers both an actual capture failure
+#: and an explicit ``CancelJob``.
+JOB_STATE_PENDING = "pending"
+JOB_STATE_SUCCEEDED = "succeeded"
+JOB_STATE_FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class DeliEnrollmentJob:
+    """The state of one on-device biometric enrollment job.
+
+    Returned by both :meth:`DeliES172Connector.begin_face_enrollment`
+    (and its fingerprint/palm counterparts) and
+    :meth:`DeliES172Connector.query_enrollment_job` -- the same shape
+    either way, since the document's ``QueryJobStatus`` response is a
+    superset of what ``BeginEnrollFace``/``BeginEnrollFp``/``BeginEnrollPalm``
+    themselves return.
+
+    Attributes:
+        job_id: The device-assigned job identifier, required by every
+            subsequent ``QueryJobStatus``/``CancelJob`` call.
+        kind: Which biometric this job captures -- one of the
+            ``ENROLLMENT_KIND_*`` constants.
+        state: One of the ``JOB_STATE_*`` constants.
+        template_data: The captured template, base64-encoded exactly
+            as the device returned it (``face_data``/``fp_data``/
+            ``palm_data`` depending on :attr:`kind`) -- only present
+            once :attr:`state` is ``JOB_STATE_SUCCEEDED``, per the
+            document's own field description.
+    """
+
+    job_id: int
+    kind: str
+    state: str
+    template_data: str | None = None
+
+
+_ENROLLMENT_KIND_TO_BEGIN_CMD = {
+    ENROLLMENT_KIND_FACE: "BeginEnrollFace",
+    ENROLLMENT_KIND_FINGERPRINT: "BeginEnrollFp",
+    ENROLLMENT_KIND_PALM: "BeginEnrollPalm",
+}
+
+_ENROLLMENT_KIND_TO_DATA_FIELD = {
+    ENROLLMENT_KIND_FACE: "face_data",
+    ENROLLMENT_KIND_FINGERPRINT: "fp_data",
+    ENROLLMENT_KIND_PALM: "palm_data",
+}
+
+_ENROLLMENT_KIND_TO_USER_INFO_FIELD = {
+    ENROLLMENT_KIND_FACE: "face",
+    ENROLLMENT_KIND_FINGERPRINT: "fp",
+    ENROLLMENT_KIND_PALM: "palm",
+}
+
+
 def _classify_deli_connection_error(
     exc: requests.exceptions.RequestException, api_key: str
 ) -> tuple[str, str]:
@@ -427,6 +514,7 @@ class DeliES172Connector:
             supports_fingerprint=bool(device_caps.get("fingerprint", False)),
             fingerprint_template_count=current_usage.get("fp_count"),
             fingerprint_capacity=capacity_limit.get("max_fp"),
+            supports_palm=bool(device_caps.get("palm", False)),
             user_count=current_usage.get("user_count"),
             user_capacity=capacity_limit.get("max_user"),
             attendance_log_count=current_usage.get("attend_log_count"),
@@ -540,7 +628,7 @@ class DeliES172Connector:
         return logs
 
     def get_user_biometric_status(self, device_user_reference: str) -> UserBiometricStatus:
-        """Read one user's fingerprint/card status via GetUserInfo.
+        """Read one user's fingerprint/face/palm/card status via GetUserInfo.
 
         Returns:
             The user's status, or a zero-valued
@@ -559,9 +647,132 @@ class DeliES172Connector:
 
         fp = info.get("fp")
         fingerprint_count = len(fp) if isinstance(fp, list) else 0
+        palm = info.get("palm")
         return UserBiometricStatus(
-            fingerprint_count=fingerprint_count, card_assigned=bool(info.get("card"))
+            fingerprint_count=fingerprint_count,
+            card_assigned=bool(info.get("card")),
+            face_registered=bool(info.get("face")),
+            palm_registered=isinstance(palm, list) and len(palm) > 0,
         )
+
+    # ------------------------------------------------------------------
+    # On-device biometric enrollment
+    # ------------------------------------------------------------------
+
+    def _begin_enrollment(self, kind: str) -> DeliEnrollmentJob:
+        """Start a capture job on the physical device for one biometric kind."""
+        payload = self._call(_ENROLLMENT_KIND_TO_BEGIN_CMD[kind])
+        return DeliEnrollmentJob(job_id=int(payload["job_id"]), kind=kind, state=JOB_STATE_PENDING)
+
+    def begin_face_enrollment(self) -> DeliEnrollmentJob:
+        """Start face capture via the documented ``BeginEnrollFace`` command.
+
+        The device waits for the employee to present their face at the
+        physical unit; poll :meth:`query_enrollment_job` with the
+        returned job's ``job_id`` to observe completion.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        return self._begin_enrollment(ENROLLMENT_KIND_FACE)
+
+    def begin_fingerprint_enrollment(self) -> DeliEnrollmentJob:
+        """Start fingerprint capture via the documented ``BeginEnrollFp`` command.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        return self._begin_enrollment(ENROLLMENT_KIND_FINGERPRINT)
+
+    def begin_palm_enrollment(self) -> DeliEnrollmentJob:
+        """Start palm capture via the documented ``BeginEnrollPalm`` command.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        return self._begin_enrollment(ENROLLMENT_KIND_PALM)
+
+    def query_enrollment_job(self, job: DeliEnrollmentJob) -> DeliEnrollmentJob:
+        """Poll one enrollment job's current state via ``QueryJobStatus``.
+
+        Args:
+            job: A job previously returned by
+                :meth:`begin_face_enrollment` (or its fingerprint/palm
+                counterparts) or by an earlier call to this method --
+                its :attr:`~DeliEnrollmentJob.kind` determines which
+                ``*_data`` field is read from the response.
+
+        Returns:
+            The job's current state, with :attr:`~DeliEnrollmentJob.template_data`
+            populated once the device reports ``state == "succeeded"``.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        payload = self._call("QueryJobStatus", {"job_id": job.job_id})
+        state = str(payload.get("state") or JOB_STATE_PENDING)
+        data_field = _ENROLLMENT_KIND_TO_DATA_FIELD[job.kind]
+        return DeliEnrollmentJob(
+            job_id=int(payload.get("job_id", job.job_id)),
+            kind=job.kind,
+            state=state,
+            template_data=payload.get(data_field) if state == JOB_STATE_SUCCEEDED else None,
+        )
+
+    def cancel_enrollment_job(self, job: DeliEnrollmentJob) -> None:
+        """Cancel one in-progress enrollment job via the documented ``CancelJob`` command.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        self._call("CancelJob", {"job_id": job.job_id})
+
+    def cancel_all_enrollment_jobs(self) -> None:
+        """Cancel every in-progress enrollment job via ``CancelAllJobs``.
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        self._call("CancelAllJobs")
+
+    def _attach_template(self, kind: str, device_user_reference: str, template_data: str) -> None:
+        """Attach a captured template to a user via the documented ``SetUserInfo`` command.
+
+        Only ``id`` plus the one biometric field are sent -- per the
+        document, every omitted ``SetUserInfo`` field keeps its
+        current on-device value, so this never touches the user's
+        name/department/other biometrics. ``fp``/``palm`` are
+        documented as arrays (a user may hold several fingerprint/palm
+        templates); this always sends a single-element array, matching
+        this project's one-template-per-employee model.
+        """
+        field = _ENROLLMENT_KIND_TO_USER_INFO_FIELD[kind]
+        value: str | list[str] = [template_data] if kind != ENROLLMENT_KIND_FACE else template_data
+        self._call("SetUserInfo", {"id": device_user_reference, field: value})
+
+    def set_user_face_template(self, device_user_reference: str, face_data: str) -> None:
+        """Attach a captured face template to a user (see :meth:`_attach_template`).
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        self._attach_template(ENROLLMENT_KIND_FACE, device_user_reference, face_data)
+
+    def set_user_fingerprint_template(self, device_user_reference: str, fp_data: str) -> None:
+        """Attach a captured fingerprint template to a user (see :meth:`_attach_template`).
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        self._attach_template(ENROLLMENT_KIND_FINGERPRINT, device_user_reference, fp_data)
+
+    def set_user_palm_template(self, device_user_reference: str, palm_data: str) -> None:
+        """Attach a captured palm template to a user (see :meth:`_attach_template`).
+
+        Raises:
+            DeviceConnectionError: On any communication failure.
+        """
+        self._attach_template(ENROLLMENT_KIND_PALM, device_user_reference, palm_data)
 
     def disconnect(self) -> None:
         """No-op -- this connector is stateless HTTP, no connection to release."""

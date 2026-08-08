@@ -310,11 +310,13 @@ class BiometricStatusDialog(QDialog):
         self._device_value_label = make_secondary_label("")
         self._fingerprint_value_label = make_secondary_label("")
         self._card_value_label = make_secondary_label("")
+        self._palm_value_label = make_secondary_label("")
         self._sync_value_label = make_secondary_label("")
         self._form.addRow("بصمة الوجه", self._face_value_label)
         self._form.addRow("الجهاز", self._device_value_label)
         self._form.addRow("عدد بصمات الإصبع", self._fingerprint_value_label)
         self._form.addRow("بطاقة مخصصة", self._card_value_label)
+        self._form.addRow("بصمة الكف", self._palm_value_label)
         self._form.addRow("آخر مزامنة", self._sync_value_label)
         self._apply_status(status)
 
@@ -341,6 +343,7 @@ class BiometricStatusDialog(QDialog):
         )
         self._fingerprint_value_label.setText(str(status.get("fingerprint_count") or 0))
         self._card_value_label.setText("نعم" if status.get("card_assigned") else "لا")
+        self._palm_value_label.setText("مُسجَّلة" if status.get("palm_registered") else "غير مُسجَّلة")
         self._sync_value_label.setText(status.get("biometric_last_synced_at") or "—")
 
     def _on_refresh_clicked(self) -> None:

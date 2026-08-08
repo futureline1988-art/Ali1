@@ -183,9 +183,29 @@ class AttendanceService:
         """
         shift = self.get_effective_shift(employee_id, work_date)
         day_start_utc, day_end_utc = self._day_boundaries_utc(work_date)
+        if shift is not None and shift.spans_midnight:
+            # This shift's check-out is expected after local midnight, on
+            # work_date + 1 (see _compute_from_punches' own scheduled_end
+            # calculation, which already assumes this) -- so the punch
+            # window must extend that far too, or the check-out would
+            # never be seen and this day would wrongly compute as
+            # MISSING_CHECK_OUT while the *next* day wrongly computes as
+            # MISSING_CHECK_IN for the very same punch.
+            _, day_end_utc = self._day_boundaries_utc(work_date + timedelta(days=1))
         punches = self.punch_repo.list_for_employee_between(
             employee_id, day_start_utc, day_end_utc
         )
+        # A punch already attributed to a *different* day's record (e.g.
+        # the post-midnight check-out above, already claimed by the
+        # overnight shift's day) must never be pulled into this day's
+        # computation too -- each punch belongs to exactly one work day.
+        existing = self.record_repo.get_for_employee_and_date(employee_id, work_date)
+        this_record_id = existing.id if existing is not None else None
+        punches = [
+            punch
+            for punch in punches
+            if punch.attendance_record_id is None or punch.attendance_record_id == this_record_id
+        ]
 
         if self.holiday_repo.is_holiday(work_date):
             result = _DayResult(status=AttendanceDayStatus.HOLIDAY)
@@ -199,7 +219,6 @@ class AttendanceService:
             tz = self._get_company_timezone()
             result = self._compute_from_punches(punches, shift, work_date, tz)
 
-        existing = self.record_repo.get_for_employee_and_date(employee_id, work_date)
         if existing is not None:
             existing.shift_id = shift.id if shift is not None else None
             existing.check_in_time = result.check_in
@@ -306,6 +325,17 @@ class AttendanceService:
                 overtime_threshold = timedelta(minutes=shift.overtime_threshold_minutes)
                 if check_out - scheduled_end > overtime_threshold:
                     overtime_minutes = int((check_out - scheduled_end).total_seconds() // 60)
+
+        # A missing half of the punch pair is itself the day's defining
+        # anomaly and takes priority over late/early-leave in `status` --
+        # but any figure still derivable from the punch that *is* present
+        # (e.g. late_minutes from a check-in with no matching check-out)
+        # is kept, not discarded, since it remains a real fact about the
+        # day.
+        if check_in is None:
+            status = AttendanceDayStatus.MISSING_CHECK_IN
+        elif check_out is None:
+            status = AttendanceDayStatus.MISSING_CHECK_OUT
 
         return _DayResult(
             status=status,

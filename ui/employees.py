@@ -25,8 +25,16 @@ from controllers.branch_controller import BranchController
 from controllers.department_controller import DepartmentController
 from controllers.device_controller import DeviceController
 from controllers.employee_controller import EmployeeController
-from models.enums import DeviceProtocol
+from controllers.payroll_controller import PayrollController
+from devices.deli_es172_device import (
+    ENROLLMENT_KIND_FACE,
+    ENROLLMENT_KIND_FINGERPRINT,
+    ENROLLMENT_KIND_PALM,
+)
+from models.enums import DeviceProtocol, PayrollAdjustmentType
+from ui.deli_enrollment_dialog import DeliEnrollmentDialog
 from ui.face_enrollment_dialog import BiometricStatusDialog, FaceEnrollmentDialog, SelectDeviceDialog
+from ui.payroll import PayrollAdjustmentFormDialog
 from ui.table_page import TablePage
 from ui.widgets import ConfirmDialog, make_danger_button, run_blocking_operation
 
@@ -236,6 +244,12 @@ class EmployeesPage(TablePage):
             permission_codes=permission_codes,
         )
         self._device_controller.operation_failed.connect(self.show_error)
+        self._payroll_controller = PayrollController(
+            company_id=company_id,
+            actor_user_id=current_user_id,
+            permission_codes=permission_codes,
+        )
+        self._payroll_controller.operation_failed.connect(self.show_error)
 
         self.push_to_device_button = QPushButton("إرسال إلى جهاز البصمة", self)
         self.push_to_device_button.setEnabled(False)
@@ -251,6 +265,28 @@ class EmployeesPage(TablePage):
         self.biometric_status_button.setEnabled(False)
         self.biometric_status_button.clicked.connect(self._on_biometric_status_clicked)
         self.toolbar_layout.addWidget(self.biometric_status_button)
+
+        self.register_fingerprint_deli_button = QPushButton("تسجيل بصمة الإصبع (DELI)", self)
+        self.register_fingerprint_deli_button.setEnabled(False)
+        self.register_fingerprint_deli_button.clicked.connect(
+            self._on_register_fingerprint_deli_clicked
+        )
+        self.toolbar_layout.addWidget(self.register_fingerprint_deli_button)
+
+        self.register_palm_deli_button = QPushButton("تسجيل بصمة الكف (DELI)", self)
+        self.register_palm_deli_button.setEnabled(False)
+        self.register_palm_deli_button.clicked.connect(self._on_register_palm_deli_clicked)
+        self.toolbar_layout.addWidget(self.register_palm_deli_button)
+
+        self.add_deduction_button = QPushButton("إضافة خصم", self)
+        self.add_deduction_button.setEnabled(False)
+        self.add_deduction_button.clicked.connect(self._on_add_deduction_clicked)
+        self.toolbar_layout.addWidget(self.add_deduction_button)
+
+        self.add_bonus_button = QPushButton("إضافة مكافأة", self)
+        self.add_bonus_button.setEnabled(False)
+        self.add_bonus_button.clicked.connect(self._on_add_bonus_clicked)
+        self.toolbar_layout.addWidget(self.add_bonus_button)
 
         self.delete_button = make_danger_button("حذف", parent=self)
         self.delete_button.setEnabled(False)
@@ -308,6 +344,10 @@ class EmployeesPage(TablePage):
         self.push_to_device_button.setEnabled(has_selection)
         self.register_face_button.setEnabled(has_selection)
         self.biometric_status_button.setEnabled(has_selection)
+        self.register_fingerprint_deli_button.setEnabled(has_selection)
+        self.register_palm_deli_button.setEnabled(has_selection)
+        self.add_deduction_button.setEnabled(has_selection)
+        self.add_bonus_button.setEnabled(has_selection)
 
     # ------------------------------------------------------------------
     # Add / edit / delete
@@ -376,14 +416,18 @@ class EmployeesPage(TablePage):
     # Device / biometric operations
     # ------------------------------------------------------------------
 
-    def _select_device(self, *, face_capable_only: bool) -> dict[str, Any] | None:
-        """Prompt for an active device, optionally restricted to ZKTeco protocols.
+    def _select_device(
+        self,
+        *,
+        protocols: tuple[DeviceProtocol, ...] | None = None,
+        empty_message: str = "لا يوجد جهاز نشط متاح.",
+    ) -> dict[str, Any] | None:
+        """Prompt for an active device, optionally restricted to specific protocols.
 
         Args:
-            face_capable_only: Restrict the choices to ZKTeco devices —
-                the only protocol this project's face-enrollment
-                workflow supports (see
-                :mod:`devices.zkteco_device`'s own module docstring).
+            protocols: Restrict the choices to these protocols; ``None``
+                allows any active device.
+            empty_message: Shown inline if no eligible device exists.
 
         Returns:
             The chosen device's dict, or ``None`` if the user
@@ -391,18 +435,11 @@ class EmployeesPage(TablePage):
             already shown in that case).
         """
         devices = self._device_controller.list_devices(active_only=True)
-        if face_capable_only:
-            devices = [
-                device
-                for device in devices
-                if device["protocol"] in (DeviceProtocol.ZKTECO_TCP.value, DeviceProtocol.ZKTECO_UDP.value)
-            ]
+        if protocols is not None:
+            allowed = {protocol.value for protocol in protocols}
+            devices = [device for device in devices if device["protocol"] in allowed]
         if not devices:
-            self.show_error(
-                "لا يوجد جهاز ZKTeco نشط متاح."
-                if face_capable_only
-                else "لا يوجد جهاز نشط متاح."
-            )
+            self.show_error(empty_message)
             return None
         dialog = SelectDeviceDialog(devices=devices, parent=self)
         if dialog.exec() != QDialog.Accepted:
@@ -417,7 +454,7 @@ class EmployeesPage(TablePage):
         row = self.selected_row()
         if row is None:
             return
-        device = self._select_device(face_capable_only=False)
+        device = self._select_device()
         if device is None:
             return
         succeeded = run_blocking_operation(
@@ -437,16 +474,27 @@ class EmployeesPage(TablePage):
     def _on_register_face_clicked(self) -> None:
         """Run the full on-device face-enrollment workflow for the selected employee.
 
-        This application can never capture or upload a face itself —
-        see :mod:`ui.face_enrollment_dialog`'s own module docstring for
-        why the workflow is "push the employee, then wait for a human
-        to enroll them on the physical device."
+        Works with either a face-capable ZKTeco device (heuristic
+        device-wide-count workflow -- see
+        :mod:`ui.face_enrollment_dialog`'s own module docstring for why
+        that is the "nearest supported flow" for that protocol) or a
+        DELI ES172 device (a real, documented capture-then-attach job,
+        see :mod:`ui.deli_enrollment_dialog`'s own module docstring) --
+        which one runs depends entirely on the device the operator
+        picks.
         """
         row = self.selected_row()
         if row is None:
             return
-        device = self._select_device(face_capable_only=True)
+        device = self._select_device(
+            protocols=(DeviceProtocol.ZKTECO_TCP, DeviceProtocol.ZKTECO_UDP, DeviceProtocol.DELI_ES172),
+            empty_message="لا يوجد جهاز يدعم تسجيل بصمة الوجه.",
+        )
         if device is None:
+            return
+
+        if device["protocol"] == DeviceProtocol.DELI_ES172.value:
+            self._run_deli_enrollment(row, device, kind=ENROLLMENT_KIND_FACE)
             return
 
         begin_result = run_blocking_operation(
@@ -474,6 +522,70 @@ class EmployeesPage(TablePage):
         if final_result is not None and final_result["outcome"] == "confirmed":
             self.refresh()
 
+    def _on_register_fingerprint_deli_clicked(self) -> None:
+        """Run the on-device DELI ES172 fingerprint-enrollment workflow for the selected employee."""
+        row = self.selected_row()
+        if row is None:
+            return
+        device = self._select_device(
+            protocols=(DeviceProtocol.DELI_ES172,),
+            empty_message="لا يوجد جهاز DELI ES172 نشط متاح.",
+        )
+        if device is None:
+            return
+        self._run_deli_enrollment(row, device, kind=ENROLLMENT_KIND_FINGERPRINT)
+
+    def _on_register_palm_deli_clicked(self) -> None:
+        """Run the on-device DELI ES172 palm-enrollment workflow for the selected employee."""
+        row = self.selected_row()
+        if row is None:
+            return
+        device = self._select_device(
+            protocols=(DeviceProtocol.DELI_ES172,),
+            empty_message="لا يوجد جهاز DELI ES172 نشط متاح.",
+        )
+        if device is None:
+            return
+        self._run_deli_enrollment(row, device, kind=ENROLLMENT_KIND_PALM)
+
+    def _run_deli_enrollment(
+        self, row: dict[str, Any], device: dict[str, Any], *, kind: str
+    ) -> None:
+        """Run the full on-device DELI ES172 biometric-enrollment workflow.
+
+        Args:
+            row: The employee row to enroll.
+            device: The DELI ES172 device to enroll on.
+            kind: One of ``devices.deli_es172_device.ENROLLMENT_KIND_FACE``/
+                ``ENROLLMENT_KIND_FINGERPRINT``/``ENROLLMENT_KIND_PALM``.
+        """
+        begin_result = run_blocking_operation(
+            self,
+            "جارٍ بدء عملية التسجيل على الجهاز...",
+            lambda: self._device_controller.begin_deli_enrollment(
+                device_id=device["id"], employee_id=row["id"], kind=kind
+            ),
+        )
+        if begin_result is None:
+            return
+        if begin_result["outcome"] != "started":
+            self.show_error(begin_result["message_ar"])
+            return
+
+        dialog = DeliEnrollmentDialog(
+            controller=self._device_controller,
+            device_id=device["id"],
+            employee_id=row["id"],
+            employee_name=row["full_name"],
+            begin_result=begin_result,
+            parent=self,
+        )
+        dialog.exec()
+        final_result = dialog.final_result()
+        if final_result is not None and final_result["outcome"] == "attached":
+            QMessageBox.information(self, "تسجيل البصمة الحيوية", final_result["message_ar"])
+            self.refresh()
+
     def _on_biometric_status_clicked(self) -> None:
         """Show the selected employee's cached biometric status, with refresh/reset actions."""
         row = self.selected_row()
@@ -491,3 +603,44 @@ class EmployeesPage(TablePage):
             parent=self,
         )
         dialog.exec()
+
+    # ------------------------------------------------------------------
+    # Manual deductions / bonuses
+    # ------------------------------------------------------------------
+
+    def _open_adjustment_dialog(self, adjustment_type: PayrollAdjustmentType) -> None:
+        """Open the shared manual deduction/bonus form for the selected employee.
+
+        Reuses :class:`~ui.payroll.PayrollAdjustmentFormDialog` -- the
+        same dialog the monthly payroll screen uses -- so there is one
+        real "إضافة خصم"/"إضافة مكافأة" implementation, not a
+        duplicate per entry point.
+        """
+        row = self.selected_row()
+        if row is None:
+            return
+        dialog = PayrollAdjustmentFormDialog(
+            employee_name=row["full_name"], default_type=adjustment_type, parent=self
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        values = dialog.values()
+        if not values["reason_text"]:
+            self.show_error("وصف السبب حقل إلزامي.")
+            return
+        result = self._payroll_controller.add_manual_adjustment(row["id"], **values)
+        if result is not None:
+            label = "الخصم" if adjustment_type is PayrollAdjustmentType.DEDUCTION else "المكافأة"
+            QMessageBox.information(
+                self,
+                "تمت الإضافة",
+                f"تمت إضافة {label} للموظف \"{row['full_name']}\" بنجاح.",
+            )
+
+    def _on_add_deduction_clicked(self) -> None:
+        """Add a manual deduction for the selected employee."""
+        self._open_adjustment_dialog(PayrollAdjustmentType.DEDUCTION)
+
+    def _on_add_bonus_clicked(self) -> None:
+        """Add a manual bonus/addition for the selected employee."""
+        self._open_adjustment_dialog(PayrollAdjustmentType.BONUS)

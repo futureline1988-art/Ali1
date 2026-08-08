@@ -3,6 +3,88 @@
 All notable changes to the Attendance Management System are documented in
 this file.
 
+## [Client 2.2.0] - 2026-08-08 — Payroll module + DELI ES172 on-device biometric enrollment
+
+A full payroll system and real on-device biometric enrollment for DELI
+ES172, built on top of the existing attendance/shift/employee/RBAC
+architecture (no parallel systems, no new database engine, no
+duplicated device connector).
+
+### Payroll
+
+- New `models.payroll` module: `PayrollAutomaticRule` (one row per
+  company per late/early-leave/absence/missing-punch/overtime rule,
+  each independently enabled/disabled with a configurable calculation
+  method — fixed amount, per-minute, per-hour, half-day, full-day, or
+  percentage of daily salary), `PayrollAdjustment` (manual or
+  automatic deductions/bonuses, always carrying the reason, date,
+  source, and — for automatic ones — the exact attendance figures and
+  rule that produced the amount), `PayrollRun`/`PayrollRunLine` (one
+  computed row per employee per month: base salary, attendance/absence
+  days, late/early/overtime minutes, automatic and manual deduction
+  totals, bonus total, net salary), and `PayrollRunSnapshot` (an
+  immutable copy of every line captured at each finalization, so a
+  later reopen-and-correct cycle can never silently rewrite payroll
+  history).
+- Attendance facts (late minutes, absence, missing punches, overtime)
+  are always computed and recorded regardless of payroll settings — a
+  financial deduction only ever happens if a manager has explicitly
+  enabled that rule. Disabling a rule after the fact never
+  retroactively changes payroll that has already been finalized.
+- New "الرواتب" screen: compute/recompute a month's payroll, configure
+  automatic rules, add/cancel manual deductions and bonuses per
+  employee, review each employee's full calculation breakdown, and
+  move a run through Draft → Reviewed → Finalized → (controlled)
+  Reopened, with every step permission-gated (`payroll.view`,
+  `payroll.manage_rules`, `payroll.manage_adjustments`,
+  `payroll.finalize`, `payroll.reopen`) through the existing RBAC
+  system.
+- "إضافة خصم"/"إضافة مكافأة" actions on the Employees screen reuse the
+  same payroll dialog and controller as the payroll screen — one real
+  implementation behind both entry points.
+- Three new report types (ملخص الرواتب / الخصومات / المكافآت
+  والإضافات) on the existing Reports screen, built from real persisted
+  `PayrollRunLine`/`PayrollAdjustment` rows, exported through the
+  existing PDF/Excel/CSV pipeline.
+
+### DELI ES172 on-device biometric enrollment
+
+- `devices.deli_es172_device.DeliES172Connector` now also implements
+  the document's biometric-enrollment commands: `BeginEnrollFace`/
+  `BeginEnrollFp`/`BeginEnrollPalm`, `QueryJobStatus`, `CancelJob`,
+  `CancelAllJobs`, and attaching a captured template to an employee
+  via `SetUserInfo`. `BeginEnrollCard` and photo-to-template conversion
+  are documented but intentionally not implemented — this project only
+  ever captures biometrics at the physical device.
+- New "تسجيل بصمة الوجه" flow (Employees screen) now works against
+  either a ZKTeco device (existing heuristic flow, unchanged) or a
+  DELI ES172 device (a real capture-then-attach job with a definitive
+  device-reported result) depending on which device the operator
+  selects; two new DELI-only actions, "تسجيل بصمة الإصبع" and "تسجيل
+  بصمة الكف", cover fingerprint/palm enrollment the same way.
+- `Employee.palm_registered` and `DeviceCapabilities.supports_palm` /
+  `UserBiometricStatus.face_registered`/`palm_registered` extend the
+  existing biometric-status model; the biometric-status dialog and
+  "تحديث من الجهاز" refresh action show all three biometrics.
+
+### Fixed
+
+- **Overnight (midnight-spanning) shifts computed the wrong day's
+  attendance.** A shift's punch-fetch window was always exactly one
+  calendar day, so a check-out after local midnight (the normal case
+  for a night shift) fell outside the day it belonged to — that day
+  wrongly showed "missing check-out" while the *next* day wrongly
+  showed "missing check-in" for the same punch, with worked hours,
+  lateness, and overtime all computed as if the employee had not
+  worked. The punch window now extends to the shift's actual end time
+  for a midnight-spanning shift, and a punch already attributed to one
+  day's record is never pulled into another day's computation.
+- `PayrollPage`'s automatic-rules save silently discarded a failed
+  save's error message a moment after showing it (an unconditional
+  `clear_error()` ran right after), so a rejected rule change looked
+  identical to a successful one. A failed save now leaves its error
+  visible; a successful save now shows an explicit confirmation.
+
 ## [Client 2.1.0] - 2026-08-07 — Real DELI ES172 connector, built from the official SDK protocol document
 
 The vendor's official "DELI offline SDK protocol" document is now the
