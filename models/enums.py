@@ -119,6 +119,8 @@ class AttendanceDayStatus(BilingualEnum):
     ON_LEAVE = ("on_leave", "إجازة", "On Leave")
     HOLIDAY = ("holiday", "عطلة رسمية", "Official Holiday")
     WEEKEND = ("weekend", "عطلة أسبوعية", "Weekend")
+    MISSING_CHECK_IN = ("missing_check_in", "تسجيل حضور مفقود", "Missing Check-In")
+    MISSING_CHECK_OUT = ("missing_check_out", "تسجيل انصراف مفقود", "Missing Check-Out")
 
 
 class LeaveType(BilingualEnum):
@@ -210,6 +212,9 @@ class ReportType(BilingualEnum):
     LATE_EMPLOYEES = ("late_employees", "الموظفون المتأخرون", "Late Employees")
     OVERTIME = ("overtime", "الوقت الإضافي", "Overtime")
     ABSENCE = ("absence", "الغياب", "Absence")
+    PAYROLL_SUMMARY = ("payroll_summary", "ملخص الرواتب", "Payroll Summary")
+    PAYROLL_DEDUCTIONS = ("payroll_deductions", "الخصومات", "Deductions")
+    PAYROLL_BONUSES = ("payroll_bonuses", "المكافآت والإضافات", "Bonuses & Additions")
 
 
 class AuditAction(BilingualEnum):
@@ -226,3 +231,76 @@ class AuditAction(BilingualEnum):
     BACKUP = ("backup", "نسخ احتياطي", "Backup")
     RESTORE_BACKUP = ("restore_backup", "استعادة نسخة احتياطية", "Restore Backup")
     DEVICE_SYNC = ("device_sync", "مزامنة جهاز", "Device Sync")
+
+
+class PayrollAdjustmentType(BilingualEnum):
+    """Whether a payroll adjustment subtracts from or adds to salary."""
+
+    DEDUCTION = ("deduction", "خصم", "Deduction")
+    BONUS = ("bonus", "مكافأة", "Bonus")
+
+
+class PayrollAdjustmentSource(BilingualEnum):
+    """Whether a payroll adjustment was computed automatically or entered by a manager."""
+
+    AUTOMATIC = ("automatic", "تلقائي", "Automatic")
+    MANUAL = ("manual", "يدوي", "Manual")
+
+
+class PayrollAutoRuleType(BilingualEnum):
+    """Which automatic payroll rule a :class:`~models.payroll.PayrollAutomaticRule` configures.
+
+    Every value except :attr:`OVERTIME` produces a
+    :attr:`PayrollAdjustmentType.DEDUCTION`; :attr:`OVERTIME` produces a
+    :attr:`PayrollAdjustmentType.BONUS`.
+    """
+
+    LATE = ("late", "التأخير", "Lateness")
+    EARLY_LEAVE = ("early_leave", "الانصراف المبكر", "Early Leave")
+    ABSENCE = ("absence", "الغياب", "Absence")
+    MISSING_PUNCH = ("missing_punch", "تسجيل مفقود", "Missing Punch")
+    OVERTIME = ("overtime", "الوقت الإضافي", "Overtime")
+
+
+class PayrollCalculationMethod(BilingualEnum):
+    """How a payroll rule's configured ``value`` translates into a currency amount."""
+
+    FIXED_AMOUNT = ("fixed_amount", "مبلغ ثابت", "Fixed Amount")
+    PER_MINUTE = ("per_minute", "لكل دقيقة", "Per Minute")
+    PER_HOUR = ("per_hour", "لكل ساعة", "Per Hour")
+    HALF_DAY = ("half_day", "نصف يوم", "Half Day")
+    FULL_DAY = ("full_day", "يوم كامل", "Full Day")
+    PERCENTAGE_OF_DAILY_SALARY = (
+        "percentage_of_daily_salary",
+        "نسبة من الراتب اليومي",
+        "Percentage of Daily Salary",
+    )
+
+
+class PayrollDeductionReason(BilingualEnum):
+    """Category of a manually-entered payroll deduction."""
+
+    ADVANCE_REPAYMENT = ("advance_repayment", "سداد سلفة", "Advance/Loan Repayment")
+    ABSENCE = ("absence", "غياب", "Absence")
+    LATENESS = ("lateness", "تأخير", "Lateness")
+    ADMINISTRATIVE_PENALTY = ("administrative_penalty", "عقوبة إدارية", "Administrative Penalty")
+    DAMAGE = ("damage", "أضرار", "Damage")
+    OTHER = ("other", "أخرى", "Other")
+
+
+class PayrollBonusReason(BilingualEnum):
+    """Category of a manually-entered payroll bonus/addition."""
+
+    BONUS = ("bonus", "مكافأة", "Bonus")
+    INCENTIVE = ("incentive", "حافز", "Incentive")
+    ALLOWANCE = ("allowance", "بدل", "Allowance")
+    OVERTIME_ADJUSTMENT = ("overtime_adjustment", "تسوية وقت إضافي", "Overtime Adjustment")
+    OTHER = ("other", "أخرى", "Other")
+
+
+class PayrollRunStatus(BilingualEnum):
+    """Lifecycle state of one company's payroll run for one month."""
+
+    DRAFT = ("draft", "مسودة", "Draft")
+    REVIEWED = ("reviewed", "تمت المراجعة", "Reviewed")
+    FINALIZED = ("finalized", "معتمد نهائياً", "Finalized")

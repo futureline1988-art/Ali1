@@ -17,7 +17,9 @@ from models.employee import Employee
 from models.enums import DeviceProtocol
 from repositories.device_repository import DeviceRepository
 from repositories.employee_repository import EmployeeRepository
+from devices.deli_es172_device import DeliEnrollmentJob
 from services.device_service import (
+    DeliEnrollmentResult,
     DeviceService,
     FaceEnrollmentResult,
     FaceEnrollmentSession,
@@ -96,6 +98,42 @@ def _face_enrollment_result_to_dict(result: FaceEnrollmentResult) -> dict[str, A
     }
 
 
+def _deli_enrollment_job_to_dict(job: DeliEnrollmentJob) -> dict[str, Any]:
+    """Serialize a :class:`~devices.deli_es172_device.DeliEnrollmentJob`.
+
+    ``template_data`` is intentionally included -- the UI never
+    persists it (only :meth:`~controllers.device_controller.DeviceController.confirm_deli_enrollment`
+    does, via ``SetUserInfo``), but it must round-trip through the
+    dict the UI holds between a successful poll and the confirm click.
+    """
+    return {
+        "job_id": job.job_id,
+        "kind": job.kind,
+        "state": job.state,
+        "template_data": job.template_data,
+    }
+
+
+def _deli_enrollment_job_from_dict(data: dict[str, Any]) -> DeliEnrollmentJob:
+    """Reconstruct a :class:`~devices.deli_es172_device.DeliEnrollmentJob` the UI passed back in."""
+    return DeliEnrollmentJob(
+        job_id=data["job_id"],
+        kind=data["kind"],
+        state=data["state"],
+        template_data=data.get("template_data"),
+    )
+
+
+def _deli_enrollment_result_to_dict(result: DeliEnrollmentResult) -> dict[str, Any]:
+    """Serialize a :class:`~services.device_service.DeliEnrollmentResult`."""
+    return {
+        "outcome": result.outcome.value,
+        "message_ar": result.message_ar,
+        "message_en": result.message_en,
+        "job": _deli_enrollment_job_to_dict(result.job) if result.job is not None else None,
+    }
+
+
 def _employee_biometric_status_to_dict(employee: Employee) -> dict[str, Any]:
     """Serialize just the biometric-status fields of an employee, while the session is open."""
     return {
@@ -109,6 +147,7 @@ def _employee_biometric_status_to_dict(employee: Employee) -> dict[str, Any]:
         ),
         "fingerprint_count": employee.fingerprint_count,
         "card_assigned": employee.card_assigned,
+        "palm_registered": employee.palm_registered,
         "biometric_last_synced_at": (
             employee.biometric_last_synced_at.isoformat()
             if employee.biometric_last_synced_at
@@ -570,6 +609,151 @@ class DeviceController(BaseController):
         if result is not None:
             self.devices_changed.emit()
         return result
+
+    # ------------------------------------------------------------------
+    # DELI ES172 on-device biometric enrollment
+    # ------------------------------------------------------------------
+
+    @requires_permission("devices.manage", default=None)
+    def begin_deli_enrollment(
+        self, *, device_id: int, employee_id: int, kind: str
+    ) -> dict[str, Any] | None:
+        """Start on-device biometric capture for one employee on a DELI ES172.
+
+        Args:
+            device_id: The DELI ES172 device to enroll on.
+            employee_id: The employee to enroll.
+            kind: One of ``devices.deli_es172_device.ENROLLMENT_KIND_FACE``/
+                ``ENROLLMENT_KIND_FINGERPRINT``/``ENROLLMENT_KIND_PALM``.
+
+        Returns:
+            A :class:`~services.device_service.DeliEnrollmentResult` as
+            a dict, or ``None`` on an unexpected failure.
+        """
+
+        def do_begin(session: Session) -> dict[str, Any]:
+            device_repo = DeviceRepository(session, company_id=self.company_id)
+            device = device_repo.get_by_id(device_id)
+            if device is None:
+                raise ValueError(f"Device {device_id!r} was not found.")
+            employee_repo = EmployeeRepository(session, company_id=self.company_id)
+            employee = employee_repo.get_by_id(employee_id)
+            if employee is None:
+                raise ValueError(f"Employee {employee_id!r} was not found.")
+            service = DeviceService(
+                session,
+                company_id=self.company_id,
+                actor_user_id=self.actor_user_id,
+                device_manager=self._device_manager,
+            )
+            return _deli_enrollment_result_to_dict(
+                service.begin_deli_enrollment(device, employee, kind=kind)
+            )
+
+        return self._run(do_begin)
+
+    @requires_permission("devices.view", "devices.manage", default=None)
+    def poll_deli_enrollment_job(
+        self, *, device_id: int, job: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Check one DELI enrollment job's current state.
+
+        Args:
+            device_id: The device the job is running on.
+            job: The ``job`` dict from :meth:`begin_deli_enrollment` (or
+                an earlier poll).
+
+        Returns:
+            A :class:`~services.device_service.DeliEnrollmentResult` as
+            a dict, or ``None`` on an unexpected failure.
+        """
+
+        def do_poll(session: Session) -> dict[str, Any]:
+            device_repo = DeviceRepository(session, company_id=self.company_id)
+            device = device_repo.get_by_id(device_id)
+            if device is None:
+                raise ValueError(f"Device {device_id!r} was not found.")
+            service = DeviceService(
+                session,
+                company_id=self.company_id,
+                actor_user_id=self.actor_user_id,
+                device_manager=self._device_manager,
+            )
+            result = service.poll_deli_enrollment_job(device, _deli_enrollment_job_from_dict(job))
+            return _deli_enrollment_result_to_dict(result)
+
+        return self._run(do_poll)
+
+    @requires_permission("devices.manage", default=None)
+    def confirm_deli_enrollment(
+        self, *, device_id: int, employee_id: int, job: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Attach a succeeded DELI enrollment job's template to an employee.
+
+        Args:
+            device_id: The device the job ran on.
+            employee_id: The employee to attach the template to.
+            job: The ``job`` dict from a poll whose ``state`` is
+                ``"succeeded"``.
+
+        Returns:
+            A :class:`~services.device_service.DeliEnrollmentResult` as
+            a dict, or ``None`` on an unexpected failure.
+        """
+
+        def do_confirm(session: Session) -> dict[str, Any]:
+            device_repo = DeviceRepository(session, company_id=self.company_id)
+            device = device_repo.get_by_id(device_id)
+            if device is None:
+                raise ValueError(f"Device {device_id!r} was not found.")
+            employee_repo = EmployeeRepository(session, company_id=self.company_id)
+            employee = employee_repo.get_by_id(employee_id)
+            if employee is None:
+                raise ValueError(f"Employee {employee_id!r} was not found.")
+            service = DeviceService(
+                session,
+                company_id=self.company_id,
+                actor_user_id=self.actor_user_id,
+                device_manager=self._device_manager,
+            )
+            result = service.confirm_deli_enrollment(
+                device, employee, _deli_enrollment_job_from_dict(job)
+            )
+            return _deli_enrollment_result_to_dict(result)
+
+        result = self._run(do_confirm)
+        if result is not None:
+            self.devices_changed.emit()
+        return result
+
+    @requires_permission("devices.manage", default=None)
+    def cancel_deli_enrollment(self, *, device_id: int, job: dict[str, Any]) -> dict[str, Any] | None:
+        """Cancel an in-progress DELI enrollment job.
+
+        Args:
+            device_id: The device the job is running on.
+            job: The ``job`` dict to cancel.
+
+        Returns:
+            A :class:`~services.device_service.DeliEnrollmentResult` as
+            a dict, or ``None`` on an unexpected failure.
+        """
+
+        def do_cancel(session: Session) -> dict[str, Any]:
+            device_repo = DeviceRepository(session, company_id=self.company_id)
+            device = device_repo.get_by_id(device_id)
+            if device is None:
+                raise ValueError(f"Device {device_id!r} was not found.")
+            service = DeviceService(
+                session,
+                company_id=self.company_id,
+                actor_user_id=self.actor_user_id,
+                device_manager=self._device_manager,
+            )
+            result = service.cancel_deli_enrollment(device, _deli_enrollment_job_from_dict(job))
+            return _deli_enrollment_result_to_dict(result)
+
+        return self._run(do_cancel)
 
     @requires_permission("devices.view", "devices.manage", default=None)
     def refresh_employee_biometric_status(

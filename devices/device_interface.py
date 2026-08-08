@@ -87,6 +87,9 @@ class DeviceCapabilities:
             currently enrolled, device-wide.
         fingerprint_capacity: Maximum fingerprint templates the device
             can hold.
+        supports_palm: Whether the device's own firmware reports palm
+            recognition as enabled/available (only the DELI ES172
+            connector can currently determine this).
         user_count: How many users are currently enrolled.
         user_capacity: Maximum users the device can hold.
         attendance_log_count: How many attendance records are
@@ -102,6 +105,7 @@ class DeviceCapabilities:
     supports_fingerprint: bool = False
     fingerprint_template_count: int | None = None
     fingerprint_capacity: int | None = None
+    supports_palm: bool = False
     user_count: int | None = None
     user_capacity: int | None = None
     attendance_log_count: int | None = None
@@ -120,10 +124,20 @@ class UserBiometricStatus:
             not found on the device at all).
         card_assigned: Whether an access card is assigned to this user
             on the device.
+        face_registered: Whether this user has a face template
+            enrolled (only the DELI ES172 connector can currently
+            determine this -- ``GetUserInfo`` returns a per-user
+            ``face`` field the ZKTeco/Hikvision protocols have no
+            equivalent for).
+        palm_registered: Whether this user has a palm template
+            enrolled (DELI ES172 only, same reasoning as
+            ``face_registered``).
     """
 
     fingerprint_count: int = 0
     card_assigned: bool = False
+    face_registered: bool = False
+    palm_registered: bool = False
 
 
 class DeviceConnectionError(Exception):

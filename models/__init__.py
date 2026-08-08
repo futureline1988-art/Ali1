@@ -22,6 +22,13 @@ from models.device import Device
 from models.employee import Employee
 from models.holiday import Holiday
 from models.leave import LeavePolicy, LeaveRequest
+from models.payroll import (
+    PayrollAdjustment,
+    PayrollAutomaticRule,
+    PayrollRun,
+    PayrollRunLine,
+    PayrollRunSnapshot,
+)
 from models.permission import Permission
 from models.role import Role
 from models.shift import EmployeeShiftAssignment, Shift
@@ -45,6 +52,11 @@ __all__ = [
     "Holiday",
     "LeavePolicy",
     "LeaveRequest",
+    "PayrollAdjustment",
+    "PayrollAutomaticRule",
+    "PayrollRun",
+    "PayrollRunLine",
+    "PayrollRunSnapshot",
     "Permission",
     "Role",
     "Shift",

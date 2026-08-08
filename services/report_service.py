@@ -17,10 +17,15 @@ from sqlalchemy.orm import Session
 
 from config import get_config
 from models.attendance import AttendanceRecord
-from models.enums import AttendanceDayStatus, ReportFormat
+from models.enums import AttendanceDayStatus, PayrollAdjustmentType, ReportFormat
 from repositories.attendance_repository import AttendanceRecordRepository
 from repositories.department_repository import DepartmentRepository
 from repositories.employee_repository import EmployeeRepository
+from repositories.payroll_repository import (
+    PayrollAdjustmentRepository,
+    PayrollRunLineRepository,
+    PayrollRunRepository,
+)
 from utils.csv_export import export_to_csv
 from utils.excel import export_to_excel
 from utils.i18n import format_date, format_time
@@ -57,6 +62,29 @@ ABSENCE_COLUMNS: list[tuple[str, str]] = [
     ("employee_number", "رقم الموظف"),
     ("full_name", "الاسم"),
     ("department", "القسم"),
+    ("work_date", "التاريخ"),
+]
+
+PAYROLL_SUMMARY_COLUMNS: list[tuple[str, str]] = [
+    ("employee_number", "رقم الموظف"),
+    ("full_name", "الاسم"),
+    ("base_salary", "الراتب الأساسي"),
+    ("attendance_days", "أيام الحضور"),
+    ("absence_days", "أيام الغياب"),
+    ("late_minutes_total", "دقائق التأخير"),
+    ("overtime_minutes_total", "دقائق الإضافي"),
+    ("automatic_deduction_total", "الخصم التلقائي"),
+    ("manual_deduction_total", "الخصم اليدوي"),
+    ("bonus_total", "المكافآت والإضافات"),
+    ("net_salary", "صافي الراتب"),
+]
+
+PAYROLL_ADJUSTMENT_COLUMNS: list[tuple[str, str]] = [
+    ("employee_number", "رقم الموظف"),
+    ("full_name", "الاسم"),
+    ("amount", "المبلغ"),
+    ("reason_text", "السبب"),
+    ("source", "المصدر"),
     ("work_date", "التاريخ"),
 ]
 
@@ -230,6 +258,86 @@ class ReportService:
             for r in records
             if r.status is AttendanceDayStatus.ABSENT
         ]
+
+    def build_payroll_summary_rows(self, *, year: int, month: int) -> list[dict[str, object]]:
+        """Build one row per employee from this period's computed payroll run.
+
+        Uses only real, already-persisted
+        :class:`~models.payroll.PayrollRunLine` data -- never
+        recomputes on the fly -- so this report always reflects
+        exactly what the payroll screen itself last showed/finalized
+        for this period.
+
+        Args:
+            year: The pay period's calendar year.
+            month: The pay period's calendar month (1-12).
+
+        Returns:
+            One row per computed line, or an empty list if no payroll
+            run has ever been computed for this period.
+        """
+        run_repo = PayrollRunRepository(self.session, company_id=self.company_id)
+        run = run_repo.get_for_period(year=year, month=month)
+        if run is None:
+            return []
+        line_repo = PayrollRunLineRepository(self.session, company_id=self.company_id)
+        return [
+            {
+                "employee_number": line.employee.employee_number,
+                "full_name": line.employee.full_name,
+                "base_salary": line.base_salary,
+                "attendance_days": line.attendance_days,
+                "absence_days": line.absence_days,
+                "late_minutes_total": line.late_minutes_total,
+                "overtime_minutes_total": line.overtime_minutes_total,
+                "automatic_deduction_total": line.automatic_deduction_total,
+                "manual_deduction_total": line.manual_deduction_total,
+                "bonus_total": line.bonus_total,
+                "net_salary": line.net_salary,
+            }
+            for line in line_repo.list_for_run(run.id)
+        ]
+
+    def _build_payroll_adjustment_rows(
+        self, *, year: int, month: int, adjustment_type: PayrollAdjustmentType
+    ) -> list[dict[str, object]]:
+        """Build rows for every non-cancelled adjustment of one type in a period."""
+        repo = PayrollAdjustmentRepository(self.session, company_id=self.company_id)
+        adjustments = repo.list_for_company_period(year=year, month=month)
+        return [
+            {
+                "employee_number": adjustment.employee.employee_number,
+                "full_name": adjustment.employee.full_name,
+                "amount": adjustment.amount,
+                "reason_text": adjustment.reason_text,
+                "source": adjustment.source.label_ar,
+                "work_date": format_date(adjustment.work_date) if adjustment.work_date else "",
+            }
+            for adjustment in adjustments
+            if adjustment.adjustment_type is adjustment_type
+        ]
+
+    def build_payroll_deductions_rows(self, *, year: int, month: int) -> list[dict[str, object]]:
+        """Build rows for every non-cancelled deduction (automatic or manual) in a period.
+
+        Args:
+            year: The pay period's calendar year.
+            month: The pay period's calendar month (1-12).
+        """
+        return self._build_payroll_adjustment_rows(
+            year=year, month=month, adjustment_type=PayrollAdjustmentType.DEDUCTION
+        )
+
+    def build_payroll_bonuses_rows(self, *, year: int, month: int) -> list[dict[str, object]]:
+        """Build rows for every non-cancelled bonus/addition (automatic or manual) in a period.
+
+        Args:
+            year: The pay period's calendar year.
+            month: The pay period's calendar month (1-12).
+        """
+        return self._build_payroll_adjustment_rows(
+            year=year, month=month, adjustment_type=PayrollAdjustmentType.BONUS
+        )
 
     def export(
         self,

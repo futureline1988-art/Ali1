@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QFileDialog,
     QFormLayout,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +39,9 @@ _SUPPORTED_REPORT_TYPES = [
     ReportType.LATE_EMPLOYEES,
     ReportType.OVERTIME,
     ReportType.ABSENCE,
+    ReportType.PAYROLL_SUMMARY,
+    ReportType.PAYROLL_DEDUCTIONS,
+    ReportType.PAYROLL_BONUSES,
 ]
 
 _REPORT_TYPES_NEEDING_EMPLOYEE = {ReportType.ATTENDANCE_SUMMARY, ReportType.BY_EMPLOYEE}
@@ -46,6 +50,19 @@ _REPORT_TYPES_NEEDING_DEPARTMENT = {
     ReportType.BY_EMPLOYEE,
     ReportType.BY_DEPARTMENT,
 }
+#: These report types are built from one calendar month's persisted
+#: payroll data (a year/month picker), not a date range -- every other
+#: supported type is attendance-based and uses the date-range pickers.
+_REPORT_TYPES_NEEDING_PERIOD = {
+    ReportType.PAYROLL_SUMMARY,
+    ReportType.PAYROLL_DEDUCTIONS,
+    ReportType.PAYROLL_BONUSES,
+}
+
+_MONTH_LABELS_AR = [
+    "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+    "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
+]
 
 _FORMAT_EXTENSIONS = {
     ReportFormat.EXCEL: "xlsx",
@@ -139,6 +156,18 @@ class ReportsPage(QWidget):
         self.end_date_edit.setDate(QDate.currentDate())
         form.addRow("إلى تاريخ", self.end_date_edit)
 
+        today = QDate.currentDate()
+        self.year_spin = QSpinBox(card)
+        self.year_spin.setRange(2000, 2100)
+        self.year_spin.setValue(today.year())
+        form.addRow("السنة", self.year_spin)
+
+        self.month_combo = QComboBox(card)
+        for index, label in enumerate(_MONTH_LABELS_AR, start=1):
+            self.month_combo.addItem(label, userData=index)
+        self.month_combo.setCurrentIndex(today.month() - 1)
+        form.addRow("الشهر", self.month_combo)
+
         card.body_layout.addLayout(form)
 
         generate_button = make_primary_button("توليد التقرير", parent=card)
@@ -169,10 +198,15 @@ class ReportsPage(QWidget):
             self.department_combo.addItem(department["name"], userData=department["id"])
 
     def _on_report_type_changed(self) -> None:
-        """Enable the employee/department pickers only when relevant to the selected type."""
+        """Enable the pickers relevant to the selected report type only."""
         report_type = ReportType(self.report_type_combo.currentData())
         self.employee_combo.setEnabled(report_type in _REPORT_TYPES_NEEDING_EMPLOYEE)
         self.department_combo.setEnabled(report_type in _REPORT_TYPES_NEEDING_DEPARTMENT)
+        needs_period = report_type in _REPORT_TYPES_NEEDING_PERIOD
+        self.year_spin.setEnabled(needs_period)
+        self.month_combo.setEnabled(needs_period)
+        self.start_date_edit.setEnabled(not needs_period)
+        self.end_date_edit.setEnabled(not needs_period)
 
     # ------------------------------------------------------------------
     # Generation
@@ -182,11 +216,20 @@ class ReportsPage(QWidget):
         """Prompt for a save location, then generate and export the report."""
         self._hide_status()
 
-        start = self.start_date_edit.date().toPython()
-        end = self.end_date_edit.date().toPython()
-        if start > end:
-            self._show_error("تاريخ البداية يجب أن يسبق تاريخ النهاية.")
-            return
+        report_type = ReportType(self.report_type_combo.currentData())
+        needs_period = report_type in _REPORT_TYPES_NEEDING_PERIOD
+
+        start = end = None
+        year = month = None
+        if needs_period:
+            year = self.year_spin.value()
+            month = self.month_combo.currentData()
+        else:
+            start = self.start_date_edit.date().toPython()
+            end = self.end_date_edit.date().toPython()
+            if start > end:
+                self._show_error("تاريخ البداية يجب أن يسبق تاريخ النهاية.")
+                return
 
         # Qt's QVariant round-trip degrades a BilingualEnum member (a
         # str subclass) back into a plain str, so both must be
@@ -199,7 +242,6 @@ class ReportsPage(QWidget):
         if output_path is None:
             return
 
-        report_type = ReportType(self.report_type_combo.currentData())
         employee_id = (
             self.employee_combo.currentData()
             if report_type in _REPORT_TYPES_NEEDING_EMPLOYEE
@@ -222,6 +264,8 @@ class ReportsPage(QWidget):
                 end_date=end,
                 employee_id=employee_id,
                 department_id=department_id,
+                year=year,
+                month=month,
             ),
         )
 

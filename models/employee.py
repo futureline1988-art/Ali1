@@ -98,8 +98,15 @@ class Employee(CompanyScopedMixin, BaseModel):
         card_assigned: Whether an access card is assigned to this
             employee on a device, as of the last biometric-status
             refresh.
+        palm_registered: Whether this employee has a palm template
+            enrolled on a device, as of the last biometric-status
+            refresh. Like :attr:`fingerprint_count`, this reflects a
+            device's own per-user read (currently only the DELI ES172
+            connector can report it; ZKTeco/Hikvision always report
+            ``False``).
         biometric_last_synced_at: When :attr:`fingerprint_count`/
-            :attr:`card_assigned` were last refreshed from a device.
+            :attr:`card_assigned`/:attr:`palm_registered` were last
+            refreshed from a device.
         biometric_last_verification_result: Free-form code describing
             the outcome of the last face-enrollment attempt (e.g.
             ``"confirmed"``, ``"not_detected"``, ``"cancelled"``,
@@ -162,6 +169,9 @@ class Employee(CompanyScopedMixin, BaseModel):
     face_enrolled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     fingerprint_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     card_assigned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    palm_registered: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     biometric_last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     biometric_last_verification_result: Mapped[str | None] = mapped_column(
         String(50), nullable=True

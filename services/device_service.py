@@ -23,6 +23,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from devices.deli_es172_device import (
+    ENROLLMENT_KIND_FACE,
+    ENROLLMENT_KIND_FINGERPRINT,
+    ENROLLMENT_KIND_PALM,
+    JOB_STATE_FAILED,
+    JOB_STATE_PENDING,
+    JOB_STATE_SUCCEEDED,
+    DeliEnrollmentJob,
+)
 from devices.device_interface import (
     ConnectionTestResult,
     DeviceCapabilities,
@@ -122,6 +131,55 @@ class FaceEnrollmentResult:
     message_ar: str
     message_en: str
     session: FaceEnrollmentSession | None = None
+
+
+_DELI_KIND_LABELS_AR = {
+    ENROLLMENT_KIND_FACE: "بصمة الوجه",
+    ENROLLMENT_KIND_FINGERPRINT: "بصمة الإصبع",
+    ENROLLMENT_KIND_PALM: "بصمة الكف",
+}
+
+
+class DeliEnrollmentOutcome(str, Enum):
+    """Why a DELI ES172 on-device enrollment step ended the way it did.
+
+    Deliberately a distinct enum from :class:`FaceEnrollmentOutcome`:
+    DELI's workflow is a real job/template lifecycle (started -> pending
+    -> succeeded/failed -> attached), never the ZKTeco device-wide-
+    count heuristic that enum's members describe.
+    """
+
+    UNSUPPORTED_DEVICE = "unsupported_device"
+    DISCONNECTED = "disconnected"
+    STARTED = "started"
+    PENDING = "pending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    ATTACHED = "attached"
+
+
+@dataclass(frozen=True)
+class DeliEnrollmentResult:
+    """The outcome of one DELI ES172 biometric-enrollment step.
+
+    Attributes:
+        outcome: Which of :class:`DeliEnrollmentOutcome` this is.
+        message_ar: Arabic message to show the operator.
+        message_en: English message, for logs.
+        job: The current job state, present for every outcome except
+            :attr:`~DeliEnrollmentOutcome.UNSUPPORTED_DEVICE` and
+            :attr:`~DeliEnrollmentOutcome.DISCONNECTED` -- the caller
+            must hold onto it and pass it back into
+            :meth:`DeviceService.poll_deli_enrollment_job`/
+            :meth:`DeviceService.confirm_deli_enrollment`/
+            :meth:`DeviceService.cancel_deli_enrollment`.
+    """
+
+    outcome: DeliEnrollmentOutcome
+    message_ar: str
+    message_en: str
+    job: DeliEnrollmentJob | None = None
 
 
 class DeviceService:
@@ -473,14 +531,18 @@ class DeviceService:
         return capabilities
 
     def refresh_employee_biometric_status(self, device: Device, employee: Employee) -> Employee:
-        """Refresh one employee's fingerprint-count/card-assignment from a device.
+        """Refresh one employee's fingerprint-count/card-assignment/palm-status from a device.
 
         Never touches :attr:`~models.employee.Employee.face_enrolled`
         — that field is only ever set by
-        :meth:`confirm_face_enrollment`/:meth:`reset_face_enrollment_status`,
-        since (unlike fingerprint count and card) it cannot be
-        re-derived from a fresh device read at all (see
-        :meth:`confirm_face_enrollment`'s own docstring).
+        :meth:`confirm_face_enrollment`/:meth:`confirm_deli_enrollment`/
+        :meth:`reset_face_enrollment_status`. For ZKTeco/Hikvision this
+        is because face status cannot be re-derived from a fresh
+        device read at all (see :meth:`confirm_face_enrollment`'s own
+        docstring); DELI *could* report it here (``UserBiometricStatus.face_registered``),
+        but is deliberately left to :meth:`confirm_deli_enrollment` so
+        every protocol's face status changes through exactly one
+        method, not two.
 
         Args:
             device: The device to read from.
@@ -502,6 +564,7 @@ class DeviceService:
 
         employee.fingerprint_count = status.fingerprint_count
         employee.card_assigned = status.card_assigned
+        employee.palm_registered = status.palm_registered
         employee.biometric_last_synced_at = _utc_now()
         self.session.flush()
         return employee
@@ -810,6 +873,312 @@ class DeviceService:
             )
         )
         return employee
+
+    # ------------------------------------------------------------------
+    # DELI ES172 on-device biometric enrollment
+    #
+    # Unlike the ZKTeco heuristic above, the official DELI SDK protocol
+    # gives a definitive job/template result (BeginEnrollFace/BeginEnrollFp/
+    # BeginEnrollPalm -> QueryJobStatus -> SetUserInfo) -- see
+    # devices.deli_es172_device's own module docstring for the exact
+    # documented commands this orchestrates. No device-wide count
+    # heuristic, no operator "was this really them" confirmation step:
+    # the device itself reports success/failure and hands back the
+    # captured template.
+    # ------------------------------------------------------------------
+
+    _DELI_KIND_TO_CAPABILITY_ATTR = {
+        ENROLLMENT_KIND_FACE: "supports_face",
+        ENROLLMENT_KIND_FINGERPRINT: "supports_fingerprint",
+        ENROLLMENT_KIND_PALM: "supports_palm",
+    }
+
+    def begin_deli_enrollment(
+        self, device: Device, employee: Employee, *, kind: str
+    ) -> DeliEnrollmentResult:
+        """Start on-device biometric capture for one employee on a DELI ES172.
+
+        Pushes the employee to the device first (so the subsequent
+        :meth:`confirm_deli_enrollment`'s ``SetUserInfo`` attaches the
+        template to a real, named user rather than creating a bare
+        one), then issues the documented ``BeginEnrollFace``/
+        ``BeginEnrollFp``/``BeginEnrollPalm`` command. The device then
+        waits for the employee to present their biometric at the
+        physical unit -- this call cannot make that happen, only start
+        the job and report that it started.
+
+        Args:
+            device: Must be a DELI ES172 device that reports support
+                for ``kind``.
+            employee: The employee to enroll.
+            kind: One of ``devices.deli_es172_device.ENROLLMENT_KIND_FACE``/
+                ``ENROLLMENT_KIND_FINGERPRINT``/``ENROLLMENT_KIND_PALM``.
+
+        Returns:
+            :attr:`~DeliEnrollmentOutcome.UNSUPPORTED_DEVICE` if this
+            is not a DELI ES172 device or it does not report ``kind``
+            support; :attr:`~DeliEnrollmentOutcome.DISCONNECTED` if the
+            device could not be reached; :attr:`~DeliEnrollmentOutcome.STARTED`
+            (with the new job) on success.
+        """
+        kind_label = _DELI_KIND_LABELS_AR[kind]
+        if device.protocol != DeviceProtocol.DELI_ES172:
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.UNSUPPORTED_DEVICE,
+                message_ar=f"تسجيل {kind_label} من التطبيق مدعوم فقط على أجهزة DELI ES172.",
+                message_en="On-device biometric enrollment is only supported on DELI ES172 devices.",
+            )
+
+        connector = self.device_manager.get_connector(device)
+        try:
+            capabilities = connector.get_capabilities()
+        except DeviceConnectionError as exc:
+            connector.disconnect()
+            device.mark_error()
+            self.session.flush()
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر الاتصال بالجهاز.",
+                message_en=f"Could not reach the device: {exc}",
+            )
+
+        if not getattr(capabilities, self._DELI_KIND_TO_CAPABILITY_ATTR[kind]):
+            connector.disconnect()
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.UNSUPPORTED_DEVICE,
+                message_ar=f"هذا الجهاز لا يدعم تسجيل {kind_label}.",
+                message_en=f"This device does not support {kind} enrollment.",
+            )
+
+        try:
+            connector.push_users(
+                [
+                    RawDeviceUser(
+                        device_user_reference=employee.employee_number,
+                        name=employee.full_name,
+                    )
+                ]
+            )
+            if kind == ENROLLMENT_KIND_FACE:
+                job = connector.begin_face_enrollment()
+            elif kind == ENROLLMENT_KIND_FINGERPRINT:
+                job = connector.begin_fingerprint_enrollment()
+            else:
+                job = connector.begin_palm_enrollment()
+        except DeviceConnectionError as exc:
+            device.mark_error()
+            self.session.flush()
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر بدء عملية التسجيل على الجهاز.",
+                message_en=f"Failed to start enrollment on the device: {exc}",
+            )
+        finally:
+            connector.disconnect()
+
+        device.mark_online()
+        self.session.flush()
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.DEVICE_SYNC,
+                entity_type="Employee",
+                entity_id=employee.id,
+                description=(
+                    f"Started DELI {kind} enrollment job {job.job_id} for employee "
+                    f"{employee.employee_number!r} on device {device.name!r}."
+                ),
+            )
+        )
+        return DeliEnrollmentResult(
+            outcome=DeliEnrollmentOutcome.STARTED,
+            message_ar=(
+                f"تم بدء عملية التسجيل على الجهاز. يرجى من الموظف الوقوف أمام "
+                f"الجهاز لإكمال تسجيل {kind_label}."
+            ),
+            message_en=(
+                f"Enrollment started on the device. Ask the employee to stand in "
+                f"front of it to complete {kind} capture."
+            ),
+            job=job,
+        )
+
+    def poll_deli_enrollment_job(self, device: Device, job: DeliEnrollmentJob) -> DeliEnrollmentResult:
+        """Check one DELI enrollment job's current state via ``QueryJobStatus``.
+
+        Non-blocking -- the caller (typically a UI timer) is expected
+        to call this repeatedly until the outcome is no longer
+        :attr:`~DeliEnrollmentOutcome.PENDING`.
+
+        Args:
+            device: The device the job is running on.
+            job: A job from :meth:`begin_deli_enrollment` (or an
+                earlier poll).
+
+        Returns:
+            :attr:`~DeliEnrollmentOutcome.DISCONNECTED` if the device
+            could not be reached; :attr:`~DeliEnrollmentOutcome.PENDING`
+            while capture is still in progress;
+            :attr:`~DeliEnrollmentOutcome.FAILED` if capture failed or
+            was cancelled; :attr:`~DeliEnrollmentOutcome.SUCCEEDED`
+            (with the captured template in the returned job) once
+            capture completes.
+        """
+        kind_label = _DELI_KIND_LABELS_AR[job.kind]
+        connector = self.device_manager.get_connector(device)
+        try:
+            updated = connector.query_enrollment_job(job)
+        except DeviceConnectionError as exc:
+            connector.disconnect()
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر الاتصال بالجهاز لمتابعة حالة التسجيل.",
+                message_en=f"Could not reach the device to check enrollment status: {exc}",
+                job=job,
+            )
+        finally:
+            connector.disconnect()
+
+        if updated.state == JOB_STATE_PENDING:
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.PENDING,
+                message_ar=f"بانتظار قيام الموظف بإكمال تسجيل {kind_label} على الجهاز...",
+                message_en="Waiting for the employee to complete capture on the device...",
+                job=updated,
+            )
+        if updated.state == JOB_STATE_FAILED:
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.FAILED,
+                message_ar=f"فشلت عملية تسجيل {kind_label} أو تم إلغاؤها على الجهاز.",
+                message_en="Capture failed or was cancelled on the device.",
+                job=updated,
+            )
+        return DeliEnrollmentResult(
+            outcome=DeliEnrollmentOutcome.SUCCEEDED,
+            message_ar=f"تم التقاط {kind_label} بنجاح على الجهاز. اضغط لحفظها لهذا الموظف.",
+            message_en="Capture succeeded on the device. Confirm to save it for this employee.",
+            job=updated,
+        )
+
+    def confirm_deli_enrollment(
+        self, device: Device, employee: Employee, job: DeliEnrollmentJob
+    ) -> DeliEnrollmentResult:
+        """Attach a succeeded DELI enrollment job's template to an employee.
+
+        Sends the documented ``SetUserInfo`` command (via
+        :meth:`~devices.deli_es172_device.DeliES172Connector.set_user_face_template`/
+        ``set_user_fingerprint_template``/``set_user_palm_template``) so
+        the captured template on the device is genuinely associated
+        with this employee's device user id -- capture alone
+        (:meth:`begin_deli_enrollment`/:meth:`poll_deli_enrollment_job`)
+        never does this by itself, per the document's own two-step
+        capture-then-attach design.
+
+        Args:
+            device: The device the job ran on.
+            employee: The employee to attach the template to.
+            job: A job whose :attr:`~devices.deli_es172_device.DeliEnrollmentJob.state`
+                is ``JOB_STATE_SUCCEEDED`` (from :meth:`poll_deli_enrollment_job`).
+
+        Returns:
+            :attr:`~DeliEnrollmentOutcome.FAILED` if the job has not
+            actually succeeded; :attr:`~DeliEnrollmentOutcome.DISCONNECTED`
+            if the device could not be reached;
+            :attr:`~DeliEnrollmentOutcome.ATTACHED` once saved.
+        """
+        kind_label = _DELI_KIND_LABELS_AR[job.kind]
+        if job.state != JOB_STATE_SUCCEEDED or not job.template_data:
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.FAILED,
+                message_ar=f"لا توجد بيانات {kind_label} ملتقطة لحفظها.",
+                message_en="No captured template is available to save.",
+                job=job,
+            )
+
+        connector = self.device_manager.get_connector(device)
+        try:
+            if job.kind == ENROLLMENT_KIND_FACE:
+                connector.set_user_face_template(employee.employee_number, job.template_data)
+            elif job.kind == ENROLLMENT_KIND_FINGERPRINT:
+                connector.set_user_fingerprint_template(employee.employee_number, job.template_data)
+            else:
+                connector.set_user_palm_template(employee.employee_number, job.template_data)
+        except DeviceConnectionError as exc:
+            device.mark_error()
+            self.session.flush()
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.DISCONNECTED,
+                message_ar=f"تعذر حفظ بيانات {kind_label} على الجهاز.",
+                message_en=f"Failed to save the template on the device: {exc}",
+                job=job,
+            )
+        finally:
+            connector.disconnect()
+
+        if job.kind == ENROLLMENT_KIND_FACE:
+            employee.face_enrolled = True
+            employee.face_enrolled_device_id = device.id
+            employee.face_enrolled_at = _utc_now()
+            employee.biometric_last_verification_result = "confirmed"
+        elif job.kind == ENROLLMENT_KIND_PALM:
+            employee.palm_registered = True
+        employee.biometric_last_synced_at = _utc_now()
+        device.mark_online()
+        self.session.flush()
+
+        self.audit_repo.add(
+            AuditLog(
+                company_id=self.company_id,
+                user_id=self.actor_user_id,
+                action=AuditAction.DEVICE_SYNC,
+                entity_type="Employee",
+                entity_id=employee.id,
+                description=(
+                    f"Attached DELI {job.kind} template (job {job.job_id}) to employee "
+                    f"{employee.employee_number!r} on device {device.name!r}."
+                ),
+            )
+        )
+        return DeliEnrollmentResult(
+            outcome=DeliEnrollmentOutcome.ATTACHED,
+            message_ar=f"تم حفظ {kind_label} للموظف بنجاح.",
+            message_en=f"{job.kind} template saved for the employee.",
+            job=job,
+        )
+
+    def cancel_deli_enrollment(self, device: Device, job: DeliEnrollmentJob) -> DeliEnrollmentResult:
+        """Cancel an in-progress DELI enrollment job via the documented ``CancelJob`` command.
+
+        Args:
+            device: The device the job is running on.
+            job: The job to cancel.
+
+        Returns:
+            :attr:`~DeliEnrollmentOutcome.DISCONNECTED` if the device
+            could not be reached; :attr:`~DeliEnrollmentOutcome.CANCELLED`
+            once cancelled.
+        """
+        connector = self.device_manager.get_connector(device)
+        try:
+            connector.cancel_enrollment_job(job)
+        except DeviceConnectionError as exc:
+            connector.disconnect()
+            return DeliEnrollmentResult(
+                outcome=DeliEnrollmentOutcome.DISCONNECTED,
+                message_ar="تعذر إلغاء عملية التسجيل على الجهاز.",
+                message_en=f"Failed to cancel enrollment on the device: {exc}",
+                job=job,
+            )
+        finally:
+            connector.disconnect()
+
+        return DeliEnrollmentResult(
+            outcome=DeliEnrollmentOutcome.CANCELLED,
+            message_ar="تم إلغاء عملية التسجيل.",
+            message_en="Enrollment cancelled.",
+            job=job,
+        )
 
     def create_device(
         self,

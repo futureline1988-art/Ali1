@@ -20,7 +20,9 @@ nullable so a row from before branding existed simply has them unset.
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Integer, String, UniqueConstraint
+from decimal import Decimal
+
+from sqlalchemy import JSON, Boolean, CheckConstraint, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 
 from models.base import BaseModel, CompanyScopedMixin
@@ -65,6 +67,14 @@ class CompanySettings(CompanyScopedMixin, BaseModel):
             overrides (grace periods, overtime threshold, half-day
             threshold, working days) as a JSON dict, for the same
             reason.
+        payroll_working_days_per_month: How many working days a full
+            month's salary is divided by to derive a daily rate. Flat
+            columns (not folded into a JSON settings blob) because
+            :mod:`services.payroll_service` reads them directly on
+            every payroll computation, not as an occasional override.
+        payroll_working_hours_per_day: How many hours a working day is
+            divided into to derive an hourly rate (and, from that, a
+            per-minute rate) from the daily rate above.
         company: The related :class:`~models.company.Company`.
     """
 
@@ -118,6 +128,13 @@ class CompanySettings(CompanyScopedMixin, BaseModel):
     theme_font_family: Mapped[str | None] = mapped_column(String(100), nullable=True)
     print_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     attendance_policy_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    payroll_working_days_per_month: Mapped[int] = mapped_column(
+        Integer, default=26, server_default="26", nullable=False
+    )
+    payroll_working_hours_per_day: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2), default=Decimal("8.00"), server_default="8.00", nullable=False
+    )
 
     company: Mapped["Company"] = relationship(  # noqa: F821
         "Company", backref=backref("settings", uselist=False)
